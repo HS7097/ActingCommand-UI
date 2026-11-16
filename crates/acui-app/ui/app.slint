@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Button, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
-import { AeroConst, Card, CardTitle, CardTone, FocusRing, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinSegment, SkinStepper, SkinTab, StatusDot, StatusTone, WindowChrome } from "kit/lib.slint";
+import { AeroConst, Card, CardTitle, CardTone, FocusRing, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinDropDown, SkinSegment, SkinStepper, SkinTab, StatusDot, StatusTone, WindowChrome } from "kit/lib.slint";
 
 // The kit's globals the Rust side reaches, each window's own copy.
 export { Scale, Look, AeroConst }
@@ -2504,31 +2504,33 @@ component GoalAmount {
     }
 }
 
-// A choice of more than four options on the Goals tab (Workflow #455 G2): a drop-down that shows
-// what the newest read says (`chosen`); a pick says what was picked and puts the box back, so the
-// box moves only as a read moves it.
+// A choice of more than four options on the Goals tab (Workflow #455 G2): the kit's SkinDropDown,
+// which shows what the newest read says (`chosen`), so the box moves only as a read moves it. A
+// pick, by a click or by Return in its list, says what was picked, once; the wheel never changes
+// it, and in its list the Up and Down keys only move the highlight. After a pick the keyboard
+// focus waits just beside the box, where Return and Space do nothing, rather than going round the
+// window to the top bar's buttons that act on every instance.
 component GoalChoiceBox {
     in property <[string]> options;
     in property <int> chosen;
     in property <bool> enabled;
+    // What the choice is, for a screen reader.
+    in property <string> label;
     callback picked(int);
     HorizontalLayout {
         padding: 0;
-        picker := SkinComboBox {
-            model: root.options;
-            current-index: root.chosen;
+        SkinDropDown {
+            options: root.options;
+            chosen: root.chosen;
             enabled: root.enabled;
+            label: root.label;
             min-width: 150px * Scale.factor;
             preferred-width: 200px * Scale.factor;
             horizontal-stretch: 0;
-            selected => {
-                root.picked(self.current-index);
-                self.current-index = root.chosen;
+            picked(index) => {
+                root.picked(index);
             }
         }
-    }
-    changed chosen => {
-        picker.current-index = root.chosen;
     }
 }
 
@@ -2635,6 +2637,7 @@ component GoalLineView {
                 options: root.line.options;
                 chosen: root.line.chosen;
                 enabled: root.line.enabled && root.line.settable;
+                label: root.line.title;
                 picked(index) => {
                     root.picked(index);
                 }

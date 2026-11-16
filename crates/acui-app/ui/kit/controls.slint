@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, CheckBox, ComboBox, LineEdit } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { AeroButtonFace, AeroCheckFace } from "aero.slint";
 import { Look, Scale } from "tokens.slint";
 
@@ -341,3 +341,296 @@ export component SkinCheckBox {
 // changing. It is never built by `if`, so a window's alias to a box's
 // `current-index` keeps holding.
 export component SkinComboBox inherits ComboBox { }
+
+// A drop-down for a choice whose every pick is written at once: a box showing
+// option `chosen` of `options`, and under it their list. Not the std ComboBox,
+// whose wheel and arrow keys change the choice, each step a pick of its own:
+// here the wheel never changes it, and over the box scrolls what holds the
+// box, over the open list the list. A click opens the list, as do Return and
+// Space once Tab has reached the box; a click first puts the focus in `park`
+// unless the box has it, so the list hands it back there, not to whatever had
+// it before, and no other key on the box does anything. In the list the
+// pointer and the Up and Down keys only move the highlight; Return or a click
+// on a row picks that row, but not the repeats of a Return held down since it
+// opened the list; Esc closes the list, and other keys do nothing. After a
+// click picks a row, the clicks and the wheel of the next half second or so
+// reach nothing, so the second click of a double-click lands nowhere. Each pick
+// is said once through `picked`, the chosen row's too: what is chosen stays the
+// caller's, so the box changes only as `chosen` does. After a pick the focus
+// waits in `park`, just after the box, where Return and Space do nothing and
+// Tab goes on as from the box. Off, or with no options, it does not open, and
+// going off closes an open list.
+export component SkinDropDown inherits Rectangle {
+    in property <[string]> options;
+    // The option the box shows; none when it is not one of them.
+    in property <int> chosen;
+    in property <bool> enabled: true;
+    // What the choice is, for a screen reader.
+    in property <string> label;
+    // A row picked, by Return or a click; the chosen one too.
+    callback picked(int);
+    property <string> chosen-text: root.chosen >= 0 && root.chosen < root.options.length ? root.options[root.chosen] : "";
+    // The highlighted row of the open list.
+    property <int> mark;
+    // The list was opened by Return, not yet let go: the key's repeats then
+    // reach the list, and they are not a pick.
+    property <bool> return-held;
+    // The row the list opens on: the chosen one, else the first.
+    property <int> open-at: root.chosen >= 0 && root.chosen < root.options.length ? root.chosen : 0;
+    // How many rows the list shows at once, and the space round them.
+    property <int> list-rows: min(8, root.options.length);
+    property <length> list-padding: 4px;
+    height: Scale.row + 6px;
+    background: Look.control-background;
+    border-radius: Look.radius;
+    border-width: 1px;
+    border-color: Look.control-border;
+    accessible-role: combobox;
+    accessible-label: root.label;
+    accessible-value: root.chosen-text;
+    accessible-enabled: root.enabled;
+    accessible-expandable: true;
+    accessible-expanded: drop-list.is-open;
+    accessible-action-expand => {
+        root.open(false);
+    }
+    // Unless the box has the focus, it goes to `park` first: the list hands
+    // back the focus it found, which is then here, not on whatever held it
+    // before, maybe far off.
+    function open(by-return: bool) {
+        if (!root.enabled || root.options.length == 0) {
+            return;
+        }
+        root.return-held = by-return;
+        root.mark = root.open-at;
+        if (!focus-scope.has-focus) {
+            park.focus();
+        }
+        drop-list.show();
+    }
+    // Off, the list only closes. Else the pick is said before the list
+    // closes, as the std ComboBox does it, and the focus goes to `park` at
+    // once, after the list has handed it back.
+    function pick(index: int) {
+        if (!root.enabled) {
+            drop-list.close();
+            return;
+        }
+        root.picked(index);
+        drop-list.close();
+        park.focus();
+    }
+    // A click on a row picks it, and then for a moment `guard` takes every
+    // click and turn of the wheel, so the second click of a double-click
+    // reaches nothing the list was over. The keys are not held back: the
+    // guard opens with no focus to keep, and `park` has it again at once.
+    function click-pick(index: int) {
+        root.pick(index);
+        park.clear-focus();
+        guard.show();
+        park.focus();
+        guard-time.start();
+    }
+    changed enabled => {
+        if (!root.enabled) {
+            drop-list.close();
+        }
+    }
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        spacing: 6px;
+        Text {
+            text: root.chosen-text;
+            font-size: Scale.body-font;
+            color: root.enabled ? Look.control-text : Look.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+            min-width: 0px;
+            horizontal-stretch: 1;
+            // The box itself carries the value.
+            accessible-role: none;
+        }
+        // The arrow, placed in the middle of its strip, so it passes on no
+        // size of its own.
+        Rectangle {
+            width: 9px * Scale.factor;
+            Path {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 9px * Scale.factor;
+                height: 5px * Scale.factor;
+                viewbox-width: 9;
+                viewbox-height: 5;
+                fill: root.enabled ? Look.control-text : Look.text-secondary;
+                commands: "M 0 0 L 9 0 L 4.5 5 Z";
+                accessible-role: none;
+            }
+        }
+    }
+    // No wheel here: it goes on to what holds the box.
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.open(false);
+        }
+    }
+    focus-scope := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (root.enabled && (event.text == Key.Return || event.text == Key.Space)) {
+                root.open(event.text == Key.Return);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    // Where the focus waits after a pick, and where a click on the box puts
+    // it before the list opens; Tab and a click on it do not give it the
+    // focus. It comes next after the box's own, so when the list closes on a
+    // box gone off, the focus handed back goes on to here rather than round
+    // the window.
+    park := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == Key.Space) {
+                return accept;
+            }
+            return reject;
+        }
+    }
+    // Inside the box's edge.
+    if focus-scope.has-focus && root.enabled: FocusRing {
+        x: 2px;
+        y: 2px;
+        width: root.width - 4px;
+        height: root.height - 4px;
+        border-radius: max(0px, Look.radius - 2px);
+    }
+    // Nothing outside the list reaches into it but `show()`, `close()` and
+    // `is-open`, so what scrolls it is in here.
+    drop-list := PopupWindow {
+        x: 0px;
+        y: root.height;
+        width: root.width;
+        height: root.list-rows * Scale.row + 2 * root.list-padding;
+        close-policy: close-on-click-outside;
+        forward-focus: list-keys;
+        // For a screen reader the list, whose focus is on row `mark`.
+        Rectangle {
+            background: Look.card-background;
+            border-radius: Look.radius;
+            border-width: 1px;
+            border-color: Look.card-border;
+            accessible-role: list;
+            accessible-delegate-focus: root.mark;
+            accessible-item-count: root.options.length;
+            list-keys := FocusScope {
+                // Scrolls the list just enough for row `mark` to show.
+                function reveal() {
+                    if (root.mark * Scale.row < -scroller.viewport-y) {
+                        scroller.viewport-y = -(root.mark * Scale.row);
+                    } else if ((root.mark + 1) * Scale.row + 2 * root.list-padding > scroller.visible-height - scroller.viewport-y) {
+                        scroller.viewport-y = scroller.visible-height - (root.mark + 1) * Scale.row - 2 * root.list-padding;
+                    }
+                }
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow) {
+                        root.mark = max(0, root.mark - 1);
+                        self.reveal();
+                    } else if (event.text == Key.DownArrow) {
+                        root.mark = min(root.options.length - 1, root.mark + 1);
+                        self.reveal();
+                    } else if (event.text == Key.Return) {
+                        if (!root.return-held) {
+                            root.pick(root.mark);
+                        }
+                    } else if (event.text == Key.Escape) {
+                        drop-list.close();
+                    }
+                    return accept;
+                }
+                key-released(event) => {
+                    if (event.text == Key.Return) {
+                        root.return-held = false;
+                    }
+                    return accept;
+                }
+                scroller := ScrollView {
+                    // It opens with row `open-at` in sight. Bound to that, not
+                    // to `mark`, or the list would jump as the pointer moves.
+                    viewport-y: -max(0, root.open-at - root.list-rows + 1) * Scale.row;
+                    VerticalLayout {
+                        alignment: start;
+                        padding: root.list-padding;
+                        for option[index] in root.options: Rectangle {
+                            height: Scale.row;
+                            background: index == root.mark ? Look.selection : transparent;
+                            border-radius: max(0px, Look.radius - 2px);
+                            accessible-role: list-item;
+                            accessible-label: option;
+                            accessible-item-selectable: true;
+                            accessible-item-selected: index == root.chosen;
+                            accessible-item-index: index;
+                            accessible-action-default => {
+                                root.pick(index);
+                            }
+                            HorizontalLayout {
+                                padding-left: 7px;
+                                padding-right: 7px;
+                                Text {
+                                    text: option;
+                                    font-size: Scale.body-font;
+                                    // The chosen one in bold.
+                                    font-weight: index == root.chosen ? 700 : 400;
+                                    color: Look.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    min-width: 0px;
+                                    // The row itself carries the name.
+                                    accessible-role: none;
+                                }
+                            }
+                            TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.move) {
+                                        root.mark = index;
+                                    }
+                                }
+                                clicked => {
+                                    root.click-pick(index);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Open for a moment after a click picked a row: a popup that is not
+    // closed by clicks and has no size, so every press, release and turn of
+    // the wheel falls outside it, and while it is open the window hands
+    // those to nothing. It never holds the focus: it opens when none is held,
+    // so closing hands none back, and meanwhile the keys reach `park`.
+    guard := PopupWindow {
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+        close-policy: no-auto-close;
+    }
+    guard-time := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.stop();
+            guard.close();
+        }
+    }
+}

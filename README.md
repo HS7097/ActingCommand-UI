@@ -879,8 +879,13 @@ least 1"), the pool's capacity being the Runtime's to judge, and its `out_of_ran
 the line's result then says (under the line, with when it landed, not beside the field). A resource with a
 goal has **Clear**. A **choice** variable shows its options side by side, four or fewer, else in a
 drop-down, and a **switch** variable a box; changing either writes the option's value (a JSON string) or
-`true` or `false` at once. A variable with a value stored has **Back to Default**, which clears it
-(but for a name another line has, below);
+`true` or `false` at once. The drop-down opens on a click, or on Return or Space while it has the focus,
+and the wheel never changes it; in its open list the Up and Down keys only move the highlight, only
+Return or a click picks, and a pick of another option writes it once; Esc closes the list. After a
+click picks, the clicks and the wheel of the next half second or so do nothing, so the second click
+of a double-click reaches nothing under the list. After a pick the keyboard focus waits just beside
+the box, where Return and Space do nothing. A variable with
+a value stored has **Back to Default**, which clears it (but for a name another line has, below);
 `integer` and `ordered` variables are only shown in this version, and so have neither a control nor
 **Back to Default**: with no control of them here a value cleared could not be set back from here, so both
 come with their controls in the next version. A placement no bound pack offers that holds a value, and
