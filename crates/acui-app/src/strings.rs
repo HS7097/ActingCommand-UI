@@ -1201,7 +1201,7 @@ pub struct Labels {
     pub goals_days: &'static str,
     pub goals_orphan: &'static str,
     /// Why a run does not read a variable's value, one sentence per `variable_problem` word
-    /// (Runtime `contracts/outcome-codes/catalog.json:9749-9809`); a word not given.
+    /// (Runtime `contracts/outcome-codes/catalog.json:9985-10045`); a word not given.
     pub goals_unapplied_not_an_option: &'static str,
     pub goals_unapplied_out_of_range: &'static str,
     pub goals_unapplied_off_step: &'static str,
@@ -1299,7 +1299,7 @@ pub struct Labels {
     pub goals_carried_importance: &'static str,
     pub goals_carried_validity: &'static str,
     /// Why the Runtime did not take a value, one sentence per `goal_problem` word (Runtime
-    /// `contracts/outcome-codes/catalog.json:10233-10311`, `runtime-host.json:21712-21738`), and
+    /// `contracts/outcome-codes/catalog.json:10469-10547`, `runtime-host.json:21779-21805`), and
     /// of a word this console has no sentence for (the word); the two with a bound, each with it in
     /// its unit (the bytes a value holds, the items a record holds); the values others come with: a
     /// range (min, max), and a sentence with its detail (sentence, detail).

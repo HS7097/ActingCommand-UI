@@ -24,9 +24,9 @@
   `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
   `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
   里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
-  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.63。
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.67。
 - **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 8]、`runtime-client`
-  [3, 9] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.63：这几版的 `ledger` 上限都在
+  [3, 10] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.67：这几版的 `ledger` 上限都在
   [3, 8] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集。v0.12.55 起的账本（修订 8）是单向的：
   v0.12.55 或更新的 Runtime 在一个状态根上跑过之后，v0.12.55 之前的 Runtime 就打不开它，`ledger` 只到 7 的监控台也可能读不了，
   所以要先换监控台，再上 Runtime。v0.12.63 的账本仍是修订 8，但它的决策记忆记录可能带 `break_in`，
@@ -165,7 +165,21 @@
 「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
 这样就不用游标往下读。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.63（`3581a8af`）。v0.12.63 相对 v0.12.62，
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.67（`3a17b927`）。v0.12.67 相对 v0.12.63（中间的
+v0.12.64、v0.12.65、v0.12.66 接口一个没动），接口把 `runtime-client` 升到 10，控制台认的 `runtime-client` 跟到 [3, 10]；
+`actingd-config` [5, 33]、`install-control` [0, 0]、`ledger` [3, 8]、`package` [3, 15]、`runtime-outcomes` [1, 1] 不变；
+两把锁里的 crate 都没改依赖，`Cargo.lock` 只换提交号。修订 10（#437 G1）给状态里每台实例那一行加了可选的 `device_held`
+（`device_group_wait` 为 `close_unconfirmed`，`alias` 是设备为之挡着的那个成员），只在一台设备几个应用、设备为另一个成员结果不明的关会话挡着时才发；
+这一行不收不认识的成员，所以建在 v0.12.66 或更早版本上的控制台读到带它的状态会整份失败（`runtime_receipt_decode_failed`）。今天哪个安装都发不出它：
+Runtime 加载配置时一律拒绝一台设备放几个应用（`several_members_unsupported`），放开一台设备几个应用的那一片时，Runtime 的 `runtime-client` 最低值会升到 10，
+这个控制台已经读得了；它读状态，不显示 `device_held`。修订 10 也是投影放宽的那一版：在映射到包的基准尺寸的显示上（#392 DA-5ab），
+观察的投影是缩到基准的设备帧，建在 v0.12.66 或更早版本上的控制台判这种 `ObserveContainedPage`、`RunContainedLabOperation` 回执无效；这个控制台两种都不发。
+账本仍是修订 8，ledger crate 只改了写入端内部（#463 S1-10），ledger-forensics、runtime-client、runtime-config 的源码都没变。契约库另外加了事实键 `display.frame_extent`、
+标准包的基准尺寸 `STANDARD_PACK_BASE_SIZE`（1280×720）和 `trial_state_place`、`trial_record_problem`、`trial_collect_problem` 三个键，控制台都不读；
+契约库嵌入的结果码目录多了 18 个码（标准包试跑的 14 个 `trial_…` 码，以及 `device_held_for_member_close`、`lab_scene_size_unsupported`、
+`record_display_not_base`、`record_size_not_base`）、8 个位置、词表 `ready_check`、`ready_missing`、`ready_source`、`ready_warning`、
+`trial_collect_problem`、`trial_record_problem`、`trial_state_place`，`device_group_wait`（`close_unconfirmed`）和 `install_refusal` 的新词，以及域 `trial_`；
+没有退役或删掉的码，也没有 `console_`、`setup_` 名字。v0.12.63 相对 v0.12.62，
 接口把 `actingd-config` 升到 33、`install-control` 改成 [0, 0]，`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、
 `runtime-outcomes` [1, 1] 不变；两把锁里的 crate 都没改依赖，`Cargo.lock` 只换提交号。修订 33 加 `scheduling.suspension.break_in_runs`
 和 `scheduling.suspension.break_in_ms`（#463 U1b，调度的 `linear_steps` 包的磨合期），两个在 `ui_tier` 里都是 `hidden`，设置页不多出行；
@@ -175,7 +189,7 @@
 acsetup 关 Runtime 用的 `actingctl request-shutdown --wait` 照旧在。账本仍是修订 8，决策记忆记录 `policy.control_state_recorded`
 多了可选的 `break_in`（`content_hash`、`runs`、`first_settled_at_unix_ms`），从第一次量到内容、并以成功或失败结算的调度 `linear_steps` 运行起写下；
 建在 v0.12.62 或更早版本上的控制台离线读不了它（含这种记录的账本页整页失败），在线读不受影响（在线账本页的公开投影不带这种记录的内容）；
-这个建在 v0.12.63 上的控制台离线也读得了，所以要先换控制台，再上 Runtime。契约库的运行摘要给运行的结局加了可选的 `outcome_key`（运行结束时所在的业务结局，#463 S3-3），这个控制台不读它；
+建在 v0.12.63 或更新版本上的控制台（这个就是）离线也读得了，所以要先换控制台，再上 Runtime。契约库的运行摘要给运行的结局加了可选的 `outcome_key`（运行结束时所在的业务结局，#463 S3-3），这个控制台不读它；
 契约库嵌入的结果码目录多了 3 个码（其中有 `policy_break_in_unread`），退役的是 LAB-6S4a 的 60 个码，没有删掉的码，也没有 `console_`、`setup_` 名字。
 v0.12.62 相对 v0.12.61，接口一个没动，各 crate 的依赖也没变，`Cargo.lock` 只换提交号；契约库的运行摘要给运行的结局加了可选的 `failure_values`（结局在只留码模式下
 留得住的值，#469 F1），这个控制台还不读它；结果码目录登记了 #469 V0 的原因词。v0.12.61 相对 v0.12.60，
@@ -271,10 +285,10 @@ Runtime 运行中切换它的这两个后端，#402 HS-1 到 HS-4，等切换回
 IO 余量；
 v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1；含 Workflow #432 AGT-1b 给 Status 加的可选成员
 `agent_wake`，控制台读得上、不显示；建在 #429 R-0b、R-4、R-11、R-7a、114-A 之上；v0.12.32 的有界离线打开
-照旧），说 0.12 协议（`runtime-client` 修订 9、账本修订 8）：
+照旧），说 0.12 协议（`runtime-client` 修订 10、账本修订 8）：
 
 ```
-rev = "3581a8af4913df837c2086b1c691c2cee9a6a4e9"
+rev = "3a17b9276377ef2d843c17c51356404d7808f26d"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -434,7 +448,10 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
 - **页标签**，在帧上方标题旁：这一帧上识别匹配到的页面，或写明没有匹配。画在帧上会盖住页面自己的
   页头目标。
 - **点击标记**：以操作意图的每个点（`action.x, y`；滑动、拖动每个点各一个）为圆心、带白圈的
-  圆点。它取代事件自己的 `action` 几何，免得同一次输入画两遍。
+  圆点。它取代事件自己的 `action` 几何，免得同一次输入画两遍。显示是包基准尺寸纯缩放的实例上（1280×720 的包遇上
+  1920×1080 的显示），这些点还没换算：操作意图里的点仍是基准的像素，帧和它的 `frame_extent` 却是设备的（Runtime
+  `contracts/display-adapter.md` 第 10 节「Records」），所以那里的点击标记，这里和实时画面上，都画得偏离实际发出的输入；
+  识别目标框是设备帧的像素（第 8 节「Evidence」），画的位置是对的。
 - **一句说明**，在帧下面，每个在这一帧上的输入一句：「步骤 0 notice_close：识别到
   `<game>/news`，点击 (1142, 102)」。
 - **识别目标框**：这一帧上最近一次识别评估过的目标（`task.recognition_completed.targets`，取匹配页的；
@@ -465,7 +482,7 @@ acui --help
 MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
 或在线设置及其时间、入口）和这台最近一次自检的结果。按「应用」后，这台空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-钉住的 v0.12.63 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+钉住的 v0.12.67 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带实例；拒绝照原因写人话：这台正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这台没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
@@ -975,7 +992,7 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   （`instance add`，Runtime INST-5）后给刚加进来的实例挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
   挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
-  暂停，0.12.52 起才有，钉住的 0.12.63 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
+  暂停，0.12.52 起才有，钉住的 0.12.67 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
   `instance.added`（#453 S2）。
   还在排空或交还设备的实例暂停也不给按钮，
   Runtime 这时会拒绝恢复。每一行都照原样显示暂停的理由，不管操作方写的是什么。
