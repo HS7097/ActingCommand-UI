@@ -879,7 +879,8 @@ least 1"), the pool's capacity being the Runtime's to judge, and its `out_of_ran
 the line's result then says (under the line, with when it landed, not beside the field). A resource with a
 goal has **Clear**. A **choice** variable shows its options side by side, four or fewer, else in a
 drop-down, and a **switch** variable a box; changing either writes the option's value (a JSON string) or
-`true` or `false` at once. A variable with a value stored has **Back to Default**, which clears it
+`true` or `false` at once. After a pick from the drop-down the keyboard focus waits just beside it, where
+Return and Space do nothing. A variable with a value stored has **Back to Default**, which clears it
 (but for a name another line has, below);
 `integer` and `ordered` variables are only shown in this version, and so have neither a control nor
 **Back to Default**: with no control of them here a value cleared could not be set back from here, so both
