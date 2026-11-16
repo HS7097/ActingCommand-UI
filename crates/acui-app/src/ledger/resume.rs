@@ -40,14 +40,27 @@
 //!
 //! This console's own two are said as its own, not another tool's, and are
 //! resumed here as those are.
+//!
+//! The hold of a Lab recording (Runtime 0.12.64), the pause the Lab's `record
+//! start` sets on the instance it records (`lab-record-<ms>`,
+//! `lab_record_started`), is not a Lab rescue's: the recording's end lifts
+//! it, but a pause has no expiry, and a recording nobody ends holds its instance
+//! until a resume lifts it. So this window still offers its resume
+//! (`Lifter::LabRecord`), an instance's only, as the Lab sets it on no other
+//! scope, and unless the settings file lists its reason or that line cannot be
+//! taken. Its line says how long ago the hold began, by its reason, and its
+//! entry is worded apart from another tool's; the first press adds to the line
+//! what a resume does to a recording that has not ended: each press it makes
+//! after warns that the instance is not held, and what it records may mix in a
+//! scheduled task's screens.
 
 use acui_rows::format_full;
-use acui_source::workbench::{CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
+use acui_source::workbench::{lab_record_started, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
 use acui_source::{
     resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
 };
 
-use crate::ledger::paint::{code_short, models};
+use crate::ledger::paint::{age_text, code_short, models};
 use crate::ledger::state::{InstancesSnapshot, LedgerState, Phase, StatusReread};
 use crate::ledger::worker::Command;
 use crate::ledger::{find, LedgerHandle};
@@ -129,6 +142,11 @@ pub(crate) enum Lifter {
     /// finishes; a stop's (`down`, Runtime `rescue.rs`, which only holds) and
     /// one left behind are lifted from the Lab (`lab_rescue`).
     LabRescue,
+    /// A Lab recording holds the instance it records, by an instance's pause
+    /// only, and its end lifts the pause; this window may still resume it.
+    /// `started_unix_ms`: when the recording took it, by its reason
+    /// (`lab_record_started`).
+    LabRecord { started_unix_ms: u64 },
 }
 
 pub(crate) fn lifter(pause: &PauseFact, elsewhere: &ResumeElsewhere) -> Lifter {
@@ -139,6 +157,10 @@ pub(crate) fn lifter(pause: &PauseFact, elsewhere: &ResumeElsewhere) -> Lifter {
         Lifter::LabRescue
     } else if elsewhere.names(pause) {
         Lifter::Setter
+    } else if let (Some(started_unix_ms), Some(_)) =
+        (lab_record_started(reason), pause.target.instance_alias())
+    {
+        Lifter::LabRecord { started_unix_ms }
     } else {
         Lifter::Window
     }
@@ -232,14 +254,21 @@ pub fn paint(window: &LedgerWindow, ledger: &LedgerHandle, state: &LedgerState, 
     match pauses(state) {
         Ok(facts) => {
             for fact in facts {
-                let (text, resumable) = pause_text(labels, fact, &ledger.open.resume_elsewhere);
+                let by = lifter(fact, &ledger.open.resume_elsewhere);
+                let (mut text, resumable) = pause_text(labels, fact, by);
                 let target = (resumable && !busy).then(|| fact.target.clone());
                 let confirming =
                     target.is_some() && resume.confirming.as_ref() == target.as_ref();
+                let recording = matches!(by, Lifter::LabRecord { .. });
+                // Once asked, the line says what the resume does to the recording.
+                if confirming && recording {
+                    text.push_str(labels.pause_lab_record_confirming);
+                }
                 items.push(PauseItem {
                     text: text.into(),
                     offered: target.is_some(),
                     confirming,
+                    recording,
                     failed: false,
                 });
                 offered.push(target);
@@ -251,6 +280,7 @@ pub fn paint(window: &LedgerWindow, ledger: &LedgerHandle, state: &LedgerState, 
                 text: fill(labels.pauses_unread, &[&code, operation]).into(),
                 offered: false,
                 confirming: false,
+                recording: false,
                 failed: true,
             });
             offered.push(None);
@@ -298,36 +328,37 @@ fn unread(labels: &Labels, failure: &ClientFailure) -> (String, &'static str) {
     (code_short(labels, code), failure.operation)
 }
 
-/// A pause's line, and whether a person may resume it here: one another tool
-/// or this console set, global, or an instance's whose device is handed back — the Runtime
-/// refuses the resume of one still draining or handing it back.
-fn pause_text(labels: &Labels, fact: &PauseFact, elsewhere: &ResumeElsewhere) -> (String, bool) {
+/// A pause's line, `by` who lifts it, and whether a person may resume it here: one
+/// another tool, this console or a Lab recording set, global, or an instance's whose device
+/// is handed back — the Runtime refuses the resume of one still draining or handing it back.
+fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
     let scope = scope_text(labels, &fact.target);
     let (revision, since) = (fact.revision.to_string(), format_full(fact.since_unix_ms));
     let values: [&str; 4] = [&scope, &fact.reason, &revision, &since];
-    match lifter(fact, elsewhere) {
-        Lifter::Setter => (fill(labels.pause_setter, &values), false),
-        Lifter::Installer => (fill(labels.pause_deploy, &values), false),
-        Lifter::LabRescue => (fill(labels.pause_lab_rescue, &values), false),
-        Lifter::Window => {
-            // This console's own, by reason and scope (`console_set`), is not another tool's.
-            let set_by =
-                if console_set(fact) { labels.pause_console } else { labels.pause_other_tool };
-            let mut text = fill(set_by, &values);
-            let resumable = match fact.stage {
-                None | Some(PauseStage::Released) => true,
-                Some(PauseStage::Draining) => {
-                    text.push_str(labels.pause_draining);
-                    false
-                }
-                Some(PauseStage::Paused) => {
-                    text.push_str(labels.pause_releasing);
-                    false
-                }
-            };
-            (text, resumable)
+    let mut text = match by {
+        Lifter::Setter => return (fill(labels.pause_setter, &values), false),
+        Lifter::Installer => return (fill(labels.pause_deploy, &values), false),
+        Lifter::LabRescue => return (fill(labels.pause_lab_rescue, &values), false),
+        Lifter::LabRecord { started_unix_ms } => {
+            let began = age_text(labels, started_unix_ms);
+            fill(labels.pause_lab_record, &[&scope, &fact.reason, &revision, &since, &began])
         }
-    }
+        // This console's own, by reason and scope (`console_set`), is not another tool's.
+        Lifter::Window if console_set(fact) => fill(labels.pause_console, &values),
+        Lifter::Window => fill(labels.pause_other_tool, &values),
+    };
+    let resumable = match fact.stage {
+        None | Some(PauseStage::Released) => true,
+        Some(PauseStage::Draining) => {
+            text.push_str(labels.pause_draining);
+            false
+        }
+        Some(PauseStage::Paused) => {
+            text.push_str(labels.pause_releasing);
+            false
+        }
+    };
+    (text, resumable)
 }
 
 fn scope_text(labels: &Labels, target: &PauseTarget) -> String {

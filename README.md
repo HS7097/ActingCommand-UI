@@ -1470,7 +1470,26 @@ through or was stopped.
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
   No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.63 has
   both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
-  `start_paused` (#453 S2). An instance
+  `start_paused` (#453 S2). A Lab recording's hold (Runtime 0.12.64 on) is a kind of its own: an
+  instance's pause whose reason is exactly `lab-record-<unix ms>`, digits only after the prefix (the
+  Lab's `record start` pauses only the instance it records; the same reason on another scope, and any
+  other `lab-` reason, is as before). Its line says "Held by a Lab Recording", that the Lab is
+  recording on this instance and that ending the recording lifts it, and how long ago the hold began,
+  by the milliseconds in its reason ("Hold Began 3 days ago"), so a fresh one and a forgotten one can
+  be told apart at a glance; the instance card and the Daily Tasks tab say the same. Ending the
+  recording (`record stop`, `record archive`) resumes only the pause that shows that reason; a pause
+  has no expiry, so a recording left unended, or one whose end could not release its pause (the Lab
+  then keeps the hold), keeps its instance out of scheduling, and the window still offers a resume,
+  "Resume Scheduling Anyway…". Its first press adds to the line what that does: once resumed,
+  scheduling comes back to the instance, and if the recording has not ended every press it makes
+  after that carries the warning `instance_not_held` in its answer, and what it records may mix in a
+  scheduled task's screens; and that the Runtime refuses the resume if the pause has changed, as when
+  the recording has just ended and lifted it. Beside it come the statement "resume this one pause;
+  the recording no longer holds the instance" and "Confirm and Resume Anyway". The confirm sends one
+  conditional `ResumeScheduling`, as for any other pause. After such a resume the recording's end
+  finds no pause of its own and answers `already_gone`, which is no failure. One whose reason
+  `resume_elsewhere_reasons` lists, or any while that line cannot be used, is of the first kind: only
+  why, no button. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.
 

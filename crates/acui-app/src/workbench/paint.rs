@@ -69,7 +69,7 @@ use super::tasks::{
     GroupTitle, PackRow, PackSwitch, SwitchSlot, SwitchesNote, TaskLine, TaskList, TaskName,
     TaskSaid, TasksView, Unreadable,
 };
-use crate::ledger::paint::models;
+use crate::ledger::paint::{age_text, models};
 use crate::ledger::resume::Lifter;
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
@@ -2703,7 +2703,8 @@ fn pause_note(labels: &Labels, view: &ActionsView) -> String {
         Lifter::Setter => note.extend([labels.pause_note_no_update, labels.resume_barred_setter]),
         Lifter::Installer => note.push(labels.resume_barred_installer),
         Lifter::LabRescue => note.push(labels.resume_barred_lab_rescue),
-        Lifter::Window => note.push(labels.pause_note_no_update),
+        // A Lab recording's hold is an instance's only, never this one.
+        Lifter::Window | Lifter::LabRecord { .. } => note.push(labels.pause_note_no_update),
     }
     note.join("\n")
 }
@@ -4284,6 +4285,9 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
                 Lifter::Setter => labels.card_paused_setter.to_owned(),
                 Lifter::Installer => labels.card_paused_installer.to_owned(),
                 Lifter::LabRescue => labels.card_paused_lab_rescue.to_owned(),
+                Lifter::LabRecord { started_unix_ms } => {
+                    fill(labels.card_paused_lab_record, &[&age_text(labels, *started_unix_ms)])
+                }
                 Lifter::Window if *everyone && reason.as_str() == CONSOLE_PAUSE_ALL => {
                     labels.card_paused_console.to_owned()
                 }
