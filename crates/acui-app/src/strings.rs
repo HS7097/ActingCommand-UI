@@ -425,6 +425,11 @@ pub struct Labels {
     /// yet; one only whoever set it lifts, by the settings file; a deployment's,
     /// which the installer lifts; a Lab rescue operation's, which it lifts as it
     /// finishes, but for a stop's (`lab-down-`), which is lifted from the Lab.
+    /// A Lab recording's hold of an instance (`lab-record-`): scope, reason,
+    /// revision, since, and how long ago the hold began (`age_*`), with the stage
+    /// as another tool's; then, once its resume is asked for, what the resume
+    /// does to the recording, and that the Runtime refuses it once the pause has
+    /// changed.
     pub pause_global: &'static str,
     pub pause_instance: &'static str,
     pub pause_other_tool: &'static str,
@@ -434,6 +439,8 @@ pub struct Labels {
     pub pause_setter: &'static str,
     pub pause_deploy: &'static str,
     pub pause_lab_rescue: &'static str,
+    pub pause_lab_record: &'static str,
+    pub pause_lab_record_confirming: &'static str,
     /// In place of the pause lines when the status read failed: code (with
     /// its short words), client operation.
     pub pauses_unread: &'static str,
@@ -442,6 +449,10 @@ pub struct Labels {
     pub resume_scheduling: &'static str,
     pub resume_statement: &'static str,
     pub resume_confirm: &'static str,
+    /// The same three of a Lab recording's hold, worded apart from another tool's.
+    pub resume_record: &'static str,
+    pub resume_record_statement: &'static str,
+    pub resume_record_confirm: &'static str,
     /// The last resume. scope, owner epoch, revision: out. scope, new
     /// revision: lifted; then the device code of a reconnect that failed, with
     /// its words. scope, runtime refusal code, client error code, client
@@ -912,7 +923,8 @@ pub struct Labels {
     /// global one by the top bar, which
     /// is also where one pressed here is lifted; one pressed on the account's card is
     /// lifted there (`card_paused_account`); and `card_all_accounts` round the
-    /// sentence for the global pause. A task with no name at all; a fence's cause the
+    /// sentence for the global pause. A Lab recording's hold of the account: how long
+    /// ago the hold began (`age_*`). A task with no name at all; a fence's cause the
     /// tables have no words for.
     pub card_draining: &'static str,
     pub card_draining_any: &'static str,
@@ -920,6 +932,7 @@ pub struct Labels {
     pub card_paused_setter: &'static str,
     pub card_paused_installer: &'static str,
     pub card_paused_lab_rescue: &'static str,
+    pub card_paused_lab_record: &'static str,
     pub card_paused_other: &'static str,
     pub card_paused_other_all: &'static str,
     pub card_paused_console: &'static str,
@@ -2086,10 +2099,15 @@ pub const ZH: Labels = Labels {
     pause_setter: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停要由设下它的一方解除",
     pause_deploy: "{}：部署暂停（理由 {}，修订 {}，自 {}）· 这是安装器加的部署暂停，请用安装器恢复",
     pause_lab_rescue: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停是 Lab 救急操作挂的，操作结束会自己解除；停机（理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除",
+    pause_lab_record: "{}：被 Lab 的录制按住（理由 {}，修订 {}，自 {}，{}开始按住）· Lab 正在这个实例上录制，录制结束时会自己放开",
+    pause_lab_record_confirming: " · 恢复以后调度会回到这个实例上：录制要是还没结束，它接下来每按一下都会带警告（instance_not_held），录下的画面可能混进调度任务的画面；这份暂停已有变动时（比如录制刚好结束，放开了它）Runtime 会拒绝这次恢复",
     pauses_unread: "状态没读到，暂停情况未知：{}（{}）",
     resume_scheduling: "恢复自动调度…",
     resume_statement: "确认：只恢复这一份暂停；它已有变动时 Runtime 会拒绝",
     resume_confirm: "确认并恢复",
+    resume_record: "仍要恢复调度…",
+    resume_record_statement: "确认：只恢复这一份暂停；录制从此不再按住这个实例",
+    resume_record_confirm: "确认，仍要恢复调度",
     resume_sending: "正在恢复{}（owner epoch {}，修订 {}）…",
     resume_done: "已恢复{}（新修订 {}）",
     resume_device_failed: " · 设备还没连上：{}",
@@ -2422,6 +2440,7 @@ pub const ZH: Labels = Labels {
     card_paused_setter: "已暂停，此暂停要由设下它的一方解除",
     card_paused_installer: "正在更新，由安装程序恢复",
     card_paused_lab_rescue: "已暂停，此暂停是 Lab 救急操作挂的，操作结束会自己解除；停机（理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除",
+    card_paused_lab_record: "已被 Lab 的录制按住：Lab 正在这个实例上录制，{}开始按住，录制结束时会自己放开；录制忘了结束、或结束时没能放开的，可在「排障与账本」里恢复调度",
     card_paused_other: "已被其他工具暂停（理由：{}），可在「排障与账本」里恢复",
     card_paused_other_all: "已被其他工具暂停（理由：{}），可用「全部开始执勤」恢复",
     card_paused_console: "已暂停，可用「全部开始执勤」恢复",
@@ -3340,10 +3359,15 @@ pub const EN: Labels = Labels {
     pause_setter: "{}: Paused (Reason {}, Revision {}, Since {}) · This Pause Is to Be Lifted by Whoever Set It",
     pause_deploy: "{}: Deployment Pause (Reason {}, Revision {}, Since {}) · The Installer Set It; Lift It with the Installer",
     pause_lab_rescue: "{}: Paused (Reason {}, Revision {}, Since {}) · A Lab Rescue Operation Set This Pause, and the Operation Lifts It When It Finishes; One a Stop Set (Reason Starting lab-down-) Is Not Lifted by Itself: Like One an Operation That Has Stopped Left Behind, Lift It from the Lab",
+    pause_lab_record: "{}: Held by a Lab Recording (Reason {}, Revision {}, Since {}, Hold Began {}) · The Lab Is Recording on This Instance, and Ending the Recording Lifts This Pause",
+    pause_lab_record_confirming: " · Once Resumed, Scheduling Comes Back to This Instance: If the Recording Has Not Ended, Every Press It Makes After That Carries a Warning (instance_not_held), and What It Records May Mix in a Scheduled Task's Screens; the Runtime Refuses the Resume If This Pause Has Changed, as When the Recording Has Just Ended and Lifted It",
     pauses_unread: "The Status Was Not Read; Whether Scheduling Is Paused Is Unknown: {} ({})",
     resume_scheduling: "Resume Scheduling…",
     resume_statement: "Confirm: Resume This One Pause; the Runtime Refuses If It Has Changed",
     resume_confirm: "Confirm and Resume",
+    resume_record: "Resume Scheduling Anyway…",
+    resume_record_statement: "Confirm: Resume This One Pause; the Recording No Longer Holds the Instance",
+    resume_record_confirm: "Confirm and Resume Anyway",
     resume_sending: "Resuming {} (Owner Epoch {}, Revision {})…",
     resume_done: "Resumed {} (New Revision {})",
     resume_device_failed: " · The Device Is Not Connected Yet: {}",
@@ -3676,6 +3700,7 @@ pub const EN: Labels = Labels {
     card_paused_setter: "Paused; this pause is to be lifted by whoever set it",
     card_paused_installer: "Updating; the installer lifts this pause",
     card_paused_lab_rescue: "Paused; a Lab rescue operation set this pause, and the operation lifts it when it finishes; one a stop set (reason starting lab-down-) is not lifted by itself: like one an operation that has stopped left behind, lift it from the Lab",
+    card_paused_lab_record: "Held by a Lab recording: the Lab is recording on this instance; its hold began {}, and ending the recording lifts it; if the recording was left unended, or its end could not lift the hold, scheduling can be resumed in Troubleshooting and Ledger",
     card_paused_other: "Paused by another tool (reason: {}); it can be resumed in Troubleshooting and Ledger",
     card_paused_other_all: "Paused by another tool (reason: {}); Put All on Duty resumes it",
     card_paused_console: "Paused; Put All on Duty resumes it",

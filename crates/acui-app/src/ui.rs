@@ -991,6 +991,9 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_resume_scheduling(labels.resume_scheduling.into());
     global.set_resume_statement(labels.resume_statement.into());
     global.set_resume_confirm(labels.resume_confirm.into());
+    global.set_resume_record(labels.resume_record.into());
+    global.set_resume_record_statement(labels.resume_record_statement.into());
+    global.set_resume_record_confirm(labels.resume_record_confirm.into());
     global.set_start(labels.start.into());
     global.set_pause_all(labels.pause_all.into());
     global.set_resume_all(labels.resume_all.into());

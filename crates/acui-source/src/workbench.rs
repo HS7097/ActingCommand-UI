@@ -148,6 +148,24 @@ pub fn pause_reason_valid(reason: &str) -> bool {
     SchedulingPauseReason::new(reason).is_ok()
 }
 
+/// The prefix of the reason the Lab's `record start` gives the pause it sets on the instance it
+/// records (Runtime 0.12.64, #463 S1-7; Runtime `crates/lab/src/recording/hold.rs`, `reason_for`),
+/// followed by the start of the recording that set it, in Unix milliseconds, in decimal. The
+/// recording's end (`record stop`, `record archive`) lifts the pause of exactly that reason.
+const LAB_RECORD_PREFIX: &str = "lab-record-";
+
+/// The milliseconds of a reason of exactly that shape, the prefix and then digits only, that fit an
+/// `i64`, as the clock an age is told by does (`acui_rows::seconds_since`): when the recording
+/// took the pause. Any other reason, another `lab-` one among them, has none.
+pub fn lab_record_started(reason: &str) -> Option<u64> {
+    let ms = reason.strip_prefix(LAB_RECORD_PREFIX)?;
+    // `parse` alone would take a leading `+`.
+    if !ms.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    ms.parse::<u64>().ok().filter(|ms| i64::try_from(*ms).is_ok())
+}
+
 /// The client's own spelling of the pause's operation
 /// (`ContractLocation::PauseScheduling`).
 const PAUSE_SCHEDULING: &str = "pause_scheduling";
@@ -1899,5 +1917,39 @@ fn dispatch_stage(state: ScheduleDispatchState) -> DispatchStage {
         ScheduleDispatchState::Admitted => DispatchStage::Admitted,
         ScheduleDispatchState::Rejected => DispatchStage::Rejected,
         ScheduleDispatchState::Completed => DispatchStage::Completed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lab_record_started;
+
+    #[test]
+    fn a_recording_hold_gives_its_milliseconds() {
+        assert_eq!(lab_record_started("lab-record-1763270000000"), Some(1_763_270_000_000));
+        assert_eq!(lab_record_started("lab-record-0"), Some(0));
+        assert_eq!(
+            lab_record_started("lab-record-9223372036854775807"),
+            Some(9_223_372_036_854_775_807)
+        );
+    }
+
+    #[test]
+    fn any_other_reason_gives_none() {
+        for reason in [
+            "lab-record-",
+            "lab-record-12a",
+            "lab-record-+1",
+            "lab-record--1",
+            "lab-record-1-2",
+            "lab-record-9223372036854775808",
+            "lab-record-18446744073709551615",
+            "lab-record-99999999999999999999",
+            "lab-down-1763270000000",
+            "xlab-record-1",
+            "console_pause_account",
+        ] {
+            assert_eq!(lab_record_started(reason), None, "{reason}");
+        }
     }
 }

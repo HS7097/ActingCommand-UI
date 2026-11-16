@@ -1173,7 +1173,9 @@ fn source_text(labels: &Labels, state: &LedgerState, auto: bool) -> String {
     text
 }
 
-fn age_text(labels: &Labels, timestamp_unix_ms: u64) -> String {
+/// How long ago `timestamp_unix_ms` was, in its largest whole unit: the ledger card's age, and
+/// how long a Lab recording has held its instance, on a pause line and an account's card.
+pub fn age_text(labels: &Labels, timestamp_unix_ms: u64) -> String {
     let seconds = seconds_since(timestamp_unix_ms).max(0);
     let (template, value) = if seconds >= 86_400 {
         (labels.age_days, seconds / 86_400)
