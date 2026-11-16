@@ -30,9 +30,9 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now v0.12.63.
+  of Runtime v0.12.47; the pin is now v0.12.67.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 32], `ledger` [3, 8],
-  `runtime-client` [3, 9] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.63: each of
+  `runtime-client` [3, 10] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.67: each of
   them declares a `ledger` maximum within [3, 8] and an `actingd-config` and a `runtime-client` range
   that meet the console's. The ledger of v0.12.55 and later (revision 8) is one way: once such a Runtime has run on
   a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
@@ -230,8 +230,32 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.63 (`3581a8af`). Against
-v0.12.62 it raises `actingd-config` to 33 and takes `install-control` to [0, 0]; `ledger` [3, 8],
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.67 (`3a17b927`). Against
+v0.12.63 (v0.12.64, v0.12.65 and v0.12.66 moved no interface) it raises `runtime-client` to 10, and the
+console's `runtime-client` range follows to [3, 10]; `actingd-config` [5, 33], `install-control` [0, 0],
+`ledger` [3, 8], `package` [3, 15] and `runtime-outcomes` [1, 1] stay, and no crate the locks list changed
+its dependencies, so `Cargo.lock` changes only in the rev. Revision 10 (#437 G1) gives an instance's row of
+the status the optional `device_held` (`device_group_wait` `close_unconfirmed` and the `alias` of the member
+the device is held for), sent only for a member of a device group of several while the device is held for
+another member's unconfirmed close; the row refuses members it does not know, so a console built on
+v0.12.66 or earlier fails a whole status that carries it (`runtime_receipt_decode_failed`). No installation sends
+it today, as the Runtime refuses at load a configuration with several applications on one device
+(`several_members_unsupported`); the slice that lets one load raises the Runtime's `runtime-client` minimum
+to 10, which this console already reads. It reads the status and does not show `device_held`. Revision 10
+is also the one at which an observation on a display that maps to its package's base size (#392 DA-5ab)
+projects the device frame reduced to the base, which a console built on v0.12.66 or earlier judges invalid
+in the receipts of `ObserveContainedPage` and `RunContainedLabOperation`; this console sends neither. At ledger revision 8
+still, the ledger crate changed only inside its writer (#463 S1-10), and ledger-forensics, runtime-client
+and runtime-config have the same source. The contract crate otherwise gains the fact key
+`display.frame_extent`, the standard packs' base size `STANDARD_PACK_BASE_SIZE` (1280×720) and the keys
+`trial_state_place`, `trial_record_problem` and `trial_collect_problem`, none of which the console reads,
+and in the outcome-code catalog it embeds eighteen codes (the fourteen `trial_…` codes of the standard-pack
+trial, `device_held_for_member_close`, `lab_scene_size_unsupported`, `record_display_not_base` and
+`record_size_not_base`), eight locations, the vocabularies `ready_check`, `ready_missing`, `ready_source`,
+`ready_warning`, `trial_collect_problem`, `trial_record_problem` and `trial_state_place`, new tokens of
+`device_group_wait` (`close_unconfirmed`) and `install_refusal`, and the domain `trial_`, with no code
+retired or removed and no `console_` or `setup_` name. v0.12.63 against v0.12.62 raises `actingd-config`
+to 33 and takes `install-control` to [0, 0]; `ledger` [3, 8],
 `runtime-client` [3, 9], `package` [3, 15] and `runtime-outcomes` [1, 1] stay, and no crate the locks list
 changed its dependencies, so `Cargo.lock` changes only in the rev. Revision 33 adds
 `scheduling.suspension.break_in_runs` and `scheduling.suspension.break_in_ms` (#463 U1b, the break-in of a
@@ -246,8 +270,8 @@ decision-memory record `policy.control_state_recorded` gains the optional `break
 `runs`, `first_settled_at_unix_ms`), written once a scheduled `linear_steps` run whose content was measured
 settles as a success or a failure; a console built on v0.12.62 or earlier cannot read it offline (the ledger page that
 holds one fails whole), while online reads are not touched, an online page's public projection carrying none
-of the record's content; this console, built on v0.12.63, reads it offline too, so switch the console before
-the Runtime. A run's terminal in the contract crate's run
+of the record's content; a console built on v0.12.63 or later, as this one is, reads it offline too, so
+switch the console before the Runtime. A run's terminal in the contract crate's run
 summary gains the optional `outcome_key`, the business end the run finished on (#463 S3-3), which this
 console does not read; the outcome-code catalog the contract crate embeds gains three codes (among them
 `policy_break_in_unread`) and retires sixty of LAB-6S4a's, none removed and no `console_` or `setup_`
@@ -394,10 +418,10 @@ device switches its two backends while the Runtime runs, #402 HS-1 to HS-4, and 
 long as the contract's `BACKEND_SWITCH_WAIT_MS` and the client's IO margin say;
 with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
 `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
-v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 9, ledger revision 8):
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 10, ledger revision 8):
 
 ```
-rev = "3581a8af4913df837c2086b1c691c2cee9a6a4e9"
+rev = "3a17b9276377ef2d843c17c51356404d7808f26d"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -628,7 +652,12 @@ On the frame, beside the event's own geometry:
   or that it matched none. On the frame it would cover the page's own header targets.
 - **The tap mark**: a white-ringed dot centred on each point of the step's effect intent (`action.x, y`; a
   swipe or drag has one per point). It replaces the event's own `action` geometry, which would draw the
-  same input twice.
+  same input twice. These points are not mapped yet onto an instance whose display is a pure scale of its
+  package's base (a 1280×720 package on a 1920×1080 display): the effect intent keeps them in the base's
+  pixels while the frame and its `frame_extent` are the device's (Runtime `contracts/display-adapter.md`,
+  section 10, "Records"), so there the marks, here and on the live picture, are drawn off the input that
+  was sent; the target boxes are in the device frame's pixels (section 8, "Evidence") and are drawn where
+  they belong.
 - **One sentence** under the frame, per input meant on it: "Step 0 notice_close: recognized
   `<game>/news`, tap (1142, 102)".
 - **The recognition target boxes**: the targets the frame's latest recognition evaluated
@@ -674,7 +703,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.63, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.67, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1473,7 +1502,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.63 has
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.67 has
   both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). A Lab recording's hold (Runtime 0.12.64 on) is a kind of its own: an
   instance's pause whose reason is exactly `lab-record-<unix ms>`, digits only after the prefix (the
