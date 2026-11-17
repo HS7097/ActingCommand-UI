@@ -7,14 +7,17 @@
 
 use acui_wizard::Lang;
 
+use super::PAGE_COUNT;
+
 pub struct Labels {
     pub window_title: &'static str,
     /// The window's title over the step bar, in two lines of their own: the bar is too narrow
     /// for it in one, and a break of its own would fall inside a word.
     pub side_name: &'static str,
     pub side_title: &'static str,
-    pub steps: [&'static str; 10],
-    pub titles: [&'static str; 10],
+    /// The step bar's names and the pages' titles, in the pages' order (`gui::WELCOME` on).
+    pub steps: [&'static str; PAGE_COUNT],
+    pub titles: [&'static str; PAGE_COUNT],
     pub finish_failed_title: &'static str,
     pub back: &'static str,
     pub next: &'static str,
@@ -42,11 +45,24 @@ pub struct Labels {
     pub welcome_what_unknown: &'static str,
     pub welcome_before_head: &'static str,
     pub req_windows: &'static str,
-    pub req_mumu: &'static str,
     pub req_space: &'static str,
     pub welcome_untouched: &'static str,
 
-    // 2 Files.
+    // 2 Usage.
+    pub usage_body: &'static str,
+    /// Also the confirm page's usage, with MuMu ticked.
+    pub usage_mumu: &'static str,
+    /// What MuMu needs, with the oldest version the Runtime takes.
+    pub usage_mumu_note: &'static str,
+    pub usage_android: &'static str,
+    /// Why the phone boxes are greyed: under the box, and said with its words to a screen reader.
+    pub usage_android_note: &'static str,
+    pub usage_ios: &'static str,
+    pub usage_ios_note: &'static str,
+    /// With nothing ticked: what the install will be, and how instances come later.
+    pub usage_none: &'static str,
+
+    // 3 Files.
     pub set_where: &'static str,
     pub set_checking: &'static str,
     pub set_checked: &'static str,
@@ -63,7 +79,7 @@ pub struct Labels {
     pub key_games: &'static str,
     pub version_value: &'static str,
 
-    // 3 Location.
+    // 4 Location.
     pub root_body: &'static str,
     pub root_label: &'static str,
     pub browse: &'static str,
@@ -88,13 +104,13 @@ pub struct Labels {
     pub root_space_unknown: &'static str,
     pub root_folders: &'static str,
 
-    // 4 Games.
+    // 5 Games.
     pub games_body: &'static str,
     pub games_row_one: &'static str,
     pub games_row: &'static str,
     pub games_none: &'static str,
 
-    // 5 Emulators.
+    // 6 Emulators.
     pub emu_searching: &'static str,
     pub emu_body: &'static str,
     pub emu_empty: &'static str,
@@ -114,7 +130,7 @@ pub struct Labels {
     pub emu_none_yes: &'static str,
     pub emu_none_no: &'static str,
 
-    // 6 Instances.
+    // 7 Instances.
     pub accounts_body: &'static str,
     pub col_emulator: &'static str,
     pub col_name: &'static str,
@@ -133,7 +149,7 @@ pub struct Labels {
     pub accounts_choose: &'static str,
     pub accounts_backend: &'static str,
 
-    // 7 Options.
+    // 8 Options.
     pub opt_desktop: &'static str,
     pub opt_start_menu: &'static str,
     pub opt_watchdog: &'static str,
@@ -146,8 +162,11 @@ pub struct Labels {
     pub key_attention: &'static str,
     pub attention_unpaused: &'static str,
 
-    // 8 Confirm.
+    // 9 Confirm.
     pub key_root: &'static str,
+    pub key_usage: &'static str,
+    /// The usage with nothing ticked.
+    pub usage_none_short: &'static str,
     pub key_accounts: &'static str,
     pub key_options: &'static str,
     pub key_folders: &'static str,
@@ -164,12 +183,12 @@ pub struct Labels {
     pub file_full_config: &'static str,
     pub confirm_note: &'static str,
 
-    // 9 Install, in the order the install runs them (`Step::ALL`).
+    // 10 Install, in the order the install runs them (`Step::ALL`).
     pub install_steps: [&'static str; 15],
     pub install_skipped: &'static str,
     pub install_pre: &'static str,
 
-    // 10 Finish.
+    // 11 Finish.
     pub finish_paused: &'static str,
     pub finish_running: &'static str,
     pub finish_installed: &'static str,
@@ -226,9 +245,10 @@ pub const ZH: Labels = Labels {
     window_title: "ActingCommand 安装向导",
     side_name: "ActingCommand",
     side_title: "安装向导",
-    steps: ["欢迎", "安装文件", "安装位置", "游戏", "模拟器", "实例", "选项", "确认", "安装", "完成"],
+    steps: ["欢迎", "用途", "安装文件", "安装位置", "游戏", "模拟器", "实例", "选项", "确认", "安装", "完成"],
     titles: [
         "欢迎使用 ActingCommand",
+        "选择用途",
         "检查安装文件",
         "选择安装位置",
         "选择游戏",
@@ -258,15 +278,23 @@ pub const ZH: Labels = Labels {
     dialog_failed: "选择文件夹的窗口打不开：{}",
     picking_note: "请在打开的窗口里选好文件夹。",
 
-    welcome_body: "这个向导会把 ActingCommand 装进你选的一个文件夹，并把模拟器里登录好的游戏接上。大约需要 5 分钟。",
+    welcome_body: "这个向导会把 ActingCommand 装进你选的一个文件夹，再按你选的用途，接上模拟器或手机里登录好的游戏。大约需要 5 分钟。",
     welcome_what_head: "将要安装",
     welcome_what: "ActingCommand {} · 监控台 {} · 游戏：{}",
-    welcome_what_unknown: "向导旁边没有找到安装文件；下一步可以选择它们所在的文件夹。",
+    welcome_what_unknown: "向导旁边没有找到安装文件；选好用途后，在「安装文件」那一页可以选择它们所在的文件夹。",
     welcome_before_head: "开始前请确认",
     req_windows: "Windows 10 或 11（64 位）",
-    req_mumu: "已经装好 MuMu 模拟器，游戏已在里面装好并登录好",
     req_space: "磁盘上有大约 {} GB 空闲",
     welcome_untouched: "这个向导不会改动电脑上已经装着的 ActingCommand。",
+
+    usage_body: "ActingCommand 要在哪里替你操作游戏？勾上要用的，可以多选，也可以一个都不选。",
+    usage_mumu: "MuMu 模拟器",
+    usage_mumu_note: "需要先装好 MuMu 模拟器（{} 或更新），游戏已在里面装好并登录好。",
+    usage_android: "安卓真机",
+    usage_android_note: "下一版就能用：在这里发现并绑定手机。",
+    usage_ios: "iOS 真机",
+    usage_ios_note: "还不支持，在做。",
+    usage_none: "一个都不选也可以继续：向导只装核心部分，不建实例（实例：一台模拟器或一部手机，上面是登录好的游戏）。以后要加实例：监控台里现在还不能直接添加。可以再运行一次安装向导，装到另一个文件夹（那是另一套 ActingCommand，和这一套分开运行）；也可以等以后的新版支持。",
 
     set_where: "安装文件在 {}。",
     set_checking: "正在逐个核对，确认没有缺损……",
@@ -359,6 +387,8 @@ pub const ZH: Labels = Labels {
     attention_unpaused: "第一次启动时不会先暂停：ActingCommand 一启动，实例就会开始执勤、操作游戏。",
 
     key_root: "安装位置",
+    key_usage: "用途",
+    usage_none_short: "只装核心部分，不建实例",
     key_accounts: "实例",
     key_options: "选项",
     key_folders: "会建的文件夹",
@@ -425,10 +455,12 @@ pub const EN: Labels = Labels {
     side_name: "ActingCommand",
     side_title: "Setup",
     steps: [
-        "Welcome", "Files", "Location", "Games", "Emulator", "Instances", "Options", "Confirm", "Install", "Finish",
+        "Welcome", "Usage", "Files", "Location", "Games", "Emulator", "Instances", "Options", "Confirm", "Install",
+        "Finish",
     ],
     titles: [
         "Welcome to ActingCommand",
+        "Choose what it is for",
         "Checking the setup files",
         "Choose where to install",
         "Choose games",
@@ -458,15 +490,23 @@ pub const EN: Labels = Labels {
     dialog_failed: "The folder picker cannot open: {}",
     picking_note: "Choose the folder in the window that opened.",
 
-    welcome_body: "This wizard installs ActingCommand into a folder you choose and connects the signed-in games in your emulators. It takes about 5 minutes.",
+    welcome_body: "This wizard installs ActingCommand into a folder you choose, then connects the signed-in games on your emulators or phones, as you choose to use it. It takes about 5 minutes.",
     welcome_what_head: "What will be installed",
     welcome_what: "ActingCommand {} · Console {} · Games: {}",
-    welcome_what_unknown: "No setup files were found next to the wizard; the next page lets you choose their folder.",
+    welcome_what_unknown: "No setup files were found next to the wizard; after the usage, the Files page lets you choose their folder.",
     welcome_before_head: "Before you start",
     req_windows: "Windows 10 or 11 (64-bit)",
-    req_mumu: "MuMu emulator is installed, with the game installed and signed in",
     req_space: "About {} GB of free disk space",
     welcome_untouched: "This wizard does not change any ActingCommand already on this computer.",
+
+    usage_body: "Where will ActingCommand play your games? Tick what you will use: more than one, or none at all.",
+    usage_mumu: "MuMu emulator",
+    usage_mumu_note: "Needs MuMu emulator {} or later installed first, with the game installed and signed in.",
+    usage_android: "Android phone",
+    usage_android_note: "Coming in the next version: finding and binding your phone here.",
+    usage_ios: "iOS device",
+    usage_ios_note: "Not supported yet; in the works.",
+    usage_none: "You can go on with none ticked: the wizard installs only the core and sets up no instance (an instance is one emulator or one phone, with the games signed in on it). To add instances later: the console cannot add them yet. Run this wizard again and install into another folder (that is a second ActingCommand, running apart from this one), or wait for a later version that can.",
 
     set_where: "The setup files are in {}.",
     set_checking: "Checking each one is complete…",
@@ -559,6 +599,8 @@ pub const EN: Labels = Labels {
     attention_unpaused: "The first start does not pause: as soon as ActingCommand starts, the instances go on duty and play the games.",
 
     key_root: "Location",
+    key_usage: "Usage",
+    usage_none_short: "Only the core, no instance",
     key_accounts: "Instances",
     key_options: "Options",
     key_folders: "Folders created",

@@ -777,7 +777,7 @@ then the settings page says so in red. While the Runtime does not answer, no old
 `run-once` are never run), and the page says "On", "Off", "May not work" or "Cannot be read" of the
 watchdog's scheduled task as it reports it, the last two with the reason in the technical log. After
 the Runtime started again it is read again the next time the page is opened. The setup wizard's "Run
-ActingCommand automatically after sign-in" (page 7) installs this very watchdog (see "Setup wizard acsetup"). Both pages are always there and only one shows at a
+ActingCommand automatically after sign-in" (page 8) installs this very watchdog (see "Setup wizard acsetup"). Both pages are always there and only one shows at a
 time, so what the boxes hold stays when you switch away and back.
 The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
@@ -1672,17 +1672,26 @@ The vision files and the models' licences:
 }
 ```
 
-**Ten pages.** Pages 1 to 8 only gather choices and run read-only checks; nothing is written. Cancel or
+**Eleven pages.** Pages 1 to 9 only gather choices and run read-only checks; nothing is written. Cancel or
 closing the window on those pages asks first, and quitting leaves nothing behind.
 
-1. **Welcome**: what will be installed and what to have ready (64-bit Windows 10 or 11, MuMu installed with
-   the game signed in, about how much disk space). The games are named as their packs name them: before the
+1. **Welcome**: what will be installed and what to have ready (64-bit Windows 10 or 11, about how much disk
+   space). The games are named as their packs name them: before the
    set is checked, the wizard reads only the small `applications.json` of each standard pack zip for its
    name, and shows the folder name when that cannot be read.
-2. **Files**: the install set is checked with a progress bar and a line in plain words under it (how many
+2. **Usage**: what ActingCommand is set up for. **MuMu emulator** is ticked by default, as the wizard was
+   before this page, and says what it needs (MuMu installed, at least the version the Runtime takes, with
+   the game installed and signed in). **Android phone** (coming in the next version, which finds and binds the phone here) and **iOS
+   device** (not supported yet) are greyed and cannot be ticked; a screen reader hears each one's reason
+   with its name. Nothing ticked is allowed too: the page then says the wizard installs only the core and
+   sets up no instance, and how to add instances later. Without MuMu, pages 6 and 7 are passed by (Next on
+   Games goes to Options, Back on Options to Games, the step bar shows both as skipped) and MuMu is not
+   looked for; unticking MuMu drops the emulators and instances chosen, as skipping page 6 does, and ticked
+   again, page 6 looks for MuMu afresh. The usage is the window's alone: the plan file has no field for it.
+3. **Files**: the install set is checked with a progress bar and a line in plain words under it (how many
    files are checked, which program or game was just checked); repositories and commits go to the setup
    log only. Then its versions and games are listed.
-3. **Location**: by default `X:\ActingCommand` on the first local fixed drive other than the system's, else
+4. **Location**: by default `X:\ActingCommand` on the first local fixed drive other than the system's, else
    `%USERPROFILE%\ActingCommand`; when that one exists and is not empty, `-2`, `-3`, … are tried. Type a
    folder or pick one with Browse… (the folder picker belongs to the wizard's window, which takes no input
    while it is open); once typing pauses, each rule gets a ✓ or ✗: the folder does not exist
@@ -1692,8 +1701,8 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    Runtime's logs, which every watchdog reads), lies in none and holds none, and the disk has room. Any ✗
    keeps Next off. The window writes sizes in GB and MB (counted in 1024s, as Explorer does); the setup log
    and the command line write GiB and MiB.
-4. **Games**: tick the games to install; every game of the set is listed, all ticked by default.
-5. **Emulator**: MuMu is found read-only (as the Runtime finds it: a running MuMu, the registry's uninstall
+5. **Games**: tick the games to install; every game of the set is listed, all ticked by default.
+6. **Emulator** (with MuMu ticked on page 2): MuMu is found read-only (as the Runtime finds it: a running MuMu, the registry's uninstall
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
    window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
    person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
@@ -1703,14 +1712,14 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
    configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
    page can be skipped: the set is installed without instances, to be added later.
-6. **Instances**: per ticked emulator, its name on a line of its own and below it the instance's name (by
+7. **Instances** (with MuMu ticked on page 2): per ticked emulator, its name on a line of its own and below it the instance's name (by
    default "game-index"), game and server, the game's box taking the rest of the line so a game's name in
    both languages shows whole; under
    Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
    ActingCommand starts" (off by default). Names must differ, hold no space and not be too long: with two or
    more emulators on one game, the Runtime's schedule names each task copy `<id>@<name>`, at most 128 bytes,
    so a name's limit follows from the longest id in that game's `schedule.json`.
-7. **Options**: desktop and Start menu shortcuts (on by default); run automatically after sign-in (the
+8. **Options**: desktop and Start menu shortcuts (on by default); run automatically after sign-in (the
    Runtime's watchdog scheduled task, **off by default**; leave it off when another ActingCommand on this
    computer already runs automatically); start when setup finishes (on); on the first start, keep every
    instance paused (on: ActingCommand starts playing only after you check each instance in the console and
@@ -1719,19 +1728,21 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    instances then go on duty at the first start (a plan file with instances that asks for the pause without
    the start is refused). The watchdog needs no rule: it never starts a root that never started, so without
    "start when setup finishes" the installation stays down until you start it.
-8. **Confirm**: the location, versions, games, instances, options, the folders created and the files written,
+9. **Confirm**: the location, versions, games, the usage ("MuMu emulator", or with nothing ticked "only the
+   core, no instance"), instances, options, the folders created and the files written,
    all listed (with `licenses` when a chosen game or the text-recognition models bring licence files, and
    `install-wizard.config.json` with instances, the start and the pause); with instances and no first
-   pause, a note that they go on duty as soon as ActingCommand starts. Page 3 says the same of the
+   pause, a note that they go on duty as soon as ActingCommand starts. Page 4 says the same of the
    folders. Once Install is pressed there is no going back to the earlier pages.
-9. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
-   progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
-   failed step stops the install; what was written stays as it is, and the wizard deletes nothing. Closing
-   the window while it installs is held off.
-10. **Finish**: where it was installed, where the setup log is and which shortcuts were created. "Open
+10. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
+    progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
+    failed step stops the install; what was written stays as it is, and the wizard deletes nothing. Closing
+    the window while it installs is held off.
+11. **Finish**: where it was installed, where the setup log is and which shortcuts were created. "Open
     console" (the new root's `ui\acui.exe`, started apart from the wizard and without any `ACTINGCOMMAND_…`
     or `ACTINGLAB_…` variable the wizard inherited) and "Open folder" are for the person to press; the wizard
-    opens nothing by itself. The page also says how to add instances later, since the console cannot add
+    opens nothing by itself. Only with instances does the page speak of them (all paused for now, and
+    checking each in the console). The page also says how to add instances later, since the console cannot add
     them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
     later version. After a failure the page says which step and why, offers to copy the error and
     to open the setup log (which holds the paths of the install folder and others, the profile folder
@@ -1768,7 +1779,7 @@ closing the window on those pages asks first, and quitting leaves nothing behind
   install-wizard.log    the setup log
 ```
 
-The fifteen steps of page 9, in order: create the folders and the setup log; lay out the Runtime, the Tools
+The fifteen steps of page 10, in order: create the folders and the setup log; lay out the Runtime, the Tools
 and the console, each file checked against its `BUILD-MANIFEST.json`; place the vision files, each against
 its hash, and the models' licences in `licenses\vision\`; lay out the standard packs (each zip's SHA-256 computed once more right before, against the set)
 and place the files beside each, each against its hash, in `licenses\<game>\`; check each game with
@@ -1831,7 +1842,7 @@ emulator. Every child program it runs (and "Open console") gets none of the `ACT
 another state root is named still acts on its own root only. It reads another ActingCommand for one thing
 only: it finds each installation's root from the running `actingcommand-actingd.exe` and from the
 registered watchdog tasks (`Get-ScheduledTask` in a hidden Windows PowerShell, read only, as the Runtime
-reads its tasks), reads that root's `actingd.config.json` and nothing else, and marks on page 5 the
+reads its tasks), reads that root's `actingd.config.json` and nothing else, and marks on page 6 the
 emulators it binds.
 
 **Uninstalling:** there is no uninstaller. Stop the Runtime with "Request Shutdown" in this installation's
@@ -1848,12 +1859,12 @@ acsetup check-set --set <install set folder>
 acsetup discover [--mumu-root <MuMu folder>]
     lists MuMu's emulators and those another ActingCommand uses (read only)
 acsetup install --set <install set folder> --root <new install folder> --plan <plan.json>
-    installs as the plan says, with the steps of page 9
+    installs as the plan says, with the steps of page 10
 ```
 
 Exit codes: 0 done, 1 failed (stderr says which step and why, and lists how to undo what the install did,
 as the failure page does), 2 usage. The plan file holds what the
-window gathers on pages 1 to 8 (`actingcommand.install-wizard-plan.v1`): `language` (`zh` or `en`), `games`
+window gathers on pages 1 to 9, the usage aside (`actingcommand.install-wizard-plan.v1`): `language` (`zh` or `en`), `games`
 (game folder names), an optional `mumu_root`, `instances` (each with `index`, `alias`, `game`, `server`, and
 optionally `touch_backend`, `capture_backend`, `start_emulator`, `confirmed_in_use`) and `options`
 (`desktop_shortcut`, `start_menu_shortcut`, `watchdog`, `start_after_install`, `pause_first_start`, with the

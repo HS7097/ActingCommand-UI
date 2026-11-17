@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The wizard's window (Workflow #429 UI-W2b): ten pages over the back end the command line
+//! The wizard's window (Workflow #429 UI-W2b): eleven pages over the back end the command line
 //! uses too. The pages only gather choices and run read-only checks (the install set, the
-//! folder, MuMu and the other ActingCommand); nothing is written before "Install" on page 8,
-//! and then `acui_wizard::install` does it all on a worker thread, step by step.
+//! folder, MuMu and the other ActingCommand); nothing is written before "Install" on page 9,
+//! and then `acui_wizard::install` does it all on a worker thread, step by step. What the
+//! usage page ticks decides the pages after the games: without MuMu, the emulator and instance
+//! pages are passed by and MuMu is not looked for.
 //!
 //! Everything the window shows is painted from `State` in the language picked: a switch of
 //! language paints it all again. Work that waits (hashing the set, a folder check, the emulator
@@ -38,16 +40,22 @@ use labels::{fill, Labels, EN, ZH};
 
 slint::include_modules!();
 
+// The pages in their order: the one table of their numbers. The step bar's names and the
+// titles (`labels.rs`) are in this order and as many, and the window takes each number from
+// here (`number_pages`), so no number of a page stands anywhere else.
 const WELCOME: usize = 0;
-const FILES: usize = 1;
-const LOCATION: usize = 2;
-const GAMES: usize = 3;
-const EMULATORS: usize = 4;
-const ACCOUNTS: usize = 5;
-const OPTIONS: usize = 6;
-const CONFIRM: usize = 7;
-const INSTALL: usize = 8;
-const FINISH: usize = 9;
+const USAGE: usize = 1;
+const FILES: usize = 2;
+const LOCATION: usize = 3;
+const GAMES: usize = 4;
+const EMULATORS: usize = 5;
+const ACCOUNTS: usize = 6;
+const OPTIONS: usize = 7;
+const CONFIRM: usize = 8;
+const INSTALL: usize = 9;
+const FINISH: usize = 10;
+/// How many pages there are.
+const PAGE_COUNT: usize = FINISH + 1;
 
 /// How long typing in the folder box must pause before the folder is checked.
 const ROOT_PAUSE: Duration = Duration::from_millis(300);
@@ -164,6 +172,9 @@ struct State {
     picking: bool,
     /// Why the last folder picker did not open.
     picker_error: Option<String>,
+    /// The usage page's MuMu box. Off, the emulator and instance pages are passed by, MuMu is
+    /// not looked for and there is no instance; the phone boxes cannot be ticked yet.
+    use_mumu: bool,
     set_dir: Option<PathBuf>,
     preview: Option<Preview>,
     set: SetState,
@@ -279,6 +290,23 @@ fn said(said: &Said, lang: Lang) -> String {
     said.in_lang(lang).trim_end_matches(['。', '.', ' ']).to_owned()
 }
 
+/// Each page's number for the window, which shows a page by it: every one is set, since a
+/// number left unset would be 0, the welcome page's.
+fn number_pages(window: &WizardWindow) {
+    let pages = window.global::<Pages>();
+    pages.set_welcome(WELCOME as i32);
+    pages.set_usage(USAGE as i32);
+    pages.set_files(FILES as i32);
+    pages.set_location(LOCATION as i32);
+    pages.set_games(GAMES as i32);
+    pages.set_emulators(EMULATORS as i32);
+    pages.set_accounts(ACCOUNTS as i32);
+    pages.set_options(OPTIONS as i32);
+    pages.set_confirm(CONFIRM as i32);
+    pages.set_install(INSTALL as i32);
+    pages.set_finish(FINISH as i32);
+}
+
 /// The window, until it is closed; the exit code says whether an install failed.
 pub fn run() -> ExitCode {
     // The language Windows speaks to this user; the switch at the top right changes it.
@@ -292,6 +320,7 @@ pub fn run() -> ExitCode {
         }
     };
     window.global::<Look>().set_skin(Skin::Flat);
+    number_pages(&window);
     let set_dir = set::beside_program();
     let preview = set_dir.as_deref().and_then(read_preview);
     let set = if set_dir.is_some() { SetState::Waiting } else { SetState::Missing { wrong_pick: false } };
@@ -301,6 +330,8 @@ pub fn run() -> ExitCode {
         ask: None,
         picking: false,
         picker_error: None,
+        // As the wizard was before the usage page: for MuMu.
+        use_mumu: true,
         set_dir,
         preview,
         set,
@@ -357,6 +388,7 @@ impl App {
         wiz.on_dialog_answer(|yes| with_app(|app| app.answer(yes)));
         wiz.on_choose_set_folder(|| with_app(|app| app.pick(true)));
         wiz.on_browse_root(|| with_app(|app| app.pick(false)));
+        wiz.on_usage_toggled(|which| with_app(|app| app.usage_toggled(which)));
         wiz.on_root_edited(|text| with_app(|app| app.root_edited(text.to_string())));
         wiz.on_game_toggled(|row| with_app(|app| app.game_toggled(row)));
         wiz.on_search_again(|| with_app(App::search));
@@ -413,8 +445,14 @@ impl App {
         strings.set_welcome_what_head(l.welcome_what_head.into());
         strings.set_welcome_before_head(l.welcome_before_head.into());
         strings.set_req_windows(l.req_windows.into());
-        strings.set_req_mumu(l.req_mumu.into());
         strings.set_welcome_untouched(l.welcome_untouched.into());
+        strings.set_usage_body(l.usage_body.into());
+        strings.set_usage_mumu(l.usage_mumu.into());
+        strings.set_usage_mumu_note(fill(l.usage_mumu_note, &[&mumu::version_text(MINIMUM_VERSION)]).into());
+        strings.set_usage_android(l.usage_android.into());
+        strings.set_usage_android_note(l.usage_android_note.into());
+        strings.set_usage_ios(l.usage_ios.into());
+        strings.set_usage_ios_note(l.usage_ios_note.into());
         strings.set_root_body(l.root_body.into());
         strings.set_root_folders(l.root_folders.into());
         strings.set_root_label(l.root_label.into());
@@ -465,6 +503,9 @@ impl App {
                     1
                 } else if index == INSTALL && failed {
                     4
+                } else if (index == EMULATORS || index == ACCOUNTS) && !state.use_mumu {
+                    // Passed by without MuMu (`App::next`).
+                    3
                 } else if index == ACCOUNTS && page > ACCOUNTS && state.accounts.is_empty() {
                     3
                 } else if index < page {
@@ -475,7 +516,7 @@ impl App {
             })
             .collect();
         wiz.set_steps(model(steps));
-        wiz.set_back_shown((FILES..=CONFIRM).contains(&page));
+        wiz.set_back_shown((USAGE..=CONFIRM).contains(&page));
         wiz.set_next_shown(page <= CONFIRM);
         wiz.set_next_text(if page == CONFIRM { l.install } else { l.next }.into());
         wiz.set_next_enabled(can_next(&state));
@@ -497,6 +538,7 @@ impl App {
         }
         match page {
             WELCOME => paint_welcome(&state, &wiz),
+            USAGE => paint_usage(&state, &wiz),
             FILES => paint_files(&state, &wiz),
             LOCATION => paint_location(&state, &wiz),
             GAMES => paint_games(&state, &wiz),
@@ -542,7 +584,13 @@ impl App {
             state.page
         };
         match page {
-            WELCOME | FILES | LOCATION | GAMES | ACCOUNTS | OPTIONS => self.go(page + 1),
+            WELCOME | USAGE | FILES | LOCATION | ACCOUNTS | OPTIONS => self.go(page + 1),
+            // Without MuMu the emulator and instance pages are passed by: no search, no instance
+            // (the usage page let go of them when MuMu was unticked).
+            GAMES => {
+                let mumu = self.state.borrow().use_mumu;
+                self.go(if mumu { EMULATORS } else { OPTIONS });
+            }
             EMULATORS => {
                 let picked = self.state.borrow().emu_rows.iter().any(|row| row.picked);
                 if picked {
@@ -561,8 +609,9 @@ impl App {
         let target = {
             let state = self.state.borrow();
             match state.page {
+                OPTIONS if !state.use_mumu => GAMES,
                 OPTIONS if state.accounts.is_empty() => EMULATORS,
-                page @ FILES..=CONFIRM => page - 1,
+                page @ USAGE..=CONFIRM => page - 1,
                 _ => return,
             }
         };
@@ -671,7 +720,31 @@ impl App {
         self.paint();
     }
 
-    // ---- 2 Files ---------------------------------------------------------------------------
+    // ---- 2 Usage ---------------------------------------------------------------------------
+
+    fn usage_toggled(&self, which: i32) {
+        {
+            let mut state = self.state.borrow_mut();
+            match which {
+                // MuMu unticked lets go of the emulators and instances chosen, as "Skip this
+                // step" does, and of what the search found or is still finding: ticked again,
+                // the emulator page looks for MuMu afresh.
+                0 => {
+                    state.use_mumu = !state.use_mumu;
+                    if !state.use_mumu {
+                        drop_emulators(&mut state);
+                        state.emu = EmuState::Idle;
+                        state.emu_generation += 1;
+                    }
+                }
+                // The phone boxes are greyed and never ask.
+                _ => {}
+            }
+        }
+        self.paint();
+    }
+
+    // ---- 3 Files ---------------------------------------------------------------------------
 
     fn start_check(&self) {
         let (dir, generation) = {
@@ -848,7 +921,7 @@ impl App {
         }
     }
 
-    // ---- 3 Location ------------------------------------------------------------------------
+    // ---- 4 Location ------------------------------------------------------------------------
 
     fn root_edited(&self, text: String) {
         {
@@ -887,7 +960,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 4 Games ---------------------------------------------------------------------------
+    // ---- 5 Games ---------------------------------------------------------------------------
 
     fn game_toggled(&self, row: i32) {
         if let Ok(row) = usize::try_from(row) {
@@ -898,7 +971,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 5 Emulators -----------------------------------------------------------------------
+    // ---- 6 Emulators -----------------------------------------------------------------------
 
     fn search(&self) {
         let generation = {
@@ -989,18 +1062,11 @@ impl App {
     }
 
     fn skip_emulators(&self) {
-        {
-            let mut state = self.state.borrow_mut();
-            for row in &mut state.emu_rows {
-                row.picked = false;
-                row.confirmed = false;
-            }
-            state.accounts.clear();
-        }
+        drop_emulators(&mut self.state.borrow_mut());
         self.go(OPTIONS);
     }
 
-    // ---- 6 Accounts ------------------------------------------------------------------------
+    // ---- 7 Accounts ------------------------------------------------------------------------
 
     fn alias_edited(&self, row: i32, text: String) {
         let Ok(row) = usize::try_from(row) else {
@@ -1086,7 +1152,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 7 Options -------------------------------------------------------------------------
+    // ---- 8 Options -------------------------------------------------------------------------
 
     fn option_toggled(&self, which: i32) {
         {
@@ -1109,7 +1175,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 8, 9 The install ------------------------------------------------------------------
+    // ---- 9, 10 The install -----------------------------------------------------------------
 
     fn start_install(&self) {
         let request = {
@@ -1213,7 +1279,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 10 Finish -------------------------------------------------------------------------
+    // ---- 11 Finish -------------------------------------------------------------------------
 
     fn act(&self, outcome: std::io::Result<()>) {
         {
@@ -1247,6 +1313,8 @@ impl App {
 fn can_next(state: &State) -> bool {
     match state.page {
         WELCOME => true,
+        // Nothing ticked is a choice too: only the core, no instance.
+        USAGE => true,
         FILES => state.verified().is_some(),
         LOCATION => state.root_usable(),
         GAMES => state.games.iter().any(|(_, picked)| *picked),
@@ -1298,6 +1366,13 @@ fn paint_welcome(state: &State, wiz: &Wiz<'_>) {
         None => SPACE_GUESS_GB.to_owned(),
     };
     wiz.set_welcome_space(fill(l.req_space, &[&gb]).into());
+}
+
+fn paint_usage(state: &State, wiz: &Wiz<'_>) {
+    let l = state.labels();
+    wiz.set_usage_mumu(state.use_mumu);
+    // With nothing ticked, what the install will be and how instances come later.
+    wiz.set_usage_note(if state.use_mumu { "" } else { l.usage_none }.into());
 }
 
 fn paint_files(state: &State, wiz: &Wiz<'_>) {
@@ -1510,6 +1585,16 @@ fn account_default_alias(index: u16, game: Option<&Game>) -> String {
     }
 }
 
+/// No emulator handed over and no instance, as "Skip this step" leaves them; what the search
+/// found stays listed.
+fn drop_emulators(state: &mut State) {
+    for row in &mut state.emu_rows {
+        row.picked = false;
+        row.confirmed = false;
+    }
+    state.accounts.clear();
+}
+
 /// The accounts for the emulators ticked, keeping what was set for each already: a game no
 /// longer ticked is let go, a lone game or server is taken, an untouched name follows its game.
 fn sync_accounts(state: &mut State) {
@@ -1669,6 +1754,10 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
         key: l.key_games.into(),
         value: game_labels(&state.chosen_games(), l.list_separator).into(),
     });
+    summary.push(KeyValue {
+        key: l.key_usage.into(),
+        value: if state.use_mumu { l.usage_mumu } else { l.usage_none_short }.into(),
+    });
     let accounts: Vec<String> = state
         .accounts
         .iter()
@@ -1790,18 +1879,29 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
     wiz.set_finish_action(state.action_error.as_ref().map_or_else(String::new, |error| fill(l.open_failed, &[error])).into());
     match &state.install {
         InstallState::Done(done) => {
-            let body = if done.started && done.paused {
+            // Each instance is named only when there are some: without MuMu, or with no emulator
+            // handed over, there is none to be paused or to look at, and how to add them later is
+            // said below either way.
+            let instances = done.instances > 0;
+            let body = if done.started && done.paused && instances {
                 l.finish_paused
             } else if done.started {
                 l.finish_running
-            } else if done.instances > 0 {
+            } else if instances {
                 l.finish_installed_unpaused
             } else {
                 l.finish_installed
             };
+            let next = if !instances {
+                ""
+            } else if done.paused {
+                l.finish_next
+            } else {
+                l.finish_next_plain
+            };
             wiz.set_finished_ok(true);
             wiz.set_finish_body(fill(body, &[&root]).into());
-            wiz.set_finish_next(if done.paused { l.finish_next } else { l.finish_next_plain }.into());
+            wiz.set_finish_next(next.into());
             wiz.set_finish_more(l.finish_more.into());
             let mut note = String::new();
             if !done.shortcuts.is_empty() {
