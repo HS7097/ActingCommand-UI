@@ -6,7 +6,8 @@
 //!
 //! `packs`, for the task names, and the picture proportions each game's standard pack
 //! declares it supports (`display.aspect_ratios`, which the live view's hint compares a
-//! frame with): the only reader of a game's `ui.json` a client has. It
+//! frame with): the only reader a client has of the display part of a game root's
+//! `pack-catalog.json` (`ui.json` before Runtime 0.12.68), the one `packs` answers under `ui`. It
 //! reads the selected configuration from disk, so it neither connects to the Runtime
 //! nor writes to the ledger, and it runs at the start of the run and when another
 //! Runtime comes up. What it says is of the selected configuration, which a running
@@ -15,15 +16,16 @@
 //! asked for lands.
 //!
 //! A task without a name shows its package id: that is ordinary while a game root has
-//! no `ui.json`, and says nothing. An answer that could not be had, or that came with
-//! warnings, gives no names at all: every task shows its package id, one line on the
-//! workbench says so, and the details are in the log.
+//! no `pack-catalog.json` (`ui.json` before Runtime 0.12.68), and says nothing. An answer
+//! that could not be had, or that came with warnings, gives no names at all: every task
+//! shows its package id, one line on the workbench says so, and the details are in the log.
 //!
 //! The same answer gives an account's daily task list (UI-3f1) what it shows of each package
 //! beside its name (`PackTable`): which package each composed task runs (an installation row's
 //! `task_ids`, until SS-7 names a candidate's package itself), whether the Runtime derives the
-//! package irreversible, and its game's `ui.json` entry for it, its summary, its group and
-//! whether it names a risk word, with each game's groups. It stands and falls with the names:
+//! package irreversible, and its entry of the display part of its game root's `pack-catalog.json`
+//! (`ui.json` before Runtime 0.12.68), the one `packs` answers under `ui`: its summary, its group
+//! and whether it names a risk word, with each game's groups. It stands and falls with the names:
 //! with warnings none of it is used either.
 //!
 //! `watchdog status`, for the settings page: whether the scheduled task is there that
@@ -97,7 +99,8 @@ impl NameTable {
 /// The text of `texts`, each per locale in the order the file wrote them, in `language`: the
 /// console's one fallback, the goal page's too (`goals::in_language`): Chinese tries `zh-Hans`,
 /// `zh` and `zh-CN`, then `en`; English tries `en`; either then takes the first written.
-/// `ui.json` treats locale names as opaque: these are the spellings expected.
+/// The display part of `pack-catalog.json` (`ui.json` before Runtime 0.12.68) treats locale names
+/// as opaque: these are the spellings expected.
 fn in_language(texts: &[(String, String)], language: Language) -> Option<&str> {
     goals::in_language(texts, language.outcome_tongue())
 }
@@ -105,7 +108,9 @@ fn in_language(texts: &[(String, String)], language: Language) -> Option<&str> {
 /// What an account's daily task list shows of each package beside its name (UI-3f1), of one
 /// `packs` answer: the package each composed task runs, by task id, as the installation rows list
 /// their `task_ids` (a task of a shared rule by its composed id, as the scheduler has it); each
-/// package's facts; and each game's groups of its `ui.json`, per locale, in the file's order.
+/// package's facts; and each game's groups of the display part of its game root's
+/// `pack-catalog.json` (`ui.json` before Runtime 0.12.68), the one `packs` answers under `ui`, per
+/// locale, in the file's order.
 #[derive(Default)]
 pub struct PackTable {
     tasks: BTreeMap<String, String>,
@@ -128,7 +133,8 @@ impl PackTable {
         self.packs.get(package)
     }
 
-    /// Where `group` stands among `game`'s groups, when its `ui.json` has it.
+    /// Where `group` stands among `game`'s groups, when the display part of its game root's
+    /// `pack-catalog.json` (`ui.json` before Runtime 0.12.68) has it.
     pub fn group_rank(&self, game: &str, group: &str) -> Option<usize> {
         self.groups.get(game)?.iter().position(|(id, _)| id == group)
     }
@@ -141,16 +147,19 @@ impl PackTable {
 }
 
 /// One package as the answer has it: whether the Runtime derives it irreversible, as an
-/// installation row of it says, and its game's `ui.json` entry for it, when the file lists it.
+/// installation row of it says, and its entry of the display part of its game root's
+/// `pack-catalog.json` (`ui.json` before Runtime 0.12.68), the one `packs` answers under `ui`, when
+/// that part lists it.
 #[derive(Default)]
 pub struct PackFacts {
     pub irreversible: bool,
     pub ui: Option<PackUi>,
 }
 
-/// A package's entry of its game's `ui.json`: the game, its place among the file's packs, its
-/// summary per locale, its group's id, and whether it names any risk word. The words themselves
-/// are not kept: nothing has a name for them yet.
+/// A package's entry of the display part of its game root's `pack-catalog.json` (`ui.json` before
+/// Runtime 0.12.68), the one `packs` answers under `ui`: the game, its place among that part's
+/// packs, its summary per locale, its group's id, and whether it names any risk word. The words
+/// themselves are not kept: nothing has a name for them yet.
 pub struct PackUi {
     pub game: String,
     pub order: usize,
@@ -166,8 +175,9 @@ impl PackUi {
     }
 }
 
-/// The picture proportions of one `packs` answer: by game, each `<w>:<h>` its `ui.json`
-/// declares, in the file's order. A game without the file, or whose file declares no
+/// The picture proportions of one `packs` answer: by game, each `<w>:<h>` the `display` of its game
+/// root's `pack-catalog.json` (`ui.json`'s before Runtime 0.12.68) declares, in the file's order,
+/// as `packs` answers it under `display`. A game without the file, or whose file declares no
 /// `display`, has none, and no hint is given for it.
 pub struct Displays(BTreeMap<String, Vec<(u32, u32)>>);
 
@@ -186,8 +196,8 @@ impl Displays {
 pub enum NamesRead {
     /// It answered. `warnings`: each as it wrote it, for the log; with any, the model
     /// uses none of the table, nor of the packages' (`packs`). The proportions are used all
-    /// the same: one is there only from a `ui.json` that keeps its rules, and a warning says
-    /// nothing against it.
+    /// the same: one is there only from a `pack-catalog.json` (`ui.json` before Runtime 0.12.68)
+    /// whose `display` keeps its rules, and a warning says nothing against it.
     Table { table: NameTable, packs: PackTable, displays: Displays, warnings: Vec<String> },
     /// This run cannot tell where `actingctl` is.
     NoTool(ToolIssue),
@@ -721,8 +731,9 @@ fn installation_row(row: &Value, table: &mut PackTable) -> Result<(), String> {
     Ok(())
 }
 
-/// A pack's entry of its game's `ui.json`, the `order`-th of the file's packs: its summary,
-/// its group and whether it names a risk word. The Runtime checked the file's shape; one
+/// A pack's entry of the display part of its game root's `pack-catalog.json` (`ui.json` before
+/// Runtime 0.12.68), the one `packs` answers under `ui`, the `order`-th of that part's packs: its
+/// summary, its group and whether it names a risk word. The Runtime checked the file's shape; one
 /// member left out is taken as none.
 fn pack_ui(pack: &Value, game: &str, order: usize) -> Result<PackUi, String> {
     let summary = match pack.get("summary") {
@@ -740,7 +751,8 @@ fn pack_ui(pack: &Value, game: &str, order: usize) -> Result<PackUi, String> {
     Ok(PackUi { game: game.to_owned(), order, summary, group, risky })
 }
 
-/// A group of a game's `ui.json`: its id and its title per locale.
+/// A group of the display part of a game root's `pack-catalog.json` (`ui.json` before Runtime
+/// 0.12.68), the one `packs` answers under `ui`: its id and its title per locale.
 fn group_titles(group: &Value) -> Result<(String, Vec<(String, String)>), String> {
     let id = group.get("id").and_then(Value::as_str).ok_or("a group has no `id`")?;
     let title =

@@ -34,8 +34,8 @@ use crate::archive::{safe_relative, Archive};
 use crate::digest::{is_sha256, sha256_file};
 use crate::engine::Event;
 use crate::layout::{
-    parse_bundle, plain_name, plan_layout, BundleIndex, APPLICATIONS_FILE, BUNDLE_FILE,
-    INTERFACES_FILE, SCHEDULE_FILE,
+    parse_bundle, plain_name, plan_layout, retired_format, BundleIndex, APPLICATIONS_FILE,
+    BUNDLE_FILE, INTERFACES_FILE, RETIRED_UI_FILE, SCHEDULE_FILE,
 };
 use crate::manifest::{
     check_identity, console_problems, package_edge, parse_manifest, speaks, BuildManifest, Program,
@@ -839,6 +839,14 @@ fn verify_bundle(entry: &BundleEntry, zip: &Path, package_range: [u64; 2]) -> Re
                 "{} ({}): package [{}, {}], Runtime [{}, {}]",
                 entry.game, entry.file, package[0], package[1], package_range[0], package_range[1]
             )),
+        });
+    }
+    // A bundle of the format before Runtime 0.12.68 is whole, only of an older set: a mismatch,
+    // whose headline asks for the set that goes with this one, not a download of the same again.
+    if archive.size_of(RETIRED_UI_FILE).is_some() {
+        return Err(SetError {
+            fault: SetFault::Mismatch { game: game.label.clone() },
+            said: retired_format().with(format!("{} ({})", entry.game, entry.file)),
         });
     }
     for pack in &index.packs {

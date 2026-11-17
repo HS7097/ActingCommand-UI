@@ -30,7 +30,9 @@
 //! code only for the log, and a task id only under the account itself.
 //!
 //! The rows keep one order, so that a read every 15 seconds moves none: by the groups and the
-//! order of the game's `ui.json`, the rest after them under "other"; without the file, by name.
+//! order of the display part of the game root's `pack-catalog.json` (`ui.json` before Runtime
+//! 0.12.68), the one `actingctl packs` answers under `ui`, the rest after them under "other";
+//! without the file, by name.
 
 use std::collections::BTreeMap;
 
@@ -119,8 +121,10 @@ pub struct PackGroup {
     pub rows: Vec<PackRow>,
 }
 
-/// A group's title: none when no package has an entry of its game's `ui.json`, which groups
-/// nothing; one of the file's groups, by its game and its id; or the packages no group holds.
+/// A group's title: none when no package has an entry of the display part of its game root's
+/// `pack-catalog.json` (`ui.json` before Runtime 0.12.68), the one `actingctl packs` answers under
+/// `ui`, which groups nothing; one of that part's groups, by its game and its id; or the packages
+/// no group holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupTitle {
     None,
@@ -138,7 +142,8 @@ pub struct PackRow {
     pub more: bool,
     /// The Runtime derives it irreversible.
     pub irreversible: bool,
-    /// Its `ui.json` entry names a risk word.
+    /// Its entry of the display part of its game root's `pack-catalog.json` (`ui.json` before
+    /// Runtime 0.12.68), the one `actingctl packs` answers under `ui`, names a risk word.
     pub risky: bool,
     pub switch: SwitchSlot,
 }
@@ -224,7 +229,9 @@ pub enum SwitchesNow<'a> {
 /// What the list is made of: the account as the newest `Status` lists it, whether a pause holds
 /// it, its state above the rows (`held`), its read, the names and the packages' table of the
 /// newest `packs` answer while it gave them, whether its line of tasks without a package is open,
-/// the language whose names order rows no `ui.json` orders, and its switches.
+/// the language whose names order the rows that no display part orders (of a game root's
+/// `pack-catalog.json`, `ui.json` before Runtime 0.12.68: the one `actingctl packs` answers under
+/// `ui`), and its switches.
 pub struct Listing<'a> {
     pub instance: &'a InstanceLive,
     pub paused: bool,
@@ -476,9 +483,10 @@ fn reasons(tasks: &[&TaskRow]) -> (TaskSaid, Vec<TaskSaid>, bool) {
     (said, also, more)
 }
 
-/// The rows in their groups. With no package of a `ui.json` entry, one group without a title,
-/// by name; else by the file's groups and order, and after them under "other" the packages no
-/// group holds, those of no entry last, by name.
+/// The rows in their groups. With no package of an entry of the display part of a game root's
+/// `pack-catalog.json` (`ui.json` before Runtime 0.12.68), the one `actingctl packs` answers under
+/// `ui`, one group without a title, by name; else by that part's groups and order, and after them
+/// under "other" the packages no group holds, those of no entry last, by name.
 fn grouped(
     rows: Vec<PackRow>,
     packs: Option<&PackTable>,
@@ -517,7 +525,8 @@ fn grouped(
     groups
 }
 
-/// `package`'s entry of its game's `ui.json`, when the table has one.
+/// `package`'s entry of the display part of its game root's `pack-catalog.json` (`ui.json` before
+/// Runtime 0.12.68), the one `actingctl packs` answers under `ui`, when the table has one.
 fn entry_of<'a>(packs: Option<&'a PackTable>, package: &str) -> Option<&'a PackUi> {
     packs?.pack(package)?.ui.as_ref()
 }

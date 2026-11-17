@@ -20,7 +20,8 @@ pub const INTERFACES_FILE: &str = "interfaces.json";
 pub const APPLICATIONS_FILE: &str = "applications.json";
 pub const SCHEDULE_FILE: &str = "schedule.json";
 /// The root files a bundle zip may carry (Runtime `place.rs` `ROOT_FILES`; `goals.json` since
-/// Runtime 0.12.60, Workflow #455 G-R1, version 2 and `package` 14 since 0.12.61, Workflow #463 V1).
+/// Runtime 0.12.60, Workflow #455 G-R1, version 2 and `package` 14 since 0.12.61, Workflow #463 V1;
+/// `pack-catalog.json` in place of `ui.json` since 0.12.68, Workflow #477 PC-1).
 pub const ROOT_FILES: [&str; 10] = [
     "bundle.json",
     "pages.json",
@@ -28,11 +29,25 @@ pub const ROOT_FILES: [&str; 10] = [
     "navigation.json",
     "display-layout.json",
     "loading.json",
-    "ui.json",
     "applications.json",
     "schedule.json",
     "goals.json",
+    "pack-catalog.json",
 ];
+/// The root file `pack-catalog.json` replaced (Runtime `STANDARD_PACK_RETIRED_UI_FILE`): no
+/// program reads it any more, and the Runtime's `place` refuses a zip that carries it as a member
+/// no layout knows (`crates/lab-rescue/src/install/place.rs:189-190`). The wizard refuses it too,
+/// saying why ([`retired_format`]); the set check takes such a bundle for one of an older set,
+/// not a damaged one.
+pub const RETIRED_UI_FILE: &str = "ui.json";
+
+/// Why a bundle that carries [`RETIRED_UI_FILE`] is refused, and what to do instead.
+pub fn retired_format() -> Said {
+    Said::new(
+        "这是 Runtime 0.12.68 以前格式的标准包（带 ui.json），请换用新的安装集",
+        "this standard package is in the format from before Runtime 0.12.68 (it carries ui.json); use a newer install set",
+    )
+}
 const PACKS_DIRECTORY: &str = "packs";
 const TABLES_DIRECTORY: &str = "tables";
 const NOTICES_DIRECTORY: &str = "notices";
@@ -126,6 +141,7 @@ pub fn place_of(
     match parts.as_slice() {
         [file] if *file == INTERFACES_FILE => Ok(Placement::CheckOnly),
         [file] if ROOT_FILES.contains(file) => Ok(Placement::Lay((*file).to_owned())),
+        [file] if *file == RETIRED_UI_FILE => Err(retired_format()),
         [packs, id, rest @ ..]
             if *packs == PACKS_DIRECTORY && pack_ids.contains(*id) && !rest.is_empty() =>
         {

@@ -28,8 +28,9 @@
   （`7b4705ff`），在 v0.12.69 之上，不是发布版本。
 - **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 9]、`runtime-client`
   [3, 11] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.69，以及它钉的 PR #1800 的头：这几版的 `ledger` 上限都在
-  [3, 9] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集。标准包从 v0.12.68 起是例外（见「数据来源」一节）：
-  安装向导拒收带 `pack-catalog.json` 的包，旧包里的 `ui.json` 照旧铺上，而 `actingctl packs` 见到根里有 `ui.json` 就发警告，
+  [3, 9] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集。游戏根从 v0.12.68 起用 `pack-catalog.json`
+  取代 `ui.json`（见「数据来源」一节）：安装向导铺 `pack-catalog.json`，拒收带 `ui.json` 的旧包。例外是以前的安装向导
+  或 v0.12.68 以前的 Runtime 铺好、根里还留着 `ui.json` 的游戏根：`actingctl packs` 见到它就发警告，
   于是日常任务退回到包编号和任务编号，也没有「不可撤回」「有风险」徽章，「目标」页的包变量也全部并进「其他设置」。
   v0.12.55 起的账本（修订 8）是单向的：
   v0.12.55 或更新的 Runtime 在一个状态根上跑过之后，v0.12.55 之前的 Runtime 就打不开它，`ledger` 只到 7 的监控台也可能读不了，
@@ -188,9 +189,10 @@
 `package` 16（#477 PC-1）让游戏根可以带 `pack-catalog.json`，取代 `ui.json`：v0.12.68 起 `actingctl packs` 从它生成一个游戏的 `ui`，
 形状不变，不再读 `ui.json`，根里还留着它时发警告 `standard_pack_ui_retired`。控制台的任务名称和日常任务的包表都取自这份回答，
 有任何警告就都不用：包行显示包编号，没有「不可撤回」「有风险」徽章，全部任务按任务编号列在「本实例：有些安排对不上任务包」下面。
-根里还留着 `ui.json` 就足以这样，而已装的根都还没有 `pack-catalog.json`。安装向导的铺法没跟上 `package` 16：它照旧铺 `ui.json`
-（Runtime 自己的 `place` 拒收 zip 里的它、把根里的它挪开），也没有 `pack-catalog.json` 的位置，所以拒收带这份文件的包，
-虽然这种包声明的 `package` 16 在 Runtime 的范围里。`package` 17（#463 KP-1）是 `linear_steps` 里按返回键的一步，只归包和安装器。ledger crate 和 runtime-client
+根里还留着 `ui.json` 就足以这样。安装向导铺包的规矩和 `package` 16 起 Runtime 自己的 `place` 一样：铺 `pack-catalog.json`，
+拒收带 `ui.json` 的包，并说明这是 Runtime 0.12.68 以前格式的包。向导只往新文件夹装，碰不到已装的 `ui.json`：还留着这份文件的，
+只有以前的安装向导或 v0.12.68 以前的 Runtime 铺的游戏根，直到 Runtime 的 `place` 再往那里铺包、把它挪开。
+`package` 17（#463 KP-1）是 `linear_steps` 里按返回键的一步，只归包和安装器。ledger crate 和 runtime-client
 只改了构造 `PackageAdmitted` 的地方（补两个 `None`）和测试，ledger-forensics、runtime-config 和控制台链接的其他 Runtime crate 源码都没变。
 契约库另外把读 `ui.json` 的 `standard_pack_ui` 换成了读 `pack-catalog.json` 的 `standard_pack_catalog`，控制台两个都不用。
 结果码目录里，v0.12.68、v0.12.69 加了 27 个码（其中有 `invalid_contained_task_variable_count`、`invalid_contained_task_variable_name`，
