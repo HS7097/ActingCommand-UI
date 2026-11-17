@@ -3530,12 +3530,53 @@ export component WorkbenchWindow inherits Window {
 
                         // right: the window itself, then the live view of the account
                         // picked on the left, or under the second tab its daily task list
-                        // (UI-3f1). The frame takes what the column can spare;
-                        // all of it scrolls only when the column is too short for it with
-                        // the frame at its least, as in the smallest window at the largest
-                        // text with lines above it, rather than its foot being cut off.
-                        Card {
+                        // (UI-3f1). The frame's size follows the window and the picture's
+                        // proportions alone, never which of the rows round it show: as wide
+                        // as the column, and as tall as that width at the picture's
+                        // proportions or as the column's height leaves once every row a run
+                        // shows is counted, whichever is less, and never less than its least.
+                        // What it leaves is at the column's foot. A row beyond those counted,
+                        // or the frame at its least, as in the smallest window at the largest
+                        // text, makes all of it scroll rather than squeeze the frame or cut
+                        // off the column's foot.
+                        right-card := Card {
                             horizontal-stretch: 1;
+                            // A line of text at the body size and at the grey one: a little
+                            // over the system font's own line, about 1.33 times its size, so
+                            // the rows counted never come out taller than the count.
+                            property <length> body-line: Scale.body-font * 1.4;
+                            property <length> grey-line: Scale.grey-font * 1.4;
+                            // A SkinButton's height: the Aero face's, else the std button's,
+                            // at least 32px and its text's line with 5px over and under it.
+                            property <length> button-height: Look.aero ? 23px * Scale.factor
+                                : max(32px, self.body-line + 10px);
+                            // What the frame leaves the rest of the live view: the rows it
+                            // has while a run is on, each as tall as the constants above make
+                            // it, never as tall as it is now, which would move the frame again.
+                            // The tabs; the check, with "auto rules" at its end; the emulator,
+                            // the game and "stop this run"; one line of why the buttons are
+                            // off; under the frame what took it, the refresh and in grey what a
+                            // refresh costs; and the 6px between the column's twelve items,
+                            // its notes at the top and the room at its foot among them.
+                            property <length> frame-reserve: (Scale.row + 6px)
+                                + max(self.button-height, Scale.row + 6px)
+                                + 3 * self.button-height
+                                + self.body-line
+                                + self.grey-line
+                                + self.button-height
+                                + self.grey-line
+                                + 11 * 6px;
+                            // Height over width, 16:9 until a picture has shown. The last
+                            // picture's stays while none shows, so the frame keeps its size.
+                            property <float> frame-ratio: root.picture-width > 0 && root.picture-height > 0
+                                ? root.picture-height / root.picture-width : 9 / 16;
+                            // The card's own size, not the scroll view's or the frame's, which
+                            // turn on whether the column scrolls, and so on this height: less
+                            // the column's padding, 12px a side and 10px over and under, and
+                            // across less the 14px of a scroll bar as well.
+                            property <length> frame-height: max(160px,
+                                min((self.width - 24px - 14px) * self.frame-ratio,
+                                    self.height - 20px - self.frame-reserve));
                             // As tall as the card, or as the least all of it needs, whichever
                             // is taller: a scroll view's own default.
                             ScrollView {
@@ -3844,11 +3885,12 @@ export component WorkbenchWindow inherits Window {
                                     if root.picture-tab && root.rescue.rules-open: Rectangle {
                                         vertical-stretch: 1;
                                     }
-                                    // The frame takes every pixel the column can spare, and never
-                                    // less than its least.
+                                    // The frame, as tall as the card says whatever else shows, and
+                                    // never less than its least; it does not grow into what the
+                                    // column leaves.
                                     if root.picture-tab && !root.rescue.rules-open && !root.picture-withdrawn: FrameCanvas {
-                                        min-height: 160px;
-                                        vertical-stretch: 1;
+                                        height: right-card.frame-height;
+                                        vertical-stretch: 0;
                                         source: root.picture-image;
                                         ready: root.picture-ready;
                                         extent-width: root.picture-width;
@@ -3863,10 +3905,11 @@ export component WorkbenchWindow inherits Window {
                                         empty: root.picture-empty;
                                         empty-failed: root.picture-empty-failed;
                                     }
-                                    // Taken down: UI-3d says why here, and offers to resume.
+                                    // Taken down: UI-3d says why here, and offers to resume. As
+                                    // large as the frame it stands for.
                                     if root.picture-tab && !root.rescue.rules-open && root.picture-withdrawn: Rectangle {
-                                        min-height: 160px;
-                                        vertical-stretch: 1;
+                                        height: right-card.frame-height;
+                                        vertical-stretch: 0;
                                     }
                                     // What took the frame shown, in grey.
                                     if root.picture-tab && !root.rescue.rules-open && root.picture-origin != "": Text {
@@ -3957,7 +4000,10 @@ export component WorkbenchWindow inherits Window {
                                             root.goal-cancelled();
                                         }
                                     }
-                                    if !root.picture-tab: Rectangle {
+                                    // At the column's foot, what it leaves: under the tasks or the
+                                    // goals, or under the live view's rows, whose frame keeps its
+                                    // size. The rules panel has its own, just under it.
+                                    if !root.picture-tab || !root.rescue.rules-open: Rectangle {
                                         vertical-stretch: 1;
                                     }
                                 }
