@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The 0.12 setup wizard's window (Workflow #429 UI-W2b): ten pages, a step bar on the left,
+// The 0.12 setup wizard's window (Workflow #429 UI-W2b): eleven pages, a step bar on the left,
 // the language switch at the top right, Back / Next / Cancel at the bottom. It is drawn with
 // the console's kit in its flat skin, so the two programs look like one family. Every word is
 // the Rust side's (src/gui/labels.rs): the static ones through `Strings`, everything that
@@ -74,8 +74,14 @@ export global Strings {
     in property <string> welcome-what-head;
     in property <string> welcome-before-head;
     in property <string> req-windows;
-    in property <string> req-mumu;
     in property <string> welcome-untouched;
+    in property <string> usage-body;
+    in property <string> usage-mumu;
+    in property <string> usage-mumu-note;
+    in property <string> usage-android;
+    in property <string> usage-android-note;
+    in property <string> usage-ios;
+    in property <string> usage-ios-note;
     in property <string> root-body;
     in property <string> root-folders;
     in property <string> root-label;
@@ -108,9 +114,25 @@ export global Strings {
     in property <[string]> capture-options;
 }
 
+// Each page's number, as the Rust side numbers them (src/gui/mod.rs, the one table of them),
+// which sets every one: the window shows the page whose number `Wiz.page` is.
+export global Pages {
+    in property <int> welcome;
+    in property <int> usage;
+    in property <int> files;
+    in property <int> location;
+    in property <int> games;
+    in property <int> emulators;
+    in property <int> accounts;
+    in property <int> options;
+    in property <int> confirm;
+    in property <int> install;
+    in property <int> finish;
+}
+
 // What changes, and every action.
 export global Wiz {
-    // The page shown, 0 to 9, its title, the step bar and the language.
+    // The page shown (one of `Pages`), its title, the step bar and the language.
     in property <int> page;
     in property <string> page-title;
     in property <[StepItem]> steps;
@@ -133,7 +155,11 @@ export global Wiz {
     // 1 Welcome.
     in property <string> welcome-what;
     in property <string> welcome-space;
-    // 2 Files.
+    // 2 Usage: the MuMu box (the phone boxes cannot be ticked yet), and with nothing ticked
+    // what the install will be.
+    in property <bool> usage-mumu;
+    in property <string> usage-note;
+    // 3 Files.
     in property <string> set-where;
     in property <string> set-status;
     in property <bool> set-busy;
@@ -143,39 +169,39 @@ export global Wiz {
     in property <string> set-error-detail;
     in property <[KeyValue]> set-summary;
     in property <bool> set-choosable;
-    // 3 Location: the box is the person's and the Rust side's alike.
+    // 4 Location: the box is the person's and the Rust side's alike.
     in-out property <string> root-text;
     in property <[MarkLine]> root-lines;
     in property <string> root-status;
-    // 4 Games.
+    // 5 Games.
     in property <[GameRow]> games;
     in property <string> games-problem;
-    // 5 Emulators.
+    // 6 Emulators.
     in property <string> emu-text;
     in property <bool> emu-busy;
     in property <string> emu-caution;
     in property <[EmulatorRow]> emulators;
     in property <bool> emu-skippable;
-    // 6 Accounts.
+    // 7 Accounts.
     in property <[AccountRow]> accounts;
     in property <[string]> account-problems;
-    // 7 Options.
+    // 8 Options.
     in property <bool> opt-desktop;
     in property <bool> opt-start-menu;
     in property <bool> opt-watchdog;
     in property <bool> opt-start;
     in property <bool> opt-pause;
-    // 8 Confirm.
+    // 9 Confirm.
     in property <[KeyValue]> summary;
     in property <string> confirm-note;
-    // 9 Install: `install-current` is the row of the step under way, -1 before the first.
+    // 10 Install: `install-current` is the row of the step under way, -1 before the first.
     in property <string> install-pre;
     in property <[MarkLine]> install-steps;
     in property <int> install-current;
     in property <string> install-detail;
     in property <float> install-progress;
     in property <bool> install-indeterminate;
-    // 10 Finish.
+    // 11 Finish.
     in property <bool> finished-ok;
     in property <string> finish-body;
     in property <string> finish-next;
@@ -191,6 +217,8 @@ export global Wiz {
     callback language(bool);
     callback dialog-answer(bool);
     callback choose-set-folder();
+    // 0 MuMu; the phone boxes never ask.
+    callback usage-toggled(int);
     callback root-edited(string);
     callback browse-root();
     callback game-toggled(int);
@@ -394,10 +422,13 @@ component Tick {
     in property <bool> enabled: true;
     // Greyed words, for a row that is offered but not advised.
     in property <bool> dim;
+    // Why a box that cannot be ticked is greyed: a screen reader hears it with the words, as the
+    // eye reads it on the line under the box. Empty for a box that can be ticked.
+    in property <string> reason;
     callback toggled();
     min-height: 24px;
     accessible-role: checkbox;
-    accessible-label: root.text;
+    accessible-label: root.reason == "" ? root.text : root.text + " " + root.reason;
     accessible-enabled: root.enabled;
     accessible-checkable: true;
     accessible-checked: root.checked;
@@ -565,11 +596,61 @@ component WelcomePage inherits ScrollView {
                 spacing: 6px;
                 Head { text: Strings.welcome-before-head; }
                 Body { text: "• " + Strings.req-windows; }
-                Body { text: "• " + Strings.req-mumu; }
                 Body { text: "• " + Wiz.welcome-space; }
             }
         }
         Body { text: Strings.welcome-untouched; }
+    }
+}
+
+// What the wizard sets up for: MuMu, or none. The phone boxes are greyed with their reason
+// under them: a box that did nothing once ticked would fail without a word.
+component UsagePage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 8px;
+        alignment: start;
+        Body { text: Strings.usage-body; }
+        Tick {
+            text: Strings.usage-mumu;
+            checked: Wiz.usage-mumu;
+            toggled => {
+                Wiz.usage-toggled(0);
+            }
+        }
+        HorizontalLayout {
+            padding-left: 26px;
+            Caption { text: Strings.usage-mumu-note; }
+        }
+        // Until the wizard can bind a phone.
+        Tick {
+            text: Strings.usage-android;
+            reason: Strings.usage-android-note;
+            enabled: false;
+        }
+        HorizontalLayout {
+            padding-left: 26px;
+            // A greyed box's reason is said with its words already (`reason`), so a screen
+            // reader passes the line by; the same under iOS.
+            Caption {
+                text: Strings.usage-android-note;
+                accessible-role: none;
+            }
+        }
+        Tick {
+            text: Strings.usage-ios;
+            reason: Strings.usage-ios-note;
+            enabled: false;
+        }
+        HorizontalLayout {
+            padding-left: 26px;
+            Caption {
+                text: Strings.usage-ios-note;
+                accessible-role: none;
+            }
+        }
+        if Wiz.usage-note != "": Body { text: Wiz.usage-note; }
     }
 }
 
@@ -1196,16 +1277,17 @@ export component WizardWindow inherits Window {
             }
             VerticalLayout {
                 vertical-stretch: 1;
-                if Wiz.page == 0: WelcomePage { }
-                if Wiz.page == 1: SetPage { }
-                if Wiz.page == 2: RootPage { }
-                if Wiz.page == 3: GamesPage { }
-                if Wiz.page == 4: EmulatorsPage { }
-                if Wiz.page == 5: AccountsPage { }
-                if Wiz.page == 6: OptionsPage { }
-                if Wiz.page == 7: ConfirmPage { }
-                if Wiz.page == 8: InstallPage { }
-                if Wiz.page == 9: FinishPage { }
+                if Wiz.page == Pages.welcome: WelcomePage { }
+                if Wiz.page == Pages.usage: UsagePage { }
+                if Wiz.page == Pages.files: SetPage { }
+                if Wiz.page == Pages.location: RootPage { }
+                if Wiz.page == Pages.games: GamesPage { }
+                if Wiz.page == Pages.emulators: EmulatorsPage { }
+                if Wiz.page == Pages.accounts: AccountsPage { }
+                if Wiz.page == Pages.options: OptionsPage { }
+                if Wiz.page == Pages.confirm: ConfirmPage { }
+                if Wiz.page == Pages.install: InstallPage { }
+                if Wiz.page == Pages.finish: FinishPage { }
             }
             if Wiz.log-line != "": Text {
                 text: Wiz.log-line;
