@@ -30,12 +30,11 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now the head of Runtime PR #1800 (`7b4705ff`), not a release, three
-  commits on top of v0.12.69.
+  of Runtime v0.12.47; the pin is now Runtime v0.12.71 (`f0c64ae8`), a release.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
-  `runtime-client` [3, 11] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.69 and the
-  head of PR #1800 it is pinned to: each of them declares a `ledger` maximum within [3, 9] and an
-  `actingd-config` and a `runtime-client` range that meet the console's. From v0.12.68 a game root carries
+  `runtime-client` [3, 11] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.71: each of
+  them declares a `ledger` maximum within [3, 9] and an `actingd-config` and a `runtime-client` range that
+  meet the console's. From v0.12.68 a game root carries
   `pack-catalog.json` in place of `ui.json` (see "Data source"): the setup wizard lays `pack-catalog.json` and
   refuses an older bundle that carries `ui.json`. The exception is a game root laid before, by an earlier
   setup wizard or a Runtime before v0.12.68, that still holds `ui.json`: `actingctl packs` warns on it, so the
@@ -44,11 +43,12 @@ and guesses nothing.
   (revision 8) is one way: once such a Runtime has run on a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
   read it, so switch the console first, then the Runtime. v0.12.63 stays at ledger revision 8, but its
   decision-memory records may carry a `break_in` that a console built on v0.12.62 or earlier cannot read
-  offline (see "Data source"), so there too switch the console first. Ledger revision 9, which the pin
-  declares and no Runtime release does yet, is one way too: once a Runtime that declares it has run on a
-  state root, going back to one that declares at most 8 is refused, and a console whose `ledger` range ends
-  at 8 or below (UI v0.12.21 and earlier) cannot read offline a ledger that holds a revision-9 record, while its
-  online reads are not touched (see "Data source"); so switch the console before such a Runtime too. Apart from such notes, whether another Runtime fits is judged from
+  offline (see "Data source"), so there too switch the console first. Ledger revision 9, which Runtime
+  releases declare from v0.12.71 on, is one way too: once v0.12.71 or a later Runtime has run on a state
+  root, going back to one that declares at most 8 (v0.12.70 or earlier) is refused, and a console whose
+  `ledger` range ends at 8 or below (UI v0.12.21 and earlier) cannot read offline a ledger that holds a
+  revision-9 record, while its online reads are not touched (see "Data source"); so switch the console
+  before moving to v0.12.71 too. Apart from such notes, whether another Runtime fits is judged from
   the interfaces each side declares, not from version numbers (see "Component interfaces").
 - **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
   0.12 Runtime. The 0.11 series is not maintained.
@@ -240,13 +240,39 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`): the head of Runtime PR #1800 (`7b4705ff`),
-three commits on top of Runtime v0.12.69 (`6a257aed`). It is not a release: the PR is not merged, and no
-Runtime release declares its `ledger` revision 9 yet (v0.12.68 and v0.12.69 declare [3, 8]). Against
-v0.12.67, v0.12.68 raises `runtime-client` to 11 and `package` to 16, v0.12.69 raises `package` to 17 and
-the PR raises `ledger` to 9; the console's ranges follow to `ledger` [3, 9] and `runtime-client` [3, 11];
-the Runtime's `actingd-config` [5, 33], `install-control` [0, 0] and `runtime-outcomes` [1, 1] stay. No crate the
-locks list changed its dependencies, so `Cargo.lock` changes only in the rev. Ledger revision 9 (#463 CH-1)
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.71 (`f0c64ae8`), a
+release, published as a pre-release. It merges Runtime PR #1800, whose head (`7b4705ff`, three commits on
+top of v0.12.69) the console was pinned to before, and it is the first release that declares `ledger`
+revision 9 (v0.12.70, `240cdb1a`, still declares [3, 8]). Against that head, v0.12.70 raises `package` to
+18; `ledger` [3, 9], `runtime-client` [3, 11] and the Runtime's `actingd-config` [5, 33], `install-control`
+[0, 0] and `runtime-outcomes` [1, 1] stay, so the console's ranges do not move (its `actingd-config` stays
+at [5, 32] for the reason given under v0.12.63 below). `package` 18 (#463 K-c), a
+select step's `scan` that declares `early_stop` and leaves out `end`, is the packs' and the installer's: the
+setup wizard holds a bundle's range to the one the Runtime zip declares. The Runtime's `Cargo.lock` only
+gives actingd one more dependency, `actingcommand-lab-ops`, for its tests; actingd is in neither of this
+repository's two locks, so both change only in the rev. Of the Runtime crates the console links, only the contract
+crate's source changed: it makes `NAME_MAX_BYTES` public beside a new `key_text_fits`, gives
+`standard_pack_problem` the word `catalog_group_title_differs`, and lets the writer of `pack-catalog.json`
+bring a named entry up to date and replace entries' displays from a file (#477 PC-2,
+`standard-pack catalog --refresh` and `--displays`), none of which the console uses; ledger,
+ledger-forensics, runtime-client, runtime-config and the other Runtime crates the console's lock lists have
+the same source. In the outcome-code catalog
+it embeds, v0.12.70 and v0.12.71 add twelve codes (`selection_scan_early_stop_unreached`,
+`standard_pack_catalog_refresh_refused`, `standard_pack_catalog_display_refused`, `adopt_cases_left` and
+eight `record_…` codes of the Lab's recording), four keys, five vocabularies, new tokens of
+`select_problem`, `ready_missing`, `ready_check`, `standard_pack_problem`, `adopt_problem` and
+`drop_problem`, and `no_effect` in place of `optional_after_problem`'s `no_click`, with no location, no code
+retired or removed and no `console_` or `setup_` name. #398 DB-1 lets `devices bind` bind a handset against
+a candidate configuration before it is put in place (`--config`) and record the channel `ui`
+(`--bound-via ui`), for an installer; this setup wizard does not run it yet. The next start records `ui`
+as `runtime.instance_bound`'s `device.bound_via`, a word the contract crate already had, so the console
+reads such a record as before. The other slices (`recognize` answering a located text's box,
+`standard-pack adopt` taking a recording's regression cases, the case reader's notes) are the Lab's and the
+authoring tools'. The head of PR #1800 against v0.12.67: v0.12.68 raises `runtime-client` to 11 and
+`package` to 16, v0.12.69 raises `package` to 17 and the PR raises `ledger` to 9; the console's ranges
+followed to `ledger` [3, 9] and `runtime-client` [3, 11]; the Runtime's `actingd-config` [5, 33],
+`install-control` [0, 0] and `runtime-outcomes` [1, 1] stay. No crate the locks list changed its
+dependencies, so `Cargo.lock` changes only in the rev. Ledger revision 9 (#463 CH-1)
 gives a run's admission record `task.requested` two optional members: `content_hash`, the content hash the
 admission of the run's package by its path measured (64 lowercase hexadecimal digits), and `variables`, the
 values handed to the run from outside, 1 to 16 entries sorted by name, each with the value's JSON text when
@@ -258,8 +284,8 @@ neither. A reader of revision 8 refuses the record wherever it reads it in full 
 a console whose `ledger` range ends at 8 or below, UI v0.12.21 and earlier among them, cannot read offline a ledger
 that holds one (its opening fails while one is among the newest records, and a page that holds one fails
 whole), while its online reads are not touched; this console reads it offline too. Revision 9 is one way:
-once a Runtime that declares it has run on a state root, going back to one that declares at most 8 is
-refused, so switch the console first, then the Runtime. Revision 11 (#463 S3-8) adds the optional
+once v0.12.71 or a later Runtime has run on a state root, going back to one that declares at most 8
+(v0.12.70 or earlier) is refused, so switch the console first, then the Runtime. Revision 11 (#463 S3-8) adds the optional
 `variables` of a contained run's request, values for variables its package declares; a request without
 values serializes byte for byte as under revision 10, and the console sends no run request. `package` 16
 (#477 PC-1) lets a game root carry `pack-catalog.json` in place of `ui.json`: from v0.12.68 `actingctl packs`
@@ -475,7 +501,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 11, ledger revision 9):
 
 ```
-rev = "7b4705ff4b21c069c1e0313e3b73a5a0be1d2af1"
+rev = "f0c64ae855dece55139055c2badb11595b10926d"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -757,7 +783,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the instance's latest self-check. Apply switches that instance at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned Runtime, PR #1800's head on v0.12.69, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.71, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1557,8 +1583,8 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned Runtime
-  (PR #1800's head on 0.12.69) has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.71
+  has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). A Lab recording's hold (Runtime 0.12.64 on) is a kind of its own: an
   instance's pause whose reason is exactly `lab-record-<unix ms>`, digits only after the prefix (the
   Lab's `record start` pauses only the instance it records; the same reason on another scope, and any

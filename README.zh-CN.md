@@ -24,10 +24,10 @@
   `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
   `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
   里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
-  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime PR #1800 的头
-  （`7b4705ff`），在 v0.12.69 之上，不是发布版本。
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime v0.12.71
+  （`f0c64ae8`），是发布版本。
 - **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 9]、`runtime-client`
-  [3, 11] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.69，以及它钉的 PR #1800 的头：这几版的 `ledger` 上限都在
+  [3, 11] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.71：这几版的 `ledger` 上限都在
   [3, 9] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集。游戏根从 v0.12.68 起用 `pack-catalog.json`
   取代 `ui.json`（见「数据来源」一节）：安装向导铺 `pack-catalog.json`，拒收带 `ui.json` 的旧包。例外是以前的安装向导
   或 v0.12.68 以前的 Runtime 铺好、根里还留着 `ui.json` 的游戏根：`actingctl packs` 见到它就发警告，
@@ -36,9 +36,9 @@
   v0.12.55 或更新的 Runtime 在一个状态根上跑过之后，v0.12.55 之前的 Runtime 就打不开它，`ledger` 只到 7 的监控台也可能读不了，
   所以要先换监控台，再上 Runtime。v0.12.63 的账本仍是修订 8，但它的决策记忆记录可能带 `break_in`，
   建在 v0.12.62 或更早版本上的监控台离线读不了（见「数据来源」一节），所以这里也要先换监控台。账本修订 9 也是单向的
-  （钉点声明它，还没有哪个 Runtime 发布版本声明它）：声明它的 Runtime 在一个状态根上跑过之后，就不能退回只声明到 8 的 Runtime，
-  `ledger` 只到 8 或更低的监控台（UI v0.12.21 及更早）离线读不了带修订 9 记录的账本，在线读不受影响（见「数据来源」一节），
-  所以也要先换监控台，再上这种 Runtime。除了这类说明，别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（见"组件接口"）。
+  （Runtime 发布版本从 v0.12.71 起声明它）：v0.12.71 或更新的 Runtime 在一个状态根上跑过之后，就不能退回只声明到 8 的 Runtime
+  （v0.12.70 及更早），`ledger` 只到 8 或更低的监控台（UI v0.12.21 及更早）离线读不了带修订 9 记录的账本，在线读不受影响（见「数据来源」一节），
+  所以上 v0.12.71 也要先换监控台。除了这类说明，别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（见"组件接口"）。
 - **0.11 系列**：UI v0.11.4 及更早的版本只说 0.11 协议，连不上 0.12 的 Runtime。0.11 系列不再维护。
 - **变了什么**：每一版 Releases 页上的说明写着这一版改了什么。
 - **伞仓**：伞仓最新发布 v0.11.4 仍是 0.11 系列（Runtime v0.11.4、UI v0.11.3）及其安装器；还没有伞仓发布
@@ -173,10 +173,25 @@
 「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
 这样就不用游标往下读。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime PR #1800 的头（`7b4705ff`），在 Runtime v0.12.69（`6a257aed`）
-之上 3 个提交。它不是发布版本：这个 PR 还没合并，也还没有哪个 Runtime 发布版本声明它的 `ledger` 修订 9（v0.12.68、v0.12.69
-声明的都是 [3, 8]）。相对 v0.12.67，v0.12.68 把 `runtime-client` 升到 11、`package` 升到 16，v0.12.69 把 `package` 升到 17，
-这个 PR 把 `ledger` 升到 9；控制台认的区间跟到 `ledger` [3, 9]、`runtime-client` [3, 11]；Runtime 的 `actingd-config` [5, 33]、
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.71（`f0c64ae8`），是发布版本，以预发布发出。
+它合入了 Runtime PR #1800，此前控制台钉的就是这个 PR 的头（`7b4705ff`，在 v0.12.69 之上 3 个提交）；它也是第一个声明 `ledger`
+修订 9 的发布版本（v0.12.70，`240cdb1a`，声明的仍是 [3, 8]）。相对那个头，v0.12.70 把 `package` 升到 18；`ledger` [3, 9]、
+`runtime-client` [3, 11]，以及 Runtime 的 `actingd-config` [5, 33]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变，
+控制台认的区间也就不动（它的 `actingd-config` 仍是 [5, 32]，理由见下面 v0.12.63 那条）。`package` 18（#463 K-c）是挑选步的 `scan` 声明了 `early_stop` 时可以不写 `end`，只归包和安装器：
+安装向导拿 Runtime 压缩包声明的范围核标准包。Runtime 的 `Cargo.lock` 只给 actingd 多了一个测试用的依赖 `actingcommand-lab-ops`，
+actingd 不在这个仓库的两把锁里，所以两把锁都只换提交号。控制台链接的 Runtime crate 里只有契约库的源码变了：`NAME_MAX_BYTES`
+改成公开，旁边新加 `key_text_fits`；`standard_pack_problem` 多了词 `catalog_group_title_differs`；写 `pack-catalog.json` 的一方
+可以点名把条目重算到最新、用一份文件换掉条目的显示（#477 PC-2，`standard-pack catalog --refresh` 和 `--displays`）；控制台都不用。
+ledger、ledger-forensics、runtime-client、runtime-config 和控制台那把锁里的其他 Runtime crate 源码都没变。契约库嵌入的结果码目录里，
+v0.12.70、v0.12.71 加了 12 个码（`selection_scan_early_stop_unreached`、`standard_pack_catalog_refresh_refused`、
+`standard_pack_catalog_display_refused`、`adopt_cases_left`，以及 Lab 录制的 8 个 `record_…` 码）、4 个键、5 个词表，
+`select_problem`、`ready_missing`、`ready_check`、`standard_pack_problem`、`adopt_problem`、`drop_problem` 的新词，
+`optional_after_problem` 用 `no_effect` 换掉了 `no_click`；没有新位置，没有退役或删掉的码，也没有 `console_`、`setup_` 名字。
+#398 DB-1 让 `devices bind` 可以在候选配置就位以前对着它绑手机（`--config`），并把来源记成 `ui`（`--bound-via ui`），给安装程序用；
+这个安装向导还不跑它。下一次启动把 `ui` 记成 `runtime.instance_bound` 的 `device.bound_via`，契约库原来就有这个词，
+所以控制台照旧读这种记录。其余几片（`recognize` 答出定位到的文字的框、`standard-pack adopt` 带上录制的回归用例、用例读取器读过场景说明）
+只归 Lab 和做包的工具。PR #1800 的头相对 v0.12.67：v0.12.68 把 `runtime-client` 升到 11、`package` 升到 16，v0.12.69 把 `package` 升到 17，
+这个 PR 把 `ledger` 升到 9；控制台认的区间当时跟到 `ledger` [3, 9]、`runtime-client` [3, 11]；Runtime 的 `actingd-config` [5, 33]、
 `install-control` [0, 0]、`runtime-outcomes` [1, 1] 不变；两把锁里的 crate 都没改依赖，`Cargo.lock` 只换提交号。
 账本修订 9（#463 CH-1）给运行的准入记录 `task.requested` 加了两个可选成员：`content_hash`，按路径准入这次运行的包时量出的内容哈希
 （64 位小写十六进制）；`variables`，从外面交给这次运行的值，1 到 16 项、按名字升序，值的 JSON 文本不超过 1024 字节时带原文，
@@ -184,7 +199,7 @@
 公开投影两个都不带，所以控制台在线读的账本页（`Ui` 档）逐字节和以前一样；详情面板显示的就是这个投影，两个成员都不显示。
 修订 8 的读者只要整条读到这种记录就拒（`corrupt_ledger_record`）：`ledger` 只到 8 或更低的控制台（UI v0.12.21 及更早）离线读不了带这种记录的账本
 （这种记录在最新的那几条里时打开就失败，含它的账本页整页失败），在线读不受影响；这个控制台离线也读得了。修订 9 是单向的：
-声明它的 Runtime 在一个状态根上跑过之后，就不能退回只声明到 8 的 Runtime，所以要先换控制台，再上 Runtime。
+v0.12.71 或更新的 Runtime 在一个状态根上跑过之后，就不能退回只声明到 8 的 Runtime（v0.12.70 及更早），所以要先换控制台，再上 Runtime。
 修订 11（#463 S3-8）给直接运行的请求加了可选的 `variables`，给包声明的变量传值；不带值的请求逐字节和修订 10 一样，这个控制台不发运行请求。
 `package` 16（#477 PC-1）让游戏根可以带 `pack-catalog.json`，取代 `ui.json`：v0.12.68 起 `actingctl packs` 从它生成一个游戏的 `ui`，
 形状不变，不再读 `ui.json`，根里还留着它时发警告 `standard_pack_ui_retired`。控制台的任务名称和日常任务的包表都取自这份回答，
@@ -322,7 +337,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 11、账本修订 9）：
 
 ```
-rev = "7b4705ff4b21c069c1e0313e3b73a5a0be1d2af1"
+rev = "f0c64ae855dece55139055c2badb11595b10926d"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -516,7 +531,7 @@ acui --help
 MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
 或在线设置及其时间、入口）和这个实例最近一次自检的结果。按「应用」后，这个实例空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-钉住的 Runtime（v0.12.69 之上 PR #1800 的头）是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+钉住的 v0.12.71 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带实例；拒绝照原因写人话：这个实例正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这个实例没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
@@ -1027,7 +1042,7 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   （`instance add`，Runtime INST-5）后给刚加进来的实例挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
   挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
-  暂停，0.12.52 起才有，钉住的 Runtime（0.12.69 之上 PR #1800 的头）两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
+  暂停，0.12.52 起才有，钉住的 0.12.71 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
   `instance.added`（#453 S2）。
   Lab 录制按住的暂停（Runtime 0.12.64 起）另成一类：实例暂停，理由恰好是 `lab-record-<毫秒时间戳>`，前缀后面只有数字
   （Lab 的 `record start` 只暂停它录的那一个实例；别的范围上同样理由的暂停、别的 `lab-` 理由照旧）。这一行写「被 Lab 的录制按住」、
