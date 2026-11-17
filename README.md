@@ -368,7 +368,7 @@ completes, which one built on v0.12.47, where the kind had no success code, woul
 run the scheduler or the Runtime itself started, `scheduled_contained_task_not_client_cancellable`, names who
 started it with the key `run_origin` (vocabulary `run_origin`: `policy`, `host`); from this version the
 console's Stop This Run on the rescue bar stops a run another tool started (see after Pause This
-Instance); since v0.12.47 the interfaces the console meets have not moved (`actingd-config` [5, 27],
+Instance's Scheduling); since v0.12.47 the interfaces the console meets have not moved (`actingd-config` [5, 27],
 `ledger` [3, 7], `runtime-client` [3, 6], `StopInstanceRun` being a revision-3 kind; `package` [3, 8],
 since v0.12.50, is acsetup's), the contract crate otherwise only gained the runtime fact
 `config.catalog_provenance` (#428 SCHED-C1b), the list readings under `inventory.list.` (#428 S168-4), a
@@ -676,7 +676,7 @@ acui --help
 The main window is the **workbench**. Its top bar has a lamp with the Runtime in plain words, Start, a
 "Troubleshooting and Ledger" button and, at its far end, Settings; under it is the plain-words result of
 the last press. Then one of two pages. The main page has two columns: the left one is for the instances,
-with an "Add Instance or Device" button that is off (see "Instance configuration"); the right one has the
+with an "Add Instance" button that is off (see "Instance configuration"); the right one has the
 settings file's problems, what falls short of the theme and where the technical log is. Settings switches
 to the settings page, where the same button reads "Back to Workbench": first those same lines, then the
 Runtime's settings, then "Runtime" (Request Shutdown, "Start the Runtime again automatically") and
@@ -695,12 +695,12 @@ Save, or empty the field and save to go
 back to the configuration file's value (or the default). Only the Runtime judges the range, and a refusal
 says what it said; the result has a line of its own under the top bar, naming the setting. A save is
 sent once: when its result is unknown, what holds is read again before anything is said, and nothing is
-ever sent again by itself. After the rows, each device the Runtime drives (an emulator or a handset
+ever sent again by itself. After the rows, each instance the Runtime drives (an emulator or a handset
 entry, not a fixture) has a "Device Backends" group with its touch backend and its capture backend, each
 in a drop-down of the backends that kind of device has (ADB input, MaaTouch, minitouch and, on an
 emulator, MuMu native (Nemu IPC) for touch; ADB screenshot and, on an emulator, DroidCast and MuMu native,
 or on a handset scrcpy, for capture), with where the value comes from (the configuration file, or set
-online, when and through which way) and the device's latest self-check. Apply switches that device at
+online, when and through which way) and the instance's latest self-check. Apply switches that instance at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
 (the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.67, plus the client's 5 s IO margin; the page takes
@@ -710,12 +710,12 @@ which touch goes with it, then sends both at once. A value set online offers "Us
 switch too (both rows together when clearing one alone could break that pair), unless the file's value is
 the one in effect: then the device is left as it is, and the line says only that the file's value is back.
 The result has a line of its own under the top bar, naming the instance, and a refusal says why in words:
-the device is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
-MuMu native touch, say, the game package configured for the device is not installed; since v0.12.40 a game
+the instance is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
+MuMu native touch, say, the game package configured for the instance is not installed; since v0.12.40 a game
 that is not running is no reason, and only a Runtime rolled back to v0.12.39 or earlier still gives it) and the
 previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
-console waits out that whole wait and until the Runtime shows the device no longer switching, then says what holds now, with the
-device's self-check. A Runtime before 0.12.39 has no such settings, and then no group shows. After every start of the Runtime its start report is read once: when an update
+console waits out that whole wait and until the Runtime shows the instance no longer switching, then says what holds now, with the
+instance's self-check. A Runtime before 0.12.39 has no such settings, and then no group shows. After every start of the Runtime its start report is read once: when an update
 or a rollback reset settings changed online, the line under the top bar and the settings page say which;
 "Got It" hides that line for this start. Online settings kept over a default that changed are said in
 small print on the settings page only. A report that cannot be read is tried at most 3 times for a start,
@@ -1230,7 +1230,7 @@ backslashes.
 
 `resume_elsewhere_reasons` names the pauses the console leaves to whoever set them. The Runtime keeps
 no actor with a pause, only its reason, so the pauses that must not be lifted from here are named by
-their reasons: a pause with one of them gets neither Put All on Duty, Resume This Instance nor "Resume
+their reasons: a pause with one of them gets neither Put All on Duty, Resume This Instance's Scheduling nor "Resume
 Scheduling…", only the words "this pause is to be lifted by whoever set it", on the top bar, on the
 instance cards and in the ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
 line; the 0.12 setup wizard never writes this global file (it writes only `<root>\acui.toml` in the root
@@ -1243,7 +1243,7 @@ an item not quoted or not such a reason, a comment after the value, a line of th
 key in quotes that do not pair — is said in red at the top of every window, with the file and the
 line, and **fails closed**: until it is fixed, whatever another line of the key says, no pause except
 the console's own two offers a resume anywhere in the console: Pause All, the global pause with reason
-`console_pause_all`, and Pause This Instance, an instance's pause with reason `console_pause_account`
+`console_pause_all`, and Pause This Instance's Scheduling, an instance's pause with reason `console_pause_account`
 (see "Launcher"); either reason on the other scope gets none. A settings file that is there but
 cannot be read, or no configuration directory, fails closed the same way. A deployment's pause stays
 the installer's in any case, and a pause the Lab's rescue module set stays its operation's (see
@@ -1379,14 +1379,14 @@ by the reason string alone: a global pause another tool sets with the same reaso
 the same way. Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
 
 Each instance's card has a button of its own. While the instance has no pause of its own it is **Pause
-This Instance**: one `PauseScheduling` of that instance alone, with the console's own reason
+This Instance's Scheduling**: one `PauseScheduling` of that instance alone, with the console's own reason
 `console_pause_account` and the same drain timeout as Pause All (the lowest the Runtime takes, 1 s), sent
 once on a worker thread over a fresh person's connection (actor `user`) and never again by itself. No new
 task of that instance is scheduled. Unlike the global pause an instance pause drains: a task still running
 on the instance once that second has passed is asked to stop at its next checkpoint, and the Runtime
 answers once the device is handed back, so a press can take about half a minute, which the card says
 while it is out. Under the pause the console set there, once its device is handed back, the button is
-**Resume This Instance**: one conditional `ResumeScheduling` of that instance, its condition the owner
+**Resume This Instance's Scheduling**: one conditional `ResumeScheduling` of that instance, its condition the owner
 epoch and the revision of the status read the card was painted from, so the Runtime refuses it and lifts
 nothing once that pause has changed. It goes at one press, without the confirmation Put All on Duty asks
 of another tool's pause, since the console set this pause itself. The resume connects the device again;
@@ -1459,7 +1459,7 @@ is, and Stop This Run too ("This instance's task switches are being changed; a m
 `fact.published`, the stop three records, a follow-up three more. Of a package that has daily tasks and
 also reads instance data, the close row closes its daily tasks, and the Runtime's reading of instance data
 (`_fact_refresh`) is dispatched as before. A scheduled run still queued or being prepared is not in the
-status read and cannot be pressed; Pause This Instance keeps such runs from going. A stop is no failure:
+status read and cannot be pressed; Pause This Instance's Scheduling keeps such runs from going. A stop is no failure:
 nothing retries, backs off, pauses the task or starts a ladder. A direct run's lines are as before, and
 it writes no close row. In the ledger window, a stopped scheduled run's `task.failed` (`contained_task_cancelled`),
 its `policy.execution_recorded` (result `stopped`) and the scheduler driver's `runtime.failed` say
@@ -1494,7 +1494,7 @@ through or was stopped.
   lifted by itself: like one an operation that has stopped left behind, lift it from the Lab"), on the
   top bar and the instance cards too. While
   that settings line cannot be used, every pause but a deployment's, a Lab rescue's and the console's
-  own two (Pause All, the global pause with reason `console_pause_all`, and Pause This Instance, an
+  own two (Pause All, the global pause with reason `console_pause_all`, and Pause This Instance's Scheduling, an
   instance's with reason `console_pause_account`) is of the first kind. Two pauses set for a person to
   lift after looking are neither a deployment's nor a Lab rescue's, so they carry "Resume Scheduling…"
   like another tool's pause unless `resume_elsewhere_reasons` lists their reason or, as just said, cannot
@@ -1532,7 +1532,7 @@ through or was stopped.
 The console no longer has an instance-configuration window. Until the Runtime's `install instance`
 lands, an instance can only be added by hand: edit the `instances` of the actingd configuration
 (`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. The
-workbench's "Add Instance or Device" button is off for that reason, with this note under it and the path of that
+workbench's "Add Instance" button is off for that reason, with this note under it and the path of that
 configuration file below, selectable to copy. Finding instances comes back with the console's own
 instance page in a later version.
 
@@ -1644,8 +1644,8 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
    window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
    person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
-   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand: the
-   emulator itself, with the games signed in on it. An emulator another ActingCommand on this computer already uses is
+   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand; an
+   instance is one emulator or one phone, with the games signed in on it. An emulator another ActingCommand on this computer already uses is
    greyed, and ticking it asks first. The other installations are found two ways: a running
    `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
    configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
