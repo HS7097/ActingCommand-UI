@@ -1036,8 +1036,8 @@ pub struct Labels {
     /// another tool's of the account or of all, without the reason it wrote; which round they are
     /// of (time); in amber that the names cannot be read; that not every task is listed. The
     /// account's own line of tasks without a package, and why, in grey; the Runtime's own reading
-    /// task. A group of no `ui.json` group; a package with no summary; its two badges. What a row
-    /// says: running, not for the scheduler; scheduled, and while paused; ended this round (it ran,
+    /// task. A group of no `pack-catalog.json` group (`ui.json` before Runtime 0.12.68); a package
+    /// with no summary; its two badges. What a row says: running, not for the scheduler; scheduled, and while paused; ended this round (it ran,
     /// was stopped, or did not start; UI-3e3), or not started; a paused reason; the other reasons
     /// of its tasks (their sentences), how they are joined, and that there are more.
     pub tasks_tab: &'static str,
@@ -1214,7 +1214,7 @@ pub struct Labels {
     pub goals_days: &'static str,
     pub goals_orphan: &'static str,
     /// Why a run does not read a variable's value, one sentence per `variable_problem` word
-    /// (Runtime `contracts/outcome-codes/catalog.json:9985-10045`); a word not given.
+    /// (Runtime `contracts/outcome-codes/catalog.json:10194-10254`); a word not given.
     pub goals_unapplied_not_an_option: &'static str,
     pub goals_unapplied_out_of_range: &'static str,
     pub goals_unapplied_off_step: &'static str,
@@ -1312,7 +1312,7 @@ pub struct Labels {
     pub goals_carried_importance: &'static str,
     pub goals_carried_validity: &'static str,
     /// Why the Runtime did not take a value, one sentence per `goal_problem` word (Runtime
-    /// `contracts/outcome-codes/catalog.json:10469-10547`, `runtime-host.json:21779-21805`), and
+    /// `contracts/outcome-codes/catalog.json:10678-10756`, `runtime-host.json:21799-21825`), and
     /// of a word this console has no sentence for (the word); the two with a bound, each with it in
     /// its unit (the bytes a value holds, the items a record holds); the values others come with: a
     /// range (min, max), and a sentence with its detail (sentence, detail).

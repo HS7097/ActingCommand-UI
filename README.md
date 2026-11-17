@@ -30,15 +30,24 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now v0.12.67.
-- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 32], `ledger` [3, 8],
-  `runtime-client` [3, 10] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.67: each of
-  them declares a `ledger` maximum within [3, 8] and an `actingd-config` and a `runtime-client` range
-  that meet the console's. The ledger of v0.12.55 and later (revision 8) is one way: once such a Runtime has run on
-  a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
+  of Runtime v0.12.47; the pin is now the head of Runtime PR #1800 (`7b4705ff`), not a release, three
+  commits on top of v0.12.69.
+- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
+  `runtime-client` [3, 11] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.69 and the
+  head of PR #1800 it is pinned to: each of them declares a `ledger` maximum within [3, 9] and an
+  `actingd-config` and a `runtime-client` range that meet the console's. From v0.12.68 standard packages are
+  an exception (see "Data source"): the setup wizard refuses a bundle that carries `pack-catalog.json` and
+  still lays an older bundle's `ui.json`, and `actingctl packs` warns on a root that holds `ui.json`, so the
+  Daily Tasks fall back to package and task ids, without the Irreversible and Risky markers, and the
+  Goals tab puts every package's variables under "Other settings". The ledger of v0.12.55 and later
+  (revision 8) is one way: once such a Runtime has run on a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
   read it, so switch the console first, then the Runtime. v0.12.63 stays at ledger revision 8, but its
   decision-memory records may carry a `break_in` that a console built on v0.12.62 or earlier cannot read
-  offline (see "Data source"), so there too switch the console first. Apart from such notes, whether another Runtime fits is judged from
+  offline (see "Data source"), so there too switch the console first. Ledger revision 9, which the pin
+  declares and no Runtime release does yet, is one way too: once a Runtime that declares it has run on a
+  state root, going back to one that declares at most 8 is refused, and a console whose `ledger` range ends
+  at 8 or below (UI v0.12.21 and earlier) cannot read offline a ledger that holds a revision-9 record, while its
+  online reads are not touched (see "Data source"); so switch the console before such a Runtime too. Apart from such notes, whether another Runtime fits is judged from
   the interfaces each side declares, not from version numbers (see "Component interfaces").
 - **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
   0.12 Runtime. The 0.11 series is not maintained.
@@ -230,9 +239,52 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.67 (`3a17b927`). Against
-v0.12.63 (v0.12.64, v0.12.65 and v0.12.66 moved no interface) it raises `runtime-client` to 10, and the
-console's `runtime-client` range follows to [3, 10]; `actingd-config` [5, 33], `install-control` [0, 0],
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`): the head of Runtime PR #1800 (`7b4705ff`),
+three commits on top of Runtime v0.12.69 (`6a257aed`). It is not a release: the PR is not merged, and no
+Runtime release declares its `ledger` revision 9 yet (v0.12.68 and v0.12.69 declare [3, 8]). Against
+v0.12.67, v0.12.68 raises `runtime-client` to 11 and `package` to 16, v0.12.69 raises `package` to 17 and
+the PR raises `ledger` to 9; the console's ranges follow to `ledger` [3, 9] and `runtime-client` [3, 11];
+the Runtime's `actingd-config` [5, 33], `install-control` [0, 0] and `runtime-outcomes` [1, 1] stay. No crate the
+locks list changed its dependencies, so `Cargo.lock` changes only in the rev. Ledger revision 9 (#463 CH-1)
+gives a run's admission record `task.requested` two optional members: `content_hash`, the content hash the
+admission of the run's package by its path measured (64 lowercase hexadecimal digits), and `variables`, the
+values handed to the run from outside, 1 to 16 entries sorted by name, each with the value's JSON text when
+that is at most 1024 bytes and otherwise with that text's SHA-256 and length. Every run admitted by its path writes
+such a record (`variables` only when it was handed values), and a record without the two keeps its
+revision-8 bytes. The public projection carries neither, so a page the console reads online (the `Ui`
+profile) is byte for byte what it was, and the console's detail pane, which shows that projection, shows
+neither. A reader of revision 8 refuses the record wherever it reads it in full (`corrupt_ledger_record`):
+a console whose `ledger` range ends at 8 or below, UI v0.12.21 and earlier among them, cannot read offline a ledger
+that holds one (its opening fails while one is among the newest records, and a page that holds one fails
+whole), while its online reads are not touched; this console reads it offline too. Revision 9 is one way:
+once a Runtime that declares it has run on a state root, going back to one that declares at most 8 is
+refused, so switch the console first, then the Runtime. Revision 11 (#463 S3-8) adds the optional
+`variables` of a contained run's request, values for variables its package declares; a request without
+values serializes byte for byte as under revision 10, and the console sends no run request. `package` 16
+(#477 PC-1) lets a game root carry `pack-catalog.json` in place of `ui.json`: from v0.12.68 `actingctl packs`
+builds a game's `ui` from it in the same shape, reads `ui.json` no more and warns `standard_pack_ui_retired`
+for a root that still holds it. The console takes its task names and the Daily Tasks' package table from
+that answer and, with any warning, uses neither: package rows show their package ids, without the
+Irreversible and Risky markers, and every task is listed by its task id under "This instance: some plans do
+not match a task pack". A root that still holds `ui.json` is enough for that, and no installed root carries
+`pack-catalog.json` yet. The setup wizard's layout has not followed `package` 16: it still lays `ui.json`,
+which the Runtime's own `place` refuses in a zip and sets aside in a root, and has no place for
+`pack-catalog.json`, so it refuses a bundle that carries one, though such a bundle declares `package` 16,
+within the Runtime's range. `package` 17 (#463 KP-1), a `linear_steps` step that presses the back key, is
+the packs' and the installer's. The ledger crate and
+runtime-client changed only where they build a `PackageAdmitted` (two new `None` members) and in tests, and
+ledger-forensics, runtime-config and the other Runtime crates the console links have the same source. The
+contract crate otherwise replaces its `ui.json` reader (`standard_pack_ui`) with a `pack-catalog.json`
+reader (`standard_pack_catalog`), neither of which the console uses. In the outcome-code catalog, v0.12.68
+and v0.12.69 add twenty-seven codes (among them `invalid_contained_task_variable_count` and
+`invalid_contained_task_variable_name`, the host's four `run_variable_…` codes, seven
+`standard_pack_catalog_…` codes and `standard_pack_ui_retired`), one location (`check_run_variables`), four
+keys, sixteen vocabularies, new tokens of `install_caveat`, `ready_missing` and `select_problem`, five
+`catalog_…` tokens of `standard_pack_problem` in place of its four `ui_…` ones, and the domain `enabling_`,
+and retire `trial_variables_not_carried`, with no code removed and no `console_` or `setup_` name; the PR
+changes no outcome code. v0.12.67 against v0.12.63 (v0.12.64, v0.12.65 and v0.12.66 moved no interface)
+raises `runtime-client` to 10, and the console's `runtime-client` range followed to [3, 10];
+`actingd-config` [5, 33], `install-control` [0, 0],
 `ledger` [3, 8], `package` [3, 15] and `runtime-outcomes` [1, 1] stay, and no crate the locks list changed
 its dependencies, so `Cargo.lock` changes only in the rev. Revision 10 (#437 G1) gives an instance's row of
 the status the optional `device_held` (`device_group_wait` `close_unconfirmed` and the `alias` of the member
@@ -418,10 +470,10 @@ device switches its two backends while the Runtime runs, #402 HS-1 to HS-4, and 
 long as the contract's `BACKEND_SWITCH_WAIT_MS` and the client's IO margin say;
 with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
 `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
-v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 10, ledger revision 8):
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 11, ledger revision 9):
 
 ```
-rev = "3a17b9276377ef2d843c17c51356404d7808f26d"
+rev = "7b4705ff4b21c069c1e0313e3b73a5a0be1d2af1"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -703,7 +755,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.67, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned Runtime, PR #1800's head on v0.12.69, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -739,9 +791,10 @@ The main page's right column has three tabs, **Live View**, **Daily Tasks** and 
 the alias of the instance picked on the left; the tab picked stays for the run, across instances and pages,
 Live View being the first. Daily Tasks is that instance's task packages, those the Runtime's switch view lists with a
 switch at the front of their row (see the next paragraph): one row per package, with its name (its
-package id when the game's `ui.json` gives none), "Irreversible" when the Runtime derives it so and
-"Risky" when its `ui.json` entry names a risk word (the word itself is not shown), why it runs or does
-not run now in a sentence, and its `ui.json` summary in grey ("No description given" without one). The
+package id when the game's `pack-catalog.json` gives none; `ui.json` before Runtime 0.12.68, see "Data
+source"), "Irreversible" when the Runtime derives it so and "Risky" when its entry there names a risk word
+(the word itself is not shown), why it runs or does not run now in a sentence, and its summary there in
+grey ("No description given" without one). The
 sentence is "Running" (for a direct run, "not scheduled") while the status says the instance runs that
 package; where the dispatch stands while the task selected for the instance is one of the package's;
 else the words of the package's first candidate row in the Runtime's own order, chosen by its reason
@@ -749,7 +802,7 @@ code (a `benefit_unknown` by its `benefit_gap`, a `pool_line_held` by its `pool_
 "(earliest hh:mm)" when that row has a wake, and under it the other sentences of its tasks once each. The
 instance cards say a reason in the same words. No reason code, count or scheduler number shows: a code
 the console has no words for says "Not scheduled right now", and the technical log hears of it once.
-With a `ui.json` the rows go by its groups and its order, the rest under "Other"; without one, by name.
+With that file the rows go by its groups and its order, the rest under "Other"; without one, by name.
 Which package a task runs comes from the `task_ids` of the same `actingctl packs` run the names come from:
 a task no row of it lists, and every task when that run failed or had warnings, is listed by its task id
 under "This instance: some plans do not match a task pack", which opens. Above the rows: the instance's
@@ -821,10 +874,10 @@ to its default or cleared, and values no longer offered and other resource goals
 and order settings, putting them back to their defaults included, need the Lab (command line or MCP) until
 the next version. Its
 lines go in the Runtime's order: first the entries of the game's `goals.json`, then each package variable
-no entry places, in groups under the display name of its first package (the `ui.json` title the task
-names come from; every variable whose package has none goes in one last group, "Other settings"). No
-entry's name, no declared resource's pool id and no package id is shown; an entry with no text says "(no
-title)". Texts in several languages are taken as `ui.json`'s are: Chinese tries `zh-Hans`, `zh`, `zh-CN`,
+no entry places, in groups under the display name of its first package (the `pack-catalog.json` title the
+task names come from, `ui.json`'s before Runtime 0.12.68; every variable whose package has none goes in one
+last group, "Other settings"). No entry's name, no declared resource's pool id and no package id is shown;
+an entry with no text says "(no title)". Texts in several languages are taken as the task names are: Chinese tries `zh-Hans`, `zh`, `zh-CN`,
 then `en`; English tries `en`; either then takes the first written.
 
 Five kinds of entry. A **heading** is a group title in bold; a **note** is grey words, with its help. A
@@ -1502,8 +1555,8 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.67 has
-  both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned Runtime
+  (PR #1800's head on 0.12.69) has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). A Lab recording's hold (Runtime 0.12.64 on) is a kind of its own: an
   instance's pause whose reason is exactly `lab-record-<unix ms>`, digits only after the prefix (the
   Lab's `record start` pauses only the instance it records; the same reason on another scope, and any
