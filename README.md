@@ -35,11 +35,12 @@ and guesses nothing.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
   `runtime-client` [3, 11] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.69 and the
   head of PR #1800 it is pinned to: each of them declares a `ledger` maximum within [3, 9] and an
-  `actingd-config` and a `runtime-client` range that meet the console's. From v0.12.68 standard packages are
-  an exception (see "Data source"): the setup wizard refuses a bundle that carries `pack-catalog.json` and
-  still lays an older bundle's `ui.json`, and `actingctl packs` warns on a root that holds `ui.json`, so the
-  Daily Tasks fall back to package and task ids, without the Irreversible and Risky markers, and the
-  Goals tab puts every package's variables under "Other settings". The ledger of v0.12.55 and later
+  `actingd-config` and a `runtime-client` range that meet the console's. From v0.12.68 a game root carries
+  `pack-catalog.json` in place of `ui.json` (see "Data source"): the setup wizard lays `pack-catalog.json` and
+  refuses an older bundle that carries `ui.json`. The exception is a game root laid before, by an earlier
+  setup wizard or a Runtime before v0.12.68, that still holds `ui.json`: `actingctl packs` warns on it, so the
+  Daily Tasks fall back to package and task ids, without the Irreversible and Risky markers, and the Goals tab
+  puts every package's variables under "Other settings". The ledger of v0.12.55 and later
   (revision 8) is one way: once such a Runtime has run on a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
   read it, so switch the console first, then the Runtime. v0.12.63 stays at ledger revision 8, but its
   decision-memory records may carry a `break_in` that a console built on v0.12.62 or earlier cannot read
@@ -266,11 +267,12 @@ builds a game's `ui` from it in the same shape, reads `ui.json` no more and warn
 for a root that still holds it. The console takes its task names and the Daily Tasks' package table from
 that answer and, with any warning, uses neither: package rows show their package ids, without the
 Irreversible and Risky markers, and every task is listed by its task id under "This instance: some plans do
-not match a task pack". A root that still holds `ui.json` is enough for that, and no installed root carries
-`pack-catalog.json` yet. The setup wizard's layout has not followed `package` 16: it still lays `ui.json`,
-which the Runtime's own `place` refuses in a zip and sets aside in a root, and has no place for
-`pack-catalog.json`, so it refuses a bundle that carries one, though such a bundle declares `package` 16,
-within the Runtime's range. `package` 17 (#463 KP-1), a `linear_steps` step that presses the back key, is
+not match a task pack". A root that still holds `ui.json` is enough for that. The setup wizard lays a bundle
+as the Runtime's own `place` does since `package` 16: it lays `pack-catalog.json` and refuses a bundle that
+carries `ui.json`, saying that the bundle is of the format before Runtime 0.12.68. It installs only into a new
+folder, so it never meets an installed `ui.json`: only a game root laid by an earlier setup wizard or by a
+Runtime before v0.12.68 still holds one, until the Runtime's `place` lays a bundle there again and sets the
+file aside. `package` 17 (#463 KP-1), a `linear_steps` step that presses the back key, is
 the packs' and the installer's. The ledger crate and
 runtime-client changed only where they build a `PackageAdmitted` (two new `None` members) and in tests, and
 ledger-forensics, runtime-config and the other Runtime crates the console links have the same source. The

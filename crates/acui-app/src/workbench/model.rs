@@ -996,8 +996,10 @@ impl Model {
     /// The daily task list of the account whose picture the right column names (UI-3f1), as the
     /// reads leave it at `now`: no row of an answer that is not of this account and epoch, or not
     /// new, or after a failure. Above its rows the account's pause or fence as its card says it.
-    /// Rows no `ui.json` orders go by their names in `language`. Each package's switch as the
-    /// switches' read leaves it (`switches_now`, UI-3f2), which the rows do not wait for.
+    /// Rows that no display part orders (of a game root's `pack-catalog.json`, `ui.json` before
+    /// Runtime 0.12.68: the one `actingctl packs` answers under `ui`) go by their names in
+    /// `language`. Each package's switch as the switches' read leaves it (`switches_now`, UI-3f2),
+    /// which the rows do not wait for.
     pub fn tasks_view(&self, now: Instant, language: Language) -> TasksView {
         if let Some(down) = Down::of(&self.link) {
             return TasksView::Down(down);
@@ -1732,7 +1734,9 @@ impl Model {
         }
     }
 
-    /// `package`'s summary in `language`, when its game's `ui.json` gives one (UI-3f1).
+    /// `package`'s summary in `language`, when the display part of its game root's
+    /// `pack-catalog.json` (`ui.json` before Runtime 0.12.68), the one `actingctl packs` answers
+    /// under `ui`, gives one (UI-3f1).
     pub fn pack_summary(&self, package: &str, language: Language) -> Option<&str> {
         let Names::Ready { packs, .. } = &self.names else {
             return None;
@@ -1740,7 +1744,9 @@ impl Model {
         packs.pack(package)?.ui.as_ref()?.summary(language)
     }
 
-    /// The title in `language` of `game`'s group `group` of its `ui.json` (UI-3f1).
+    /// The title in `language` of `game`'s group `group` of the display part of its game root's
+    /// `pack-catalog.json` (`ui.json` before Runtime 0.12.68), the one `actingctl packs` answers
+    /// under `ui` (UI-3f1).
     pub fn group_title(&self, game: &str, group: &str, language: Language) -> Option<&str> {
         let Names::Ready { packs, .. } = &self.names else {
             return None;
