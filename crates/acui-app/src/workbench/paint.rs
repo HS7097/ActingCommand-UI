@@ -2739,6 +2739,9 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         }
         Said::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
         Said::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
+        Said::PauseWatching => (labels.pause_all_watching.to_owned(), false),
+        Said::PauseLate => (labels.pause_all_late.to_owned(), false),
+        Said::PauseNotHeld => (labels.pause_all_not_held.to_owned(), true),
         Said::NotSent { not_this_root } => {
             (not_sent(labels, labels.write_not_sent, *not_this_root), true)
         }
@@ -4223,7 +4226,9 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
 /// a failure. A refusal says its code as the Runtime gave it, then the code's short words, and
 /// so does a lift whose reconnect of the device failed. A lift while a global pause holds
 /// (`global_holds`) says that the account is still not scheduled, as the top bar's says the
-/// pauses that still hold.
+/// pauses that still hold. A pause whose answer said nothing says it is watched, and then what the
+/// reads after it came to: only one that did not hold is a failure, and one still on its way at
+/// the watch's end is neither confirmed nor failed.
 fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) -> (String, bool) {
     let coded = |template: &str, code: &str| {
         let words = outcome_short(labels, code)
@@ -4258,6 +4263,10 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
         }
         AccountSaid::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
         AccountSaid::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
+        AccountSaid::PauseWatching => (labels.account_pause_watching.to_owned(), false),
+        AccountSaid::PauseLate => (labels.account_pause_late.to_owned(), false),
+        AccountSaid::PauseNotHeld => (labels.account_pause_not_held.to_owned(), true),
+        AccountSaid::PauseStillStaging => (labels.account_pause_still_staging.to_owned(), false),
         AccountSaid::NotSent { not_this_root } => {
             (not_sent(labels, labels.write_not_sent, *not_this_root), true)
         }

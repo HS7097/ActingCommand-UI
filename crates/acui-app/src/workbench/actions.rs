@@ -27,6 +27,23 @@
 //! (`resume_paused`), at one press. A pause of the account another tool set gets no button on
 //! the card, which says who lifts it; the ledger window resumes those it may.
 //!
+//! A pause whose answer said nothing, of every account or of one, is not left at that
+//! (UI-PF1): the `Status` reads after it are watched for the pause of its scope (`PauseWatch`,
+//! `pause_verdict`), and its line says so meanwhile. Its stage says what came of it, not a time:
+//! a pause shown holding, the global one or one of an account with its device handed back,
+//! holds, confirmed late; one still draining or handing its device back is watched on, as the
+//! Runtime moves it on by itself, and at ten minutes from the press is said to be still on its
+//! way, as the card shows, neither confirmed nor failed; one shown gone after a read showed it
+//! did not hold; and none shown did not hold only once three reads landed after the answer and
+//! the Runtime's own time to settle one has passed since the press, or ten minutes have. Each
+//! read after a verdict is watched too, until one says it holds, another party's pause shows
+//! there (only the console's own reason counts as the press's), or ten minutes from the press
+//! end it: a pause said not to hold that a read shows after all is confirmed late, or watched
+//! again while on its way, and one still on its way that a read shows held or gone is said so,
+//! each with a line in the log. Once the watch is over, a read that shows otherwise takes back
+//! a line saying the pause did not hold or is still on its way. Nothing is sent again by
+//! itself, and a resume whose answer said nothing is said as it was.
+//!
 //! Picking a preset, or going back to the file's setting, is one change of settings
 //! (`ConfigFlow`). It names the version of the newest snapshot, and only a snapshot or an
 //! answer that it took moves that version. An answer that says nothing, or that another
@@ -105,7 +122,7 @@
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use acui_rows::local_utc_offset_minutes;
 use acui_source::workbench::backends::{
@@ -117,9 +134,10 @@ use acui_source::workbench::rules::{
     IdleChoice, IdleNow, NewWeekly, QuietNotSent, QuietOf, QuietRead, RuleSetting,
 };
 use acui_source::workbench::{
-    configure, pause_account, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead,
-    ConfigRefusal, InstanceLive, PauseOutcome, PresetMember, PresetSetting, RefusalWhy,
-    SettingSource, SettingValue, SettingsRead, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL,
+    configure, pause_account, pause_global, pause_verdict, ActivityKind, ConfigEdit, ConfigOutcome,
+    ConfigRead, ConfigRefusal, InstanceLive, PauseOutcome, PauseSeen, PauseVerdict, PresetMember,
+    PresetSetting, RefusalWhy, SettingSource, SettingValue, SettingsRead, ACCOUNT_PAUSE_SETTLES,
+    CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, GLOBAL_PAUSE_SETTLES, PAUSE_WATCH_LIMIT,
 };
 use acui_source::{
     resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
@@ -296,7 +314,22 @@ pub enum AccountSaid {
     Refused { write: AccountWrite, code: String },
     /// A Runtime that cannot lift a pause on condition.
     Unsupported,
+    /// A resume whose answer said nothing; a pause's is watched instead (`PauseWatching`).
     Unconfirmed,
+    /// A pause whose answer said nothing: the `Status` reads after it are watched for the
+    /// account's pause (`PauseWatch`), none having said yet what came of it, or one having shown
+    /// it on its way again after it was said not to hold.
+    PauseWatching,
+    /// They showed it holding, its device handed back: confirmed late.
+    PauseLate,
+    /// They showed it and then no more, or none in the reads and the time it is watched for:
+    /// it did not hold, and can be pressed again. The reads after are watched until ten minutes
+    /// from the press; past that, one showing a pause there takes the line back.
+    PauseNotHeld,
+    /// They showed it still draining or handing its device back ten minutes after the press
+    /// (`PAUSE_WATCH_LIMIT`), which ends the watch: neither confirmed nor failed, as the card
+    /// shows. A read showing it handed back or gone takes the line back.
+    PauseStillStaging,
     /// No connection: nothing was sent. In root mode, because the Runtime up is not the
     /// installation folder's (`not_this_root`, `identity::not_this_root`).
     NotSent { not_this_root: bool },
@@ -306,11 +339,108 @@ pub enum AccountSaid {
     Restarted,
 }
 
-/// One account's: the press of its card's own button out, if any, and what the last came to.
+/// One account's: the press of its card's own button out, if any, with when it was pressed, what
+/// the last came to, and the pause whose answer said nothing while the reads after it are watched.
 #[derive(Debug, Clone, Default)]
 struct AccountSlot {
-    out: Option<(Ticket, AccountWrite)>,
+    out: Option<(Ticket, AccountWrite, Instant)>,
     said: Option<AccountSaid>,
+    watch: Option<PauseWatch>,
+}
+
+/// A pause whose answer said nothing, of every account or of one, watched by the `Status` reads
+/// after it (`pause_verdict`): its press's ticket, for the log; when it was pressed, which its
+/// times are from; whether a read showed a pause of its scope; how many reads have landed since
+/// that answer, when the watch began; and what the last of them came to. It is kept past a
+/// verdict that the pause did not hold or is still on its way, so that a later read showing
+/// otherwise says so, but never past [`PAUSE_WATCH_LIMIT`] from the press; one that holds ends it,
+/// and so does another party's pause there, which only the press's own reason is not
+/// (`PauseSeen::of`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PauseWatch {
+    ticket: Ticket,
+    pressed: Instant,
+    shown: bool,
+    reads: u32,
+    verdict: PauseVerdict,
+}
+
+impl PauseWatch {
+    /// The watch of the pause pressed at `pressed` under `ticket`, as its answer that said
+    /// nothing lands.
+    fn new(ticket: Ticket, pressed: Instant) -> Self {
+        Self { ticket, pressed, shown: false, reads: 0, verdict: PauseVerdict::Watching }
+    }
+
+    /// One more `Status` read, landed at `now` and showing `seen` of the pause's scope, the
+    /// Runtime settling such a pause within `settles`: what the reads so far come to. A verdict
+    /// other than the last goes in the log under `thread`, naming the press's ticket and `alias`,
+    /// the account's, as its answer did: what the last one was, what this read showed, and how
+    /// long after the press. One that holds, or that is watched again, goes quietly; one that does
+    /// not hold, or is still on its way at the end, as the problem it is.
+    fn read(
+        &mut self,
+        seen: PauseSeen,
+        now: Instant,
+        settles: Duration,
+        thread: &str,
+        alias: Option<&str>,
+    ) -> PauseVerdict {
+        self.reads = self.reads.saturating_add(1);
+        let watched = now.saturating_duration_since(self.pressed);
+        let verdict = pause_verdict(seen, self.shown, self.reads, watched, settles);
+        let shown_before = self.shown;
+        self.shown |= matches!(seen, PauseSeen::Staging | PauseSeen::Holds);
+        let was = std::mem::replace(&mut self.verdict, verdict);
+        if verdict == was {
+            return verdict;
+        }
+        let of = match alias {
+            Some(alias) => format!("ticket {} of {alias}", self.ticket.0),
+            None => format!("ticket {}", self.ticket.0),
+        };
+        let before = match was {
+            PauseVerdict::Watching => "unconfirmed",
+            PauseVerdict::NotHeld => "unconfirmed and said not to hold",
+            PauseVerdict::StillStaging => "unconfirmed and said still on its way",
+            // A pause that holds, or another party's, ends the watch.
+            PauseVerdict::Held => "unconfirmed and said paused",
+            PauseVerdict::Overtaken => "unconfirmed and left to another party's pause",
+        };
+        let (then, said) = match verdict {
+            PauseVerdict::Held => ("seen paused", "confirmed late"),
+            PauseVerdict::NotHeld if shown_before => ("seen paused and gone again", "did not hold"),
+            PauseVerdict::NotHeld => ("not seen paused", "did not hold"),
+            PauseVerdict::StillStaging => {
+                ("still draining or handing its device back", "left to the card")
+            }
+            PauseVerdict::Watching => ("seen on its way again", "watched again"),
+            PauseVerdict::Overtaken => ("seen paused by another party", "left to the card"),
+        };
+        let reads = match self.reads {
+            1 => "1 read".to_owned(),
+            reads => format!("{reads} reads"),
+        };
+        let seconds = watched.as_secs();
+        let line = format!(
+            "{of}: {before}, then {then} after {reads}, {seconds} s after the press: {said}"
+        );
+        match verdict {
+            PauseVerdict::Held | PauseVerdict::Watching | PauseVerdict::Overtaken => {
+                report::log_quiet(thread, &line)
+            }
+            PauseVerdict::NotHeld | PauseVerdict::StillStaging => report::log(thread, &line),
+        }
+        verdict
+    }
+
+    /// Whether the watch is over once a read at `now` came to `verdict`: a pause that holds,
+    /// another party's pause there, or [`PAUSE_WATCH_LIMIT`] since the press ends it, the last
+    /// verdict standing.
+    fn over(&self, verdict: PauseVerdict, now: Instant) -> bool {
+        matches!(verdict, PauseVerdict::Held | PauseVerdict::Overtaken)
+            || now.saturating_duration_since(self.pressed) >= PAUSE_WATCH_LIMIT
+    }
 }
 
 const CONFIG_THREAD: &str = "acui-act-config";
@@ -374,7 +504,17 @@ pub enum Said {
     Refused { write: Write, code: String },
     /// A Runtime that cannot lift a pause on condition.
     Unsupported,
+    /// "Put all on duty" whose answer said nothing; that of "pause all" is watched instead
+    /// (`PauseWatching`).
     Unconfirmed,
+    /// "Pause all" whose answer said nothing: the `Status` reads after it are watched for the
+    /// global pause (`PauseWatch`). It has no stage, so it is never still on its way.
+    PauseWatching,
+    /// They showed it: confirmed late.
+    PauseLate,
+    /// They showed none in the reads and the time it is watched for: it did not hold, and can be
+    /// pressed again. The reads after are still watched.
+    PauseNotHeld,
     /// No connection: nothing was sent. In root mode, because the Runtime up is not the
     /// installation folder's (`not_this_root`, `identity::not_this_root`).
     NotSent { not_this_root: bool },
@@ -518,6 +658,10 @@ impl Typed {
 pub struct Actions {
     issued: u64,
     out: BTreeMap<(Scope, Kind), Ticket>,
+    /// When "pause all" out was pressed: an answer that says nothing is watched from then.
+    pause_sent: Option<Instant>,
+    /// "Pause all" whose answer said nothing, while the reads after it are watched.
+    pause_watch: Option<PauseWatch>,
     /// The pause a first press asks to confirm.
     confirming: Option<PauseTarget>,
     flow: ConfigFlow,
@@ -571,7 +715,13 @@ impl Actions {
         let ticket = Ticket(self.issued);
         self.out.insert(slot, ticket);
         match write {
-            Write::PauseAll | Write::ResumeAll => self.confirming = None,
+            Write::PauseAll | Write::ResumeAll => {
+                self.confirming = None;
+                // Whatever this press comes to, the reads watched for the last pause no longer
+                // say it.
+                self.pause_watch = None;
+                self.pause_sent = (write == Write::PauseAll).then(Instant::now);
+            }
             Write::Configure { field, .. } => {
                 self.flow = ConfigFlow::InFlight(field);
                 // Whatever change goes out, "delete all" asked about quiet times as they were,
@@ -593,6 +743,9 @@ impl Actions {
         }
         self.out.remove(&slot);
         let mut said = said;
+        if write == Write::PauseAll {
+            said = self.pause_settled(ticket, said);
+        }
         if let Write::Configure { based_on, field } = write {
             if field == Field::Backends {
                 said = self.backends_settled(based_on, said);
@@ -621,8 +774,34 @@ impl Actions {
         true
     }
 
+    /// "Pause all" answered: one that said nothing is watched by the `Status` reads after it,
+    /// counted from now and timed from when it was pressed (`PauseWatch`); any other answer is
+    /// said as it is. With no press to time it from (this program lost track of it), it is said
+    /// as it was before, and the log says why.
+    fn pause_settled(&mut self, ticket: Ticket, said: Said) -> Said {
+        match (said, self.pause_sent.take()) {
+            (Said::Unconfirmed, Some(pressed)) => {
+                self.pause_watch = Some(PauseWatch::new(ticket, pressed));
+                Said::PauseWatching
+            }
+            (Said::Unconfirmed, None) => {
+                report::log(
+                    Write::PauseAll.thread(),
+                    &format!(
+                        "ticket {}: unconfirmed, and this console no longer holds when it was \
+                         pressed: not watched",
+                        ticket.0
+                    ),
+                );
+                Said::Unconfirmed
+            }
+            (said, _) => said,
+        }
+    }
+
     /// `write` of the card of the account `alias` pressed: a new ticket, unless one of that
-    /// account's is out. What it came to is, for now, that it is being sent.
+    /// account's is out. What it came to is, for now, that it is being sent; the reads watched for
+    /// a pause before it no longer say it.
     fn account_begin(&mut self, alias: &str, write: AccountWrite) -> Option<Ticket> {
         let slot = self.accounts.entry(alias.to_owned()).or_default();
         if slot.out.is_some() {
@@ -630,21 +809,33 @@ impl Actions {
         }
         self.issued += 1;
         let ticket = Ticket(self.issued);
-        slot.out = Some((ticket, write));
+        slot.out = Some((ticket, write, Instant::now()));
         slot.said = Some(AccountSaid::Sending(write));
+        slot.watch = None;
         Some(ticket)
     }
 
     /// An answer of the account `alias`'s press: whether `ticket` was the one out for it,
-    /// which is all that makes it count.
+    /// which is all that makes it count. A pause whose answer said nothing is watched by the
+    /// `Status` reads after it, counted from now and timed from when it was pressed
+    /// (`PauseWatch`).
     fn account_settle(&mut self, alias: &str, ticket: Ticket, said: AccountSaid) -> bool {
         let Some(slot) = self.accounts.get_mut(alias) else {
             return false;
         };
-        if slot.out.map(|(out, _)| out) != Some(ticket) {
+        let Some((out, write, pressed)) = slot.out else {
+            return false;
+        };
+        if out != ticket {
             return false;
         }
-        *slot = AccountSlot { out: None, said: Some(said) };
+        let (said, watch) = match (write, said) {
+            (AccountWrite::Pause, AccountSaid::Unconfirmed) => {
+                (AccountSaid::PauseWatching, Some(PauseWatch::new(ticket, pressed)))
+            }
+            (_, said) => (said, None),
+        };
+        *slot = AccountSlot { out: None, said: Some(said), watch };
         true
     }
 
@@ -739,6 +930,9 @@ impl Actions {
             self.rules_target = None;
         }
         self.out.clear();
+        // A pause watched is of the old epoch's reads, as its line is.
+        self.pause_sent = None;
+        self.pause_watch = None;
         self.confirming = None;
         self.flow = ConfigFlow::Idle;
         self.draft = None;
@@ -752,10 +946,11 @@ impl Actions {
         self.host_confirm = false;
         // The snapshots of this epoch are all to come.
         self.rows_behind = false;
-        // An account's card says only that its press was out; whatever else it said goes.
+        // An account's card says only that its press was out; whatever else it said goes, and so
+        // does a pause it watched.
         self.accounts.retain(|_, slot| slot.out.is_some());
         for slot in self.accounts.values_mut() {
-            *slot = AccountSlot { out: None, said: Some(AccountSaid::Restarted) };
+            *slot = AccountSlot { out: None, said: Some(AccountSaid::Restarted), watch: None };
         }
     }
 
@@ -968,10 +1163,16 @@ impl Actions {
     }
 
     /// A `Status` read that counts, landed at `now` with these `instances`. A confirmation is
-    /// of one pause, and goes with it. A line saying a press worked goes once `Status` says
-    /// otherwise: the reads begun before that press were let go, so this says someone changed
-    /// it since. Whether it shows an unconfirmed switch over: then the writes are to be counted
-    /// once more (`super::wrote`), so that the snapshot that judges it is read after this.
+    /// of one pause, and goes with it. A pause whose answer said nothing is watched by it
+    /// (`PauseWatch`), and its line says what the reads so far came to, this one's verdict over
+    /// an earlier one's, until a pause that holds, another party's pause there or the end of the
+    /// watch ends it (`PauseWatch::over`); after that, a read showing otherwise takes back a line
+    /// saying it did not hold or is still on its way. A line saying a press worked goes
+    /// once `Status` says otherwise: the reads begun before that press were let go, so this says
+    /// someone changed it since. So does one saying a pause was confirmed late, which is said only
+    /// once it holds, handed back: a read showing it gone after that says someone lifted it.
+    /// Whether it shows an unconfirmed switch over: then the writes are to be counted once more
+    /// (`super::wrote`), so that the snapshot that judges it is read after this.
     pub fn status_read(
         &mut self,
         global: Option<&PauseFact>,
@@ -981,22 +1182,82 @@ impl Actions {
         if self.confirming.as_ref() != global.map(|pause| &pause.target) {
             self.confirming = None;
         }
+        // "Pause all" whose answer said nothing, by the global pause this read shows.
+        let thread = Write::PauseAll.thread();
+        let seen = PauseSeen::of(global, CONSOLE_PAUSE_ALL);
+        let verdict = self
+            .pause_watch
+            .as_mut()
+            .map(|watch| watch.read(seen, now, GLOBAL_PAUSE_SETTLES, thread, None));
+        match verdict {
+            Some(PauseVerdict::Held) => {
+                self.said.insert(SaidAt::Scheduling, Said::PauseLate);
+            }
+            Some(PauseVerdict::NotHeld) => {
+                self.said.insert(SaidAt::Scheduling, Said::PauseNotHeld);
+            }
+            // The global pause has no stage, and is never shown on its way.
+            Some(PauseVerdict::Watching | PauseVerdict::StillStaging) => {
+                self.said.insert(SaidAt::Scheduling, Said::PauseWatching);
+            }
+            // Another party's global pause: the top bar says whose it is.
+            Some(PauseVerdict::Overtaken) => {
+                self.said.remove(&SaidAt::Scheduling);
+            }
+            None => {}
+        }
+        if let (Some(verdict), Some(watch)) = (verdict, self.pause_watch) {
+            if watch.over(verdict, now) {
+                self.pause_watch = None;
+            }
+        }
+        // "Did not hold" says no global pause holds now: once the watch is over, one that holds
+        // after all takes it back, as it does a lift's line.
         let overtaken = match self.said.get(&SaidAt::Scheduling) {
-            Some(Said::PauseApplied) => global.is_none(),
-            Some(Said::Resumed) => global.is_some(),
+            Some(Said::PauseApplied | Said::PauseLate) => global.is_none(),
+            Some(Said::Resumed | Said::PauseNotHeld) => global.is_some(),
             _ => false,
         };
         if overtaken {
             self.said.remove(&SaidAt::Scheduling);
         }
-        // So does an account card's, by the account's own pause.
+        // So does an account card's, by the account's own pause, which first says what came of a
+        // pause of the account whose answer said nothing.
+        let thread = AccountWrite::Pause.thread();
         for (alias, slot) in &mut self.accounts {
-            let paused = instances
+            let pause = instances
                 .iter()
-                .any(|instance| instance.alias == *alias && instance.pause.is_some());
+                .find(|instance| instance.alias == *alias)
+                .and_then(|instance| instance.pause.as_ref());
+            let seen = PauseSeen::of(pause, CONSOLE_PAUSE_ACCOUNT);
+            let verdict = slot.watch.as_mut().map(|watch| {
+                watch.read(seen, now, ACCOUNT_PAUSE_SETTLES, thread, Some(alias.as_str()))
+            });
+            match verdict {
+                Some(PauseVerdict::Held) => slot.said = Some(AccountSaid::PauseLate),
+                Some(PauseVerdict::NotHeld) => slot.said = Some(AccountSaid::PauseNotHeld),
+                Some(PauseVerdict::StillStaging) => {
+                    slot.said = Some(AccountSaid::PauseStillStaging);
+                }
+                Some(PauseVerdict::Watching) => slot.said = Some(AccountSaid::PauseWatching),
+                // Another party's pause of the account: its card says whose it is.
+                Some(PauseVerdict::Overtaken) => slot.said = None,
+                None => {}
+            }
+            if let (Some(verdict), Some(watch)) = (verdict, slot.watch) {
+                if watch.over(verdict, now) {
+                    slot.watch = None;
+                }
+            }
+            let paused = pause.is_some();
+            let released = matches!(pause.and_then(|pause| pause.stage), Some(PauseStage::Released));
+            // "Did not hold" says the account is not paused now, and "still pausing" that its pause
+            // is still on its way: once the watch is over, a read that shows otherwise takes either
+            // back, as one does a lift's line.
             let overtaken = match slot.said {
-                Some(AccountSaid::Paused) => !paused,
-                Some(AccountSaid::Resumed { .. }) => paused,
+                Some(AccountSaid::Paused | AccountSaid::PauseLate) => !paused,
+                Some(AccountSaid::Resumed { .. } | AccountSaid::PauseNotHeld) => paused,
+                Some(AccountSaid::PauseStillStaging) => !paused || released,
                 _ => false,
             };
             if overtaken {

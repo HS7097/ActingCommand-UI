@@ -96,7 +96,9 @@ use actingcommand_contract::{
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
     ScheduleCandidateEligibility, ScheduleDispatchState,
     ScheduleExplanationInstance, SchedulingPauseReason, SchedulingPauseScope,
-    CONFIG_PARAMETERS_FACT_PREFIX, MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
+    CONFIG_PARAMETERS_FACT_PREFIX, LEDGER_WRITER_REPLY_WAIT_MS,
+    MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, PLAYER_HOLD_CLOSE_ALLOWANCE_MS,
+    SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS,
 };
 use actingcommand_runtime_client::{
     RuntimeChannel, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
@@ -114,7 +116,7 @@ use actingcommand_runtime_config::{
 
 use super::{
     global_pause_fact, instance_pause_fact, runtime_connection, ClientFailure, NoConnection,
-    OnlineSource, PauseFact, RUNTIME_RESULT_UNEXPECTED,
+    OnlineSource, PauseFact, PauseStage, RUNTIME_RESULT_UNEXPECTED,
 };
 
 pub mod backends;
@@ -582,6 +584,140 @@ fn pause(root: &Path, scope: SchedulingPauseScope, reason: &str) -> PauseOutcome
                 PauseOutcome::Unconfirmed(failure)
             }
         }
+    }
+}
+
+/// The longest the Runtime takes, once it has one person's pause of one account
+/// ([`pause_account`]), to settle it: to hold it with the device handed back, or to lift its gate
+/// again after a stage failed (runtime-host `host/policy_dispatch.rs` 3118-3261, at 7b4705ff, the
+/// Runtime this console pins). It records the pauses first, which the ledger's writer answers
+/// within `LEDGER_WRITER_REPLY_WAIT_MS` (10 s; `policy_dispatch.rs` 3196-3208); its drain and its
+/// device's hand-back then both fail at the grace deadline, the drain timeout this console gives
+/// (`MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS`, 1 s) and the checkpoint grace
+/// (`SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS`, 30 s) after they start (`host/contained_task.rs`
+/// 1369-1389 and 11679-11695, `policy_dispatch.rs` 3405-3411); outside the multi-Nemu gate the
+/// hand-back closes the device's session, which no source bounds and the contract allows
+/// `PLAYER_HOLD_CLOSE_ALLOWANCE_MS` (30 s) for (`policy_dispatch.rs` 3351-3379); and a failed
+/// stage records the pauses once more as it lifts the gate (`host/scheduling_pause.rs` 232-252),
+/// within the same 10 s. 81 s in all. The locks it waits for on the way have no bound in the
+/// source either, so this bounds no pause: a pause a read shows on its way is watched past it
+/// ([`PAUSE_WATCH_LIMIT`]), and only one no read showed is taken as not held, and not before
+/// this long after its press ([`pause_verdict`]).
+pub const ACCOUNT_PAUSE_SETTLES: Duration = Duration::from_millis(
+    LEDGER_WRITER_REPLY_WAIT_MS
+        + MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS
+        + SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS
+        + PLAYER_HOLD_CLOSE_ALLOWANCE_MS
+        + LEDGER_WRITER_REPLY_WAIT_MS,
+);
+
+/// The same of one person's global pause ([`pause_global`]): it drains nothing, and holds once
+/// the pauses are recorded (`policy_dispatch.rs` 3139-3172), within `LEDGER_WRITER_REPLY_WAIT_MS`
+/// (10 s). Nothing lifts it again but a resume.
+pub const GLOBAL_PAUSE_SETTLES: Duration = Duration::from_millis(LEDGER_WRITER_REPLY_WAIT_MS);
+
+/// How many `Status` reads landed after the answer that said nothing are watched, at least, before
+/// a pause none of them showed is taken as not held ([`pause_verdict`]). Counted from that answer,
+/// not from the press: the client waits for a pause's receipt up to the drain timeout, the
+/// checkpoint grace and its io timeout (1 s, 30 s and the default 5 s; runtime-client `client.rs`
+/// 1802-1811, 6918-6925, 89 and 184), longer than a global pause takes to settle, so an answer that
+/// said nothing may land past [`GLOBAL_PAUSE_SETTLES`], with the pause not yet recorded. Each read
+/// counted was begun after that answer (the workbench lets go of a read begun before a write's
+/// answer), so three of them are three looks at the Runtime after it, past either time.
+pub const PAUSE_WATCH_READS: u32 = 3;
+
+/// The longest a pause whose answer said nothing is watched while the reads show it on its way,
+/// draining or handing its device back ([`PauseSeen::Staging`]): ten minutes from the press. The
+/// Runtime bounds the stages it times (81 s, [`ACCOUNT_PAUSE_SETTLES`]), but not the device
+/// session's close nor the locks on the way, and it moves such a pause on by itself, to held or
+/// lifted; one has been seen lifted 107 s after its press (UI-PF1). Ten minutes is over seven times
+/// the 81 s: a pause still on its way then is past anything the source or the console has seen,
+/// and it is no longer said to be watched, nor confirmed, but left to what the card shows.
+pub const PAUSE_WATCH_LIMIT: Duration = Duration::from_secs(10 * 60);
+
+/// What one `Status` shows of the scope of a pause whose answer said nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseSeen {
+    /// No pause holds there.
+    Absent,
+    /// An instance pause still draining its runs or handing its device back
+    /// ([`PauseStage::Draining`], [`PauseStage::Paused`]): a stage that fails lifts it again.
+    Staging,
+    /// A pause that holds: an instance pause with its device handed back
+    /// ([`PauseStage::Released`]), the stage after which the Runtime answers, or the global pause,
+    /// which has no stage.
+    Holds,
+    /// A pause another party set there, with a reason other than the one pressed: never this
+    /// press's, whatever its stage.
+    Other,
+}
+
+impl PauseSeen {
+    /// What `pause`, the pause of the scope as a `Status` reported it, shows of the pause pressed
+    /// with `reason` ([`CONSOLE_PAUSE_ALL`], [`CONSOLE_PAUSE_ACCOUNT`]).
+    pub fn of(pause: Option<&PauseFact>, reason: &str) -> Self {
+        match pause {
+            None => Self::Absent,
+            Some(pause) if pause.reason != reason => Self::Other,
+            Some(pause) => match pause.stage {
+                Some(PauseStage::Draining | PauseStage::Paused) => Self::Staging,
+                Some(PauseStage::Released) | None => Self::Holds,
+            },
+        }
+    }
+}
+
+/// What the `Status` reads after a pause whose answer said nothing come to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseVerdict {
+    /// Nothing yet: the next read is to be watched.
+    Watching,
+    /// The pause holds: confirmed late.
+    Held,
+    /// It does not hold.
+    NotHeld,
+    /// Still on its way at [`PAUSE_WATCH_LIMIT`]: neither held nor not, and left to the card.
+    StillStaging,
+    /// Another party's pause holds there: the press is not its, and the card says whose it is.
+    Overtaken,
+}
+
+/// The verdict of the reads after a pause whose answer said nothing, the newest showing `seen` of
+/// its scope: `shown` is whether an earlier one showed a pause there, `reads` how many reads have
+/// landed since that answer, the newest included, `watched` how long it is since the press, and
+/// `settles` how long the Runtime takes to settle such a pause ([`ACCOUNT_PAUSE_SETTLES`],
+/// [`GLOBAL_PAUSE_SETTLES`]). The stage says it, not a time:
+///
+/// - a pause that holds (handed back, or the global one) holds, confirmed late;
+/// - one on its way (draining or handing its device back) gets no verdict, the Runtime moving it
+///   on by itself, until [`PAUSE_WATCH_LIMIT`] from the press, when it is still on its way;
+/// - none, after a read showed one, was lifted again, a stage having failed: it did not hold;
+/// - none, and none shown yet, did not hold only once both [`PAUSE_WATCH_READS`] reads have
+///   landed since the answer and `settles` has passed since the press, the later of the two, or
+///   at [`PAUSE_WATCH_LIMIT`] from the press however few have;
+/// - another party's pause there overtakes the press: it is left to the card, which names it.
+///
+/// It is the verdict of every read, not of the first only: a later read that shows otherwise
+/// gives another, which the caller says instead.
+pub fn pause_verdict(
+    seen: PauseSeen,
+    shown: bool,
+    reads: u32,
+    watched: Duration,
+    settles: Duration,
+) -> PauseVerdict {
+    match seen {
+        PauseSeen::Other => PauseVerdict::Overtaken,
+        PauseSeen::Holds => PauseVerdict::Held,
+        PauseSeen::Staging if watched >= PAUSE_WATCH_LIMIT => PauseVerdict::StillStaging,
+        PauseSeen::Staging => PauseVerdict::Watching,
+        PauseSeen::Absent if shown => PauseVerdict::NotHeld,
+        // At the end of the watch, however few reads have landed: the watch ends on a verdict.
+        PauseSeen::Absent if watched >= PAUSE_WATCH_LIMIT => PauseVerdict::NotHeld,
+        PauseSeen::Absent if reads >= PAUSE_WATCH_READS && watched >= settles => {
+            PauseVerdict::NotHeld
+        }
+        PauseSeen::Absent => PauseVerdict::Watching,
     }
 }
 
@@ -1922,7 +2058,103 @@ fn dispatch_stage(state: ScheduleDispatchState) -> DispatchStage {
 
 #[cfg(test)]
 mod tests {
-    use super::lab_record_started;
+    use std::time::Duration;
+
+    use super::{
+        lab_record_started, pause_verdict, PauseSeen, PauseVerdict, PAUSE_WATCH_LIMIT,
+        PAUSE_WATCH_READS,
+    };
+
+    /// How long the Runtime takes to settle a pause, here: an account's.
+    const SETTLES: Duration = Duration::from_secs(81);
+    const SECOND: Duration = Duration::from_secs(1);
+
+    #[test]
+    fn a_pause_that_holds_holds_at_once() {
+        for shown in [false, true] {
+            for reads in [1, PAUSE_WATCH_READS, PAUSE_WATCH_READS * 10] {
+                for watched in [Duration::ZERO, SETTLES, PAUSE_WATCH_LIMIT * 2] {
+                    let verdict = pause_verdict(PauseSeen::Holds, shown, reads, watched, SETTLES);
+                    assert_eq!(verdict, PauseVerdict::Held, "{shown} {reads} {watched:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_pause_still_staging_gets_no_verdict_past_the_settling() {
+        for shown in [false, true] {
+            for reads in [1, PAUSE_WATCH_READS, PAUSE_WATCH_READS * 10] {
+                for watched in [Duration::ZERO, SETTLES, SETTLES * 2, PAUSE_WATCH_LIMIT - SECOND] {
+                    let verdict =
+                        pause_verdict(PauseSeen::Staging, shown, reads, watched, SETTLES);
+                    assert_eq!(verdict, PauseVerdict::Watching, "{shown} {reads} {watched:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_pause_does_not_hold_once_one_was_shown_or_at_the_end() {
+        // Shown before: lifted again, at once.
+        let verdict = pause_verdict(PauseSeen::Absent, true, 1, SECOND, SETTLES);
+        assert_eq!(verdict, PauseVerdict::NotHeld);
+        // Never shown: only with both the reads and the settling time behind.
+        let reads = PAUSE_WATCH_READS;
+        let verdict = pause_verdict(PauseSeen::Absent, false, reads, SETTLES - SECOND, SETTLES);
+        assert_eq!(verdict, PauseVerdict::Watching);
+        let verdict = pause_verdict(PauseSeen::Absent, false, reads, SETTLES, SETTLES);
+        assert_eq!(verdict, PauseVerdict::NotHeld);
+        // At the end of the watch, however few reads landed: the watch ends on a verdict.
+        let verdict = pause_verdict(PauseSeen::Absent, false, 1, PAUSE_WATCH_LIMIT, SETTLES);
+        assert_eq!(verdict, PauseVerdict::NotHeld);
+    }
+
+    #[test]
+    fn a_pause_staging_until_the_limit_is_still_staging_and_not_confirmed() {
+        for shown in [false, true] {
+            for watched in [PAUSE_WATCH_LIMIT, PAUSE_WATCH_LIMIT * 2] {
+                let verdict = pause_verdict(PauseSeen::Staging, shown, 200, watched, SETTLES);
+                assert_eq!(verdict, PauseVerdict::StillStaging, "{shown} {watched:?}");
+            }
+        }
+        // A read at the limit that shows it held, or gone, says that instead.
+        let verdict = pause_verdict(PauseSeen::Holds, true, 200, PAUSE_WATCH_LIMIT, SETTLES);
+        assert_eq!(verdict, PauseVerdict::Held);
+        let verdict = pause_verdict(PauseSeen::Absent, true, 200, PAUSE_WATCH_LIMIT, SETTLES);
+        assert_eq!(verdict, PauseVerdict::NotHeld);
+    }
+
+    #[test]
+    fn another_partys_pause_is_never_this_presss() {
+        for shown in [false, true] {
+            for reads in [1, PAUSE_WATCH_READS, PAUSE_WATCH_READS * 10] {
+                for watched in [Duration::ZERO, SETTLES, PAUSE_WATCH_LIMIT * 2] {
+                    let verdict = pause_verdict(PauseSeen::Other, shown, reads, watched, SETTLES);
+                    assert_eq!(verdict, PauseVerdict::Overtaken, "{shown} {reads} {watched:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_end_for_no_pause_counts_from_the_answer() {
+        // A global pause settles within 10 s, and its answer said nothing 36 s after the press:
+        // the reads after that answer are watched all the same.
+        let settles = Duration::from_secs(10);
+        for (reads, watched) in [(1, 39), (2, 42)] {
+            let watched = Duration::from_secs(watched);
+            let verdict = pause_verdict(PauseSeen::Absent, false, reads, watched, settles);
+            assert_eq!(verdict, PauseVerdict::Watching, "{reads}");
+        }
+        let watched = Duration::from_secs(45);
+        let verdict = pause_verdict(PauseSeen::Absent, false, PAUSE_WATCH_READS, watched, settles);
+        assert_eq!(verdict, PauseVerdict::NotHeld);
+        // Nor earlier than the settling time after the press, however many reads have landed.
+        let verdict =
+            pause_verdict(PauseSeen::Absent, false, PAUSE_WATCH_READS * 10, SECOND * 9, settles);
+        assert_eq!(verdict, PauseVerdict::Watching);
+    }
 
     #[test]
     fn a_recording_hold_gives_its_milliseconds() {
