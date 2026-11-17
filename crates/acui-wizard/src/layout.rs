@@ -236,8 +236,8 @@ mod tests {
 
     #[test]
     fn the_installed_layout_drops_the_packs_prefix_and_keeps_the_root() {
-        // The zip root of `actinglab package bundle` (Runtime contracts/package-reference.md:250-264)
-        // against the installed root (the same file, 720-753).
+        // The zip root of `actinglab package bundle` (Runtime contracts/package-reference.md:257-271)
+        // against the installed root (the same file, 807-822).
         let zip = names(&[
             "applications.json",
             "bundle.json",
