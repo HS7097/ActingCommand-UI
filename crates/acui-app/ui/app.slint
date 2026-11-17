@@ -3198,7 +3198,9 @@ export component WorkbenchWindow inherits Window {
         maximize-label: Strings.caption-maximize;
         restore-label: Strings.caption-restore;
         close-label: Strings.caption-close;
-        VerticalLayout {
+        // As tall as the window gives it, whatever its rows: the live view's frame is
+        // sized from its height.
+        window-layout := VerticalLayout {
             padding: 8px;
             spacing: 8px;
 
@@ -3533,50 +3535,83 @@ export component WorkbenchWindow inherits Window {
                         // (UI-3f1). The frame's size follows the window and the picture's
                         // proportions alone, never which of the rows round it show: as wide
                         // as the column, and as tall as that width at the picture's
-                        // proportions or as the column's height leaves once every row a run
-                        // shows is counted, whichever is less, and never less than its least.
-                        // What it leaves is at the column's foot. A row beyond those counted,
-                        // or the frame at its least, as in the smallest window at the largest
-                        // text, makes all of it scroll rather than squeeze the frame or cut
-                        // off the column's foot.
+                        // proportions or as the window's height leaves once the top bar at
+                        // its fullest and every row a run shows are counted, whichever is
+                        // less, and never less than its least. What it leaves is at the
+                        // column's foot. A row beyond those counted, a line over the top bar
+                        // or under it, or the frame at its least, as in the smallest window
+                        // at the largest text, makes all of it scroll rather than squeeze
+                        // the frame or cut off the column's foot.
                         right-card := Card {
                             horizontal-stretch: 1;
                             // A line of text at the body size and at the grey one: a little
-                            // over the system font's own line, about 1.33 times its size, so
-                            // the rows counted never come out taller than the count.
+                            // over the system font's own line, so the rows counted never come
+                            // out taller than the count. Arial's own, which Slint takes on
+                            // Windows, is about 1.15 times its size; Segoe UI's about 1.33.
                             property <length> body-line: Scale.body-font * 1.4;
                             property <length> grey-line: Scale.grey-font * 1.4;
                             // A SkinButton's height: the Aero face's, else the std button's,
                             // at least 32px and its text's line with 5px over and under it.
                             property <length> button-height: Look.aero ? 23px * Scale.factor
                                 : max(32px, self.body-line + 10px);
+                            // A SkinStepper's height, in either skin: its two SkinButtons'
+                            // and the std field's between them, at least 32px and its text's
+                            // line.
+                            property <length> stepper-height: max(self.button-height,
+                                max(32px, self.body-line));
+                            // The top bar at its fullest as it is usually seen, each row as
+                            // tall as the constants above make it, never as tall as it is now:
+                            // the lamp, the status and the buttons; the performance presets,
+                            // each choice as tall as a tab, and "back to the file's setting";
+                            // the one line that says which is in effect; the concurrent runs,
+                            // their stepper and buttons; and the bar's 8px over and under them
+                            // and the 6px between.
+                            property <length> top-bar-height: 8px
+                                + max(self.button-height, self.body-line)
+                                + 6px + max(Scale.row + 6px, self.button-height)
+                                + 6px + self.body-line
+                                + 6px + max(self.stepper-height, self.button-height)
+                                + 8px;
+                            // The card's height under that top bar, from the window's own
+                            // layout, as tall as the window gives it whatever its rows: less
+                            // its 8px over and under and the 8px between the bar and the card.
+                            // Neither the lines under the top bar, what the last request came
+                            // to and the like, nor the one over it, why the install is wrong,
+                            // is counted: while one shows, the card is that much shorter and
+                            // the column scrolls, the frame keeping its size.
+                            property <length> steady-height: window-layout.height - 8px
+                                - self.top-bar-height - 8px - 8px;
                             // What the frame leaves the rest of the live view: the rows it
                             // has while a run is on, each as tall as the constants above make
                             // it, never as tall as it is now, which would move the frame again.
                             // The tabs; the check, with "auto rules" at its end; the emulator,
                             // the game and "stop this run"; one line of why the buttons are
                             // off; under the frame what took it, the refresh and in grey what a
-                            // refresh costs; and the 6px between the column's twelve items,
-                            // its notes at the top and the room at its foot among them.
+                            // refresh costs, on two lines, as it wraps in English at the larger
+                            // text sizes; and the 6px between the column's twelve items, its
+                            // notes at the top and the room at its foot among them.
                             property <length> frame-reserve: (Scale.row + 6px)
                                 + max(self.button-height, Scale.row + 6px)
                                 + 3 * self.button-height
                                 + self.body-line
                                 + self.grey-line
                                 + self.button-height
-                                + self.grey-line
+                                + 2 * self.grey-line
                                 + 11 * 6px;
                             // Height over width, 16:9 until a picture has shown. The last
                             // picture's stays while none shows, so the frame keeps its size.
                             property <float> frame-ratio: root.picture-width > 0 && root.picture-height > 0
                                 ? root.picture-height / root.picture-width : 9 / 16;
-                            // The card's own size, not the scroll view's or the frame's, which
-                            // turn on whether the column scrolls, and so on this height: less
-                            // the column's padding, 12px a side and 10px over and under, and
-                            // across less the 14px of a scroll bar as well.
+                            // Across, the card's width, which turns on the left column's
+                            // alone, less the column's 12px a side: the scroll view's bar lies
+                            // over what it scrolls and takes none of its width. Down, the
+                            // steady height less the column's 10px over and under and what
+                            // the frame leaves the rest. Neither is the scroll view's size or
+                            // the frame's, which turn on whether the column scrolls, and so
+                            // on this height.
                             property <length> frame-height: max(160px,
-                                min((self.width - 24px - 14px) * self.frame-ratio,
-                                    self.height - 20px - self.frame-reserve));
+                                min((self.width - 24px) * self.frame-ratio,
+                                    self.steady-height - 20px - self.frame-reserve));
                             // As tall as the card, or as the least all of it needs, whichever
                             // is taller: a scroll view's own default.
                             ScrollView {
