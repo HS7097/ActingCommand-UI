@@ -25,6 +25,7 @@ pub mod config;
 pub mod console;
 pub mod digest;
 pub mod engine;
+pub mod key_salt;
 pub mod layout;
 pub mod log;
 pub mod manifest;
@@ -38,5 +39,5 @@ pub mod set;
 pub mod text;
 pub mod winpath;
 
-pub use engine::{cleanup, install, Done, Event, Failure, Left, Request, Step};
+pub use engine::{cleanup, install, pre_lay_tools, Done, Event, Failure, Left, PreLaid, PreLayFailure, Request, Step};
 pub use text::{Lang, Said};

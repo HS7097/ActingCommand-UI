@@ -6,6 +6,15 @@
 //! The failure carries what the install left that a person stops or removes first ([`Left`],
 //! [`cleanup`]).
 //!
+//! One thing is written before the install, and only for it: the Tools, laid into `<root>\tools`
+//! for the phone page, whose device bridge (the root's own adb and Lab, the very ones the Runtime
+//! will use) runs before "Install" ([`pre_lay_tools`]). An install whose request says so takes
+//! them as its own ([`Request::pre_laid`]): its checks accept a root that holds that folder alone,
+//! each file of it checked against the set before anything else is written; step 2 checks them
+//! again and writes them no more; the log carries what was said when they were laid, at the time
+//! it was said; and a failure counts them as written and names where they stay
+//! ([`Left::pre_laid_tools`]). Without it, nothing changes: the root must be new or empty.
+//!
 //! The order departs from the design in two places:
 //!
 //! - With instances and the first-start pause, the Runtime first starts with the same
@@ -37,6 +46,7 @@
 //! its whole stdout (up to 64 Ki characters) on a line of its own, so that a refusal's rows are
 //! in the log and not only their count.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -50,15 +60,17 @@ use crate::config::{
 };
 use crate::console;
 use crate::digest::sha256_file;
-use crate::log::InstallLog;
-use crate::manifest::{Program, MANIFEST_FILE};
+use crate::log::{unix_ms, InstallLog};
+use crate::manifest::{ManifestFile, Program, MANIFEST_FILE};
 use crate::mumu;
 use crate::occupancy;
 use crate::plan::{plan_problems, Plan};
 use crate::platform;
-use crate::root::{check_root, text_issues};
+use crate::root::{check_root, check_root_beside_tools, text_issues, RootIssue};
 use crate::runtime::{self, FIRST_START_REASON};
-use crate::set::{verify_set, PlacedFile, VerifiedSet, DIRECTML_LIBRARY, LICENSES_DIR, VISION_LICENSES_DIR};
+use crate::set::{
+    verify_set, PlacedFile, VerifiedProgram, VerifiedSet, DIRECTML_LIBRARY, LICENSES_DIR, VISION_LICENSES_DIR,
+};
 use crate::text::{Lang, Said};
 use crate::winpath::{last_segment, strip_verbatim};
 
@@ -180,13 +192,18 @@ pub struct Left {
     pub watchdog: bool,
     /// The shortcuts the wizard created.
     pub shortcuts: Vec<PathBuf>,
+    /// Where the Tools the wizard laid before the install stay (`<root>\tools`,
+    /// [`pre_lay_tools`]), when the install took them.
+    pub pre_laid_tools: Option<PathBuf>,
 }
 
 /// What a person does about what a failed install left, in order, each with the command or the
 /// button that does it: stop the Runtime it started (the console's "Request Shutdown", or
 /// `actingctl request-shutdown`), or, when the wizard closed it itself, that there is none to
 /// stop; remove the watchdog task it registered (`actingctl watchdog uninstall`), delete the
-/// shortcuts it created; then delete the folder. Only what the install did is named.
+/// shortcuts it created; where the Tools it laid before the install stay, with what keeps their
+/// folder from being deleted (the adb server the phone page's adb may have left running); then
+/// delete the folder. Only what the install did is named.
 pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
     let root = strip_verbatim(&root.to_string_lossy()).trim_end_matches(['\\', '/']).to_owned();
     let actingctl = format!("\"{root}\\runtime\\actingctl.exe\"");
@@ -249,6 +266,13 @@ pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
             format!("Delete the shortcuts the wizard created: {}.", list.join(", ")),
         ));
     }
+    if let Some(tools) = &left.pre_laid_tools {
+        let tools = strip_verbatim(&tools.to_string_lossy());
+        steps.push(Said::new(
+            format!("向导在开始安装之前为手机页先铺的 Tools 工具（adb 和 Lab 在里面）留在 {tools}。删的时候如果提示文件被占用，是里面的 adb 还在后台开着：重启电脑以后再删。"),
+            format!("The Tools the wizard laid for the phone page before the install (adb and the Lab among them) stay in {tools}. Should deleting them say a file is in use, the adb in them still runs in the background: restart the computer, then delete them."),
+        ));
+    }
     steps.push(if steps.is_empty() {
         Said::new(
             format!("可以删除整个 {root} 文件夹，再重新运行向导。"),
@@ -307,6 +331,249 @@ pub struct Request {
     pub set_dir: PathBuf,
     pub root: PathBuf,
     pub plan: Plan,
+    /// The Tools [`pre_lay_tools`] laid into `root` before the install, which the install takes
+    /// as its own (see the module's description); `None`: the root must be new or empty.
+    pub pre_laid: Option<PreLaid>,
+}
+
+/// The Tools laid into `<root>\tools` before the install ([`pre_lay_tools`]).
+#[derive(Debug, Clone)]
+pub struct PreLaid {
+    /// The root they were laid into.
+    pub root: PathBuf,
+    /// `<root>\tools`.
+    pub dir: PathBuf,
+    /// The files laid, the manifest not counted (as step 2 counts them).
+    pub files: usize,
+    /// Their bytes.
+    pub bytes: u64,
+    /// The lines the install log is to carry, each with the time it was said (milliseconds
+    /// since the Unix epoch): the log opens with the install, which writes them first.
+    pub lines: Vec<(u128, String)>,
+}
+
+/// Why [`pre_lay_tools`] stopped, and what it left; nothing is deleted.
+#[derive(Debug, Clone)]
+pub struct PreLayFailure {
+    pub reason: Said,
+    /// Whether anything was written: the root folder, `<root>\tools`, files in it.
+    pub wrote: bool,
+    /// `<root>\tools`, where whatever was laid stays.
+    pub dir: PathBuf,
+}
+
+/// What [`pre_lay_tools`] says as it goes: each line also kept, stamped, for the install log.
+struct Told<'a> {
+    report: &'a mut dyn FnMut(Event),
+    lines: Vec<(u128, String)>,
+}
+
+impl Told<'_> {
+    fn say(&mut self, said: Said) {
+        self.lines.push((unix_ms(), said.to_string()));
+        (self.report)(Event::Line(said));
+    }
+
+    fn plain(&mut self, said: Said) {
+        (self.report)(Event::Plain(said));
+    }
+
+    fn bytes(&mut self, done: u64, total: u64) {
+        (self.report)(Event::Bytes { done, total });
+    }
+}
+
+/// Lays the Tools of the checked `set` into `<root>\tools` before the install: the one write
+/// before "Install", for the phone page (see the module's description). The root must be one
+/// the install could take, new or empty ([`check_root`], with room for the Tools). The Tools zip
+/// is checked once more against the set (the set's folder is not the wizard's, and its check
+/// was a while ago); then every file the Tools lay ([`Program::lays`]: each of them) is unpacked
+/// as a new file and read back against its manifest's size and SHA-256, as step 2 lays them, and
+/// the manifest after them. `report` hears each line (kept for the log in [`PreLaid::lines`]),
+/// the same news in a person's words ([`Event::Plain`]) and the bytes laid. A failure says what
+/// it left.
+pub fn pre_lay_tools(set: &VerifiedSet, root: &Path, report: &mut dyn FnMut(Event)) -> Result<PreLaid, PreLayFailure> {
+    let dir = root.join(Program::Tools.dir());
+    let mut told = Told { report, lines: Vec::new() };
+    let mut wrote = false;
+    match lay_tools_early(set, root, &dir, &mut told, &mut wrote) {
+        Ok((files, bytes)) => Ok(PreLaid {
+            root: root.to_path_buf(),
+            dir,
+            files,
+            bytes,
+            lines: told.lines,
+        }),
+        Err(reason) => Err(PreLayFailure { reason, wrote, dir }),
+    }
+}
+
+/// [`pre_lay_tools`]'s work: the files and bytes laid; `wrote` set once anything is written.
+fn lay_tools_early(
+    set: &VerifiedSet,
+    root: &Path,
+    dir: &Path,
+    told: &mut Told<'_>,
+    wrote: &mut bool,
+) -> Result<(usize, u64), Said> {
+    let verified = set.program(Program::Tools);
+    told.plain(Said::new("正在把设备桥（adb 和 Lab）铺进安装位置……", "Laying the device bridge (adb and the Lab) into the install folder…"));
+    told.say(Said::new(
+        "开始安装之前先铺 Tools 工具（手机页的设备桥要用）",
+        "the Tools laid before the install (the phone page's device bridge needs them)",
+    )
+    .with(format!("{} → {}", verified.zip.display(), dir.display())));
+    let issues = check_root(root, verified.bytes);
+    if !issues.is_empty() {
+        return Err(joined(issues.iter().map(RootIssue::said).collect()));
+    }
+    let entry = &set.set.runtime.tools_zip;
+    let (sha256, size) = sha256_file(&verified.zip, &mut |_: u64| {})
+        .map_err(|error| io_said("读不出 Tools zip", "the Tools zip cannot be read", &verified.zip, error))?;
+    if size != entry.size || !sha256.eq_ignore_ascii_case(&entry.sha256) {
+        return Err(Said::new(
+            "Tools zip 与安装集不符（核对之后被改过）",
+            "the Tools zip does not match the install set (it changed after the check)",
+        )
+        .with(format!("{}: expected {} bytes {}, found {size} bytes {sha256}", verified.zip.display(), entry.size, entry.sha256)));
+    }
+    told.say(Said::new("Tools zip 铺之前又核了一次 SHA-256", "the Tools zip's SHA-256 checked again before it is laid")
+        .with(format!("{} {sha256}", entry.file)));
+    let existed = root.exists();
+    fs::create_dir_all(root).map_err(|error| io_said("建不了安装文件夹", "the install folder cannot be created", root, error))?;
+    *wrote |= !existed;
+    fs::create_dir(dir).map_err(|error| io_said("建不了文件夹", "the folder cannot be created", dir, error))?;
+    *wrote = true;
+    let mut archive = Archive::open(&verified.zip)?;
+    let mut done = 0u64;
+    let mut count = 0usize;
+    for file in &verified.manifest.files {
+        if !Program::Tools.lays(&file.path) {
+            told.say(Said::new("不放（只在 A/B 安装里用）", "not laid (A/B installations only)").with(&file.path));
+            continue;
+        }
+        done += lay_file(&mut archive, file, &under(dir, &file.path))?;
+        count += 1;
+        told.bytes(done, verified.bytes);
+    }
+    archive.extract(MANIFEST_FILE, &dir.join(MANIFEST_FILE))?;
+    told.say(Said::new("Tools 工具已在开始安装之前铺好并逐个核对", "the Tools laid out before the install and checked").with(format!(
+        "{} ({count} files)",
+        dir.display()
+    )));
+    told.plain(Said::new("已铺好：设备桥（adb 和 Lab）", "Laid out: the device bridge (adb and the Lab)"));
+    Ok((count, done))
+}
+
+/// What one entry below a folder is ([`entries_below`]).
+enum Found {
+    File,
+    Folder,
+    /// A link of any kind (a symbolic link, a junction), or what is neither file nor folder.
+    Other,
+}
+
+/// Every entry below `dir`, each with its path relative to it (`/`-separated) and its own path;
+/// a link is never followed.
+fn entries_below(dir: &Path) -> Result<Vec<(String, PathBuf, Found)>, Said> {
+    let unreadable = |path: &Path, error: io::Error| io_said("读不出文件夹", "the folder cannot be read", path, error);
+    let mut found = Vec::new();
+    let mut pending = vec![(String::new(), dir.to_path_buf())];
+    while let Some((prefix, folder)) = pending.pop() {
+        for entry in fs::read_dir(&folder).map_err(|error| unreadable(&folder, error))? {
+            let entry = entry.map_err(|error| unreadable(&folder, error))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let relative = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|error| unreadable(&path, error))?;
+            if kind.is_dir() {
+                pending.push((relative.clone(), path.clone()));
+                found.push((relative, path, Found::Folder));
+            } else if kind.is_file() {
+                found.push((relative, path, Found::File));
+            } else {
+                found.push((relative, path, Found::Other));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Checks that `dir` holds the Tools of `verified` exactly as step 2 lays them, the ones
+/// [`pre_lay_tools`] laid: each file the Tools lay, of its manifest's size and SHA-256, the
+/// manifest as the zip holds it, and nothing else (no other file, no folder that holds none of
+/// them, no link); names compared as Windows compares them. Returns how many files and bytes,
+/// the manifest not counted; a problem names the file.
+fn laid_tools(dir: &Path, verified: &VerifiedProgram) -> Result<(usize, u64), Said> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => {
+            return Err(Said::new("先铺的 tools 不是文件夹", "the tools laid before the install are no folder").with(dir.display()))
+        }
+        Err(error) => {
+            return Err(io_said("先铺的 tools 不在了", "the tools laid before the install are not there", dir, error))
+        }
+    }
+    // Each file expected, by its name as Windows compares it: the manifest's path, and its file
+    // (`None` for the manifest itself).
+    let mut expected: BTreeMap<String, (&str, Option<&ManifestFile>)> = verified
+        .manifest
+        .files
+        .iter()
+        .filter(|file| verified.program.lays(&file.path))
+        .map(|file| (file.path.to_ascii_lowercase(), (file.path.as_str(), Some(file))))
+        .collect();
+    expected.insert(MANIFEST_FILE.to_ascii_lowercase(), (MANIFEST_FILE, None));
+    let folders: BTreeSet<String> = expected
+        .keys()
+        .flat_map(|path| path.match_indices('/').map(|(at, _)| path[..at].to_owned()).collect::<Vec<_>>())
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    for (relative, path, found) in entries_below(dir)? {
+        let key = relative.to_ascii_lowercase();
+        let file = match found {
+            Found::Folder if folders.contains(&key) => continue,
+            Found::File if expected.contains_key(&key) && seen.insert(key.clone()) => expected[&key].1,
+            _ => {
+                return Err(Said::new(
+                    "先铺的 tools 里多出了清单没有的东西",
+                    "the tools laid before the install hold something their manifest does not list",
+                )
+                .with(path.display()))
+            }
+        };
+        let (sha256, size) = sha256_file(&path, &mut |_: u64| {})
+            .map_err(|error| io_said("读不出先铺的文件", "a file laid before the install cannot be read", &path, error))?;
+        let (want_size, want_sha256) = match file {
+            Some(file) => (file.size_bytes, file.sha256.clone()),
+            // The manifest lists no digest of its own: the zip's entry is the one laid.
+            None => {
+                let (zip_sha256, zip_size) = Archive::open(&verified.zip)?.hash(MANIFEST_FILE)?;
+                (zip_size, zip_sha256)
+            }
+        };
+        if size != want_size || !sha256.eq_ignore_ascii_case(&want_sha256) {
+            return Err(Said::new(
+                "先铺的 tools 里的文件与清单不符",
+                "a file of the tools laid before the install does not match the manifest",
+            )
+            .with(format!("{}: expected {want_size} bytes {want_sha256}, found {size} bytes {sha256}", path.display())));
+        }
+        if file.is_some() {
+            count += 1;
+            bytes += size;
+        }
+    }
+    if let Some((_, (missing, _))) = expected.iter().find(|(key, _)| !seen.contains(*key)) {
+        return Err(Said::new(
+            "先铺的 tools 少了清单列出的文件",
+            "the tools laid before the install lack a file their manifest lists",
+        )
+        .with(under(dir, missing).display()));
+    }
+    Ok((count, bytes))
 }
 
 /// A finished install.
@@ -510,6 +777,18 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         left: Left::default(),
         summary: Vec::new(),
     };
+    if let Some(pre_laid) = &request.pre_laid {
+        // Written before the install began: the failure counts it and says where it stays, and
+        // the log, once open, carries first what was said as it was laid.
+        run.wrote = true;
+        run.left.pre_laid_tools = Some(pre_laid.dir.clone());
+        for (at, line) in &pre_laid.lines {
+            if let Err(error) = run.log.earlier(*at, line) {
+                let reason = Said::new("日志写不进去", "the log cannot be written").with(error);
+                return Err(run.fail(None, reason));
+            }
+        }
+    }
     let checked = match check(request, &mut run) {
         Ok(checked) => checked,
         Err(reason) => return Err(run.fail(None, reason)),
@@ -523,7 +802,7 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     let aliases: Vec<String> = checked.bound.iter().map(|bound| bound.alias.clone()).collect();
 
     run.step(Step::Prepare, |run| prepare(run))?;
-    run.step(Step::Programs, |run| lay_programs(run, &checked.set))?;
+    run.step(Step::Programs, |run| lay_programs(run, &checked.set, request.pre_laid.is_some()))?;
     run.step(Step::Vision, |run| place_vision(run, &checked.set))?;
     run.step(Step::Packs, |run| lay_packs(run, &checked.set, &plan.games))?;
     run.step(Step::PackCheck, |run| check_packs(run, &plan.games))?;
@@ -599,7 +878,8 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     })
 }
 
-/// The checks before anything is written.
+/// The checks before anything is written (but the Tools laid before the install,
+/// [`Request::pre_laid`]).
 fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
     let plan = &request.plan;
     run.say(Said::new("安装开始", "install begins").with(format!(
@@ -610,6 +890,25 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
     let issues = text_issues(&request.root.to_string_lossy());
     if !issues.is_empty() {
         return Err(joined(issues.iter().map(|issue| issue.said()).collect()));
+    }
+    if let Some(pre_laid) = &request.pre_laid {
+        if pre_laid.root != request.root {
+            return Err(Said::new(
+                "先铺的 Tools 在另一个文件夹里，不是这次要装的位置",
+                "the Tools laid before the install are in another folder than this install's",
+            )
+            .with(format!("{}, {}", pre_laid.dir.display(), request.root.display())));
+        }
+    }
+    // A phone's instance needs its bind between the configuration and its check, which this
+    // version does not run: refused before anything, never left out.
+    if !plan.handsets.is_empty() {
+        let aliases: Vec<&str> = plan.handsets.iter().map(|handset| handset.alias.as_str()).collect();
+        return Err(Said::new(
+            "这一版向导还不会装手机实例：绑定手机的那一步还没有做",
+            "this version of the wizard installs no phone's instance yet: the step that binds a phone is not there yet",
+        )
+        .with(aliases.join(", ")));
     }
     let set = {
         let report = &mut *run.report;
@@ -632,9 +931,38 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
     if !problems.is_empty() {
         return Err(joined(problems));
     }
-    let issues = check_root(&request.root, set.space_needed(&plan.games));
+    let needed = set.space_needed(&plan.games);
+    let tools = set.program(Program::Tools);
+    let issues = match &request.pre_laid {
+        None => check_root(&request.root, needed),
+        // The Tools laid before the install are on the disk already: one copy less to find room
+        // for.
+        Some(_) => check_root_beside_tools(&request.root, needed.saturating_sub(tools.bytes)),
+    };
     if !issues.is_empty() {
-        return Err(joined(issues.iter().map(|issue| issue.said()).collect()));
+        let pre_laid = request.pre_laid.is_some();
+        return Err(joined(
+            issues
+                .iter()
+                .map(|issue| match issue {
+                    RootIssue::NotEmpty if pre_laid => Said::new(
+                        "安装位置里除了向导在开始安装之前先铺的 tools，还有别的东西",
+                        "the install folder holds something besides the tools the wizard laid before the install",
+                    ),
+                    issue => issue.said(),
+                })
+                .collect(),
+        ));
+    }
+    if request.pre_laid.is_some() {
+        let dir = request.root.join(Program::Tools.dir());
+        run.plain(Said::new("正在核对开始安装之前先铺的 Tools……", "Checking the Tools laid before the install…"));
+        let (count, _) = laid_tools(&dir, tools)?;
+        run.say(Said::new(
+            "安装位置里只有向导在开始安装之前先铺的 Tools，逐个核过，都与安装集一致",
+            "the install folder holds only the Tools the wizard laid before the install, each file checked against the install set",
+        )
+        .with(format!("{} ({count} files)", dir.display())))?;
     }
     run.say(Said::new("安装位置可用", "the install folder is usable").with(request.root.display()))?;
     run.plain(Said::new("已核对：安装位置可以用", "Checked: the install folder can be used"));
@@ -742,13 +1070,47 @@ fn prepare(run: &mut Run<'_>) -> Result<Said, Said> {
     Ok(Said::new("已建", "created").with(format!("{}, state, packages; log {}", root.display(), log.display())))
 }
 
-fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
+/// The manifest's `file` of `archive` unpacked to `target`, a new file, then read back against
+/// the manifest's size and SHA-256; returns its size.
+fn lay_file(archive: &mut Archive, file: &ManifestFile, target: &Path) -> Result<u64, Said> {
+    let written = archive.extract(&file.path, target)?;
+    let (sha256, size) = sha256_file(target, &mut |_: u64| {})
+        .map_err(|error| io_said("读不回刚写的文件", "the file just written cannot be read back", target, error))?;
+    if written != file.size_bytes || size != file.size_bytes || !sha256.eq_ignore_ascii_case(&file.sha256) {
+        return Err(Said::new("写出的文件与清单不符", "the file written does not match the manifest").with(format!(
+            "{}: expected {} bytes {}, found {size} bytes {sha256}",
+            target.display(),
+            file.size_bytes,
+            file.sha256
+        )));
+    }
+    Ok(size)
+}
+
+/// Step 2: each program's files laid into its folder and read back. With `pre_laid`, the Tools
+/// are there already ([`pre_lay_tools`]): checked again file by file ([`laid_tools`]) and written
+/// no more; a file that differs, one too many or one missing fails the step, named.
+fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet, pre_laid: bool) -> Result<Said, Said> {
     let total: u64 = Program::ALL.iter().map(|program| set.program(*program).bytes).sum();
     let mut done = 0u64;
     let mut counts = Vec::new();
     for program in Program::ALL {
         let verified = set.program(program);
         let dir = run.root.join(program.dir());
+        if pre_laid && program == Program::Tools {
+            let (count, bytes) = laid_tools(&dir, verified)?;
+            done += bytes;
+            run.bytes(done, total);
+            run.say(
+                Said::new(
+                    "Tools 工具已在开始安装之前先铺，逐个核过，不再写",
+                    "the Tools were laid before the install: each file checked again, none written again",
+                )
+                .with(format!("{} ({count} files)", dir.display())),
+            )?;
+            counts.push(format!("{} {count} (laid before the install, checked)", program.dir()));
+            continue;
+        }
         fs::create_dir(&dir).map_err(|error| io_said("建不了文件夹", "the folder cannot be created", &dir, error))?;
         let mut archive = Archive::open(&verified.zip)?;
         let mut count = 0usize;
@@ -757,19 +1119,7 @@ fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
                 run.say(Said::new("不放（只在 A/B 安装里用）", "not laid (A/B installations only)").with(&file.path))?;
                 continue;
             }
-            let target = under(&dir, &file.path);
-            let written = archive.extract(&file.path, &target)?;
-            let (sha256, size) = sha256_file(&target, &mut |_: u64| {})
-                .map_err(|error| io_said("读不回刚写的文件", "the file just written cannot be read back", &target, error))?;
-            if written != file.size_bytes || size != file.size_bytes || !sha256.eq_ignore_ascii_case(&file.sha256) {
-                return Err(Said::new("写出的文件与清单不符", "the file written does not match the manifest").with(format!(
-                    "{}: expected {} bytes {}, found {size} bytes {sha256}",
-                    target.display(),
-                    file.size_bytes,
-                    file.sha256
-                )));
-            }
-            done += size;
+            done += lay_file(&mut archive, file, &under(&dir, &file.path))?;
             count += 1;
             run.bytes(done, total);
         }
@@ -1322,6 +1672,7 @@ mod tests {
                 pause: Pause::Held,
                 watchdog: true,
                 shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk"), PathBuf::from(r"X:\Menu\b.lnk")],
+                pre_laid_tools: None,
             },
         );
         assert_eq!(all.len(), 4);

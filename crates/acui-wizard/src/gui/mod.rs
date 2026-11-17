@@ -1183,7 +1183,8 @@ impl App {
             let Some(set_dir) = state.set_dir.clone() else {
                 return;
             };
-            let request = Request { set_dir, root: state.root(), plan: plan_of(&state) };
+            // No page lays anything before the install yet (the phone page is to come).
+            let request = Request { set_dir, root: state.root(), plan: plan_of(&state), pre_laid: None };
             state.install = InstallState::Running;
             state.marks = vec![StepMark::Waiting; Step::ALL.len()];
             state.current = None;
@@ -1736,6 +1737,7 @@ fn plan_of(state: &State) -> Plan {
         games: state.chosen_games().into_iter().map(|game| game.game).collect(),
         mumu_root: if instances.is_empty() { None } else { state.mumu_root() },
         instances,
+        handsets: Vec::new(),
         options: state.options.clone(),
     }
 }

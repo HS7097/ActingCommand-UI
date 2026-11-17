@@ -106,10 +106,15 @@ pub const RUN_ACTIVITIES: [&str; 3] = ["policy_run", "direct_run", "host_run"];
 /// One program's answer.
 #[derive(Debug, Clone)]
 pub struct Answer {
+    /// The command line as the log shows it ([`Spec::text`]: a secret argument, the run's key
+    /// salt, written `<redacted>`).
     pub command: String,
     pub code: Option<i32>,
     pub line: Option<Value>,
     pub outcome: child::Outcome,
+    /// Both streams as [`child::run`] hands them over: a secret argument the program repeated
+    /// is written `<redacted>` there too, so neither [`Answer::reason`] nor
+    /// [`Answer::log_stdout`] carries one.
     pub stdout: String,
     pub stderr: String,
 }

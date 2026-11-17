@@ -21,6 +21,17 @@
 //!   `application_identity_missing`), `touch_backend` and `capture_backend` (required, never
 //!   `auto`), `start_emulator` only when true (discovery bindings only); no `adb_path`: the
 //!   root's own `tools\platform-tools\adb.exe` is used;
+//! - a phone's instance ([`HandsetInstance`], an Android phone over USB; Runtime
+//!   `contracts/device-binding.md`, `apps/actingd/src/config/device_binding.rs`), after the
+//!   emulators': `alias` (at most [`HANDSET_ALIAS_LIMIT`] bytes besides the rules above),
+//!   `instance_id`, `device` `{"kind": "handset", "transport": "usb"}`, `application_id` (required
+//!   for a phone too, `application_identity_missing`; from the game's server, as an emulator's),
+//!   `touch_backend` and `capture_backend` written out (a phone's have no default and are never
+//!   `auto`: `touch_backend_invalid`, `capture_backend_must_be_explicit`). It has no `serial`,
+//!   `host`, `port`, `connect`, `instance_index`, `instance_name` or `nemu_app_index`
+//!   (`device_config_invalid`): the phone's serial is only in the state root's private binding
+//!   file, which the Lab's `devices bind` writes. No `start_emulator` (a phone has no discovery
+//!   key to start), no `adb_path`;
 //! - with instances, `policy` in composer mode (no `catalog`): `facts` with one row per alias
 //!   (`instance_id` the alias, `server_id`, `game_id`, `host_id` `local`, `available`,
 //!   `capability_operation_ids` `["operation.package.run"]`, the entry operation every composed
@@ -56,6 +67,21 @@ pub const CAPTURE_BACKENDS: [&str; 3] = ["adb", "droidcast_raw", "nemu_ipc"];
 /// Today's production pair (the same table: "Nemu capture beside any touch backend is today's
 /// production"), the wizard's default.
 pub const DEFAULT_BACKEND: &str = "nemu_ipc";
+/// The touch and capture backends a phone takes (Runtime `crates/device/src/touch.rs` and
+/// `capture.rs`: no Nemu and no DroidCast; `scrcpy` is a phone's alone).
+pub const HANDSET_TOUCH_BACKENDS: [&str; 3] = ["adb_shell_input", "maatouch", "minitouch"];
+pub const HANDSET_CAPTURE_BACKENDS: [&str; 2] = ["adb", "scrcpy"];
+/// The wizard's pair for a phone, the pair of the Runtime's own example
+/// (`contracts/device-binding.md`); capture may be `scrcpy` instead.
+pub const HANDSET_TOUCH_DEFAULT: &str = "adb_shell_input";
+pub const HANDSET_CAPTURE_DEFAULT: &str = "adb";
+/// The most bytes a phone's alias may take (Runtime `apps/actingd/src/config/device_binding.rs`,
+/// `device_config_invalid`); a game's own limit may be smaller (`alias`).
+pub const HANDSET_ALIAS_LIMIT: usize = 248;
+/// A phone's `device` member: its kind, and USB, the one way a phone is reached today (`tcp` is
+/// refused).
+pub const HANDSET_KIND: &str = "handset";
+pub const HANDSET_TRANSPORT: &str = "usb";
 
 /// One instance of the configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +97,20 @@ pub struct ConfigInstance {
     pub start_emulator: bool,
 }
 
+/// One phone's instance of the configuration (see the module's description): the phone itself
+/// is named by no key here; the Lab's `devices bind` ties the alias to it in the state root's
+/// private file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandsetInstance {
+    pub alias: String,
+    pub instance_id: String,
+    pub application_id: String,
+    pub game: String,
+    pub server: String,
+    pub touch_backend: String,
+    pub capture_backend: String,
+}
+
 /// Everything the configuration is made of.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigInput {
@@ -83,7 +123,21 @@ pub struct ConfigInput {
 
 /// The configuration document (see the module's description).
 pub fn build(input: &ConfigInput) -> Value {
-    let entries: Vec<Value> = input.instances.iter().map(instance_entry).collect();
+    build_with_handsets(input, &[])
+}
+
+/// [`build`] with `handsets`' instances after the emulators', each one more alias of the policy
+/// as an emulator's is.
+pub fn build_with_handsets(input: &ConfigInput, handsets: &[HandsetInstance]) -> Value {
+    let mut entries: Vec<Value> = input.instances.iter().map(instance_entry).collect();
+    entries.extend(handsets.iter().map(handset_entry));
+    // Each alias with its server and game, in the order of the entries.
+    let named: Vec<(&str, &str, &str)> = input
+        .instances
+        .iter()
+        .map(|instance| (instance.alias.as_str(), instance.server.as_str(), instance.game.as_str()))
+        .chain(handsets.iter().map(|handset| (handset.alias.as_str(), handset.server.as_str(), handset.game.as_str())))
+        .collect();
     let mut document = json!({
         "schema_version": CONFIG_SCHEMA,
         "state_root": input.state_root,
@@ -97,15 +151,14 @@ pub fn build(input: &ConfigInput) -> Value {
     if let Some(root) = &input.mumu_root {
         document["mumu_root"] = json!(root);
     }
-    if !input.instances.is_empty() {
-        let facts: Vec<Value> = input
-            .instances
+    if !named.is_empty() {
+        let facts: Vec<Value> = named
             .iter()
-            .map(|instance| {
+            .map(|(alias, server, game)| {
                 json!({
-                    "instance_id": instance.alias,
-                    "server_id": instance.server,
-                    "game_id": instance.game,
+                    "instance_id": alias,
+                    "server_id": server,
+                    "game_id": game,
                     "host_id": HOST_ID,
                     "available": true,
                     "capability_operation_ids": [PACKAGE_RUN],
@@ -149,6 +202,17 @@ fn instance_entry(instance: &ConfigInstance) -> Value {
         entry["start_emulator"] = json!(true);
     }
     entry
+}
+
+fn handset_entry(handset: &HandsetInstance) -> Value {
+    json!({
+        "alias": handset.alias,
+        "instance_id": handset.instance_id,
+        "device": { "kind": HANDSET_KIND, "transport": HANDSET_TRANSPORT },
+        "application_id": handset.application_id,
+        "touch_backend": handset.touch_backend,
+        "capture_backend": handset.capture_backend,
+    })
 }
 
 /// The document as the file holds it: pretty JSON, one line end at the end, no byte-order mark.
@@ -214,6 +278,18 @@ pub fn backend_problem(touch: &str, capture: &str) -> Option<Said> {
             "触控 nemu_ipc 必须配截图 nemu_ipc",
             "Nemu touch needs Nemu capture",
         ));
+    }
+    None
+}
+
+/// What is wrong with a phone's backend pair, or `None`: each one a phone takes, named outright
+/// (never `auto`).
+pub fn handset_backend_problem(touch: &str, capture: &str) -> Option<Said> {
+    if !HANDSET_TOUCH_BACKENDS.contains(&touch) {
+        return Some(Said::new("手机用不了这个触控后端", "the touch backend is not one a phone takes").with(touch));
+    }
+    if !HANDSET_CAPTURE_BACKENDS.contains(&capture) {
+        return Some(Said::new("手机用不了这个截图后端", "the capture backend is not one a phone takes").with(capture));
     }
     None
 }
@@ -346,5 +422,62 @@ mod tests {
         assert!(backend_problem("nemu_ipc", "adb").is_some());
         assert!(backend_problem("auto", "nemu_ipc").is_some());
         assert!(backend_problem("adb_shell_input", "scrcpy").is_some());
+    }
+
+    #[test]
+    fn a_phone_is_a_usb_handset_with_its_backends_written_out() {
+        let phone = HandsetInstance {
+            alias: "azurlane-phone".to_owned(),
+            instance_id: format!("instance_{}9", "0".repeat(31)),
+            application_id: "com.example.cn".to_owned(),
+            game: "azurlane".to_owned(),
+            server: "cn".to_owned(),
+            touch_backend: HANDSET_TOUCH_DEFAULT.to_owned(),
+            capture_backend: HANDSET_CAPTURE_DEFAULT.to_owned(),
+        };
+        let emulators = input(vec![instance("azurlane-5", 5, "cn")], Some("C:\\MuMu"));
+        let document = build_with_handsets(&emulators, std::slice::from_ref(&phone));
+        let entries = document["instances"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        // The emulator's entry is as it is without a phone; the phone's comes after it.
+        assert_eq!(entries[0], build(&emulators)["instances"][0]);
+        assert_eq!(
+            entries[1],
+            json!({
+                "alias": "azurlane-phone",
+                "instance_id": format!("instance_{}9", "0".repeat(31)),
+                "device": {"kind": "handset", "transport": "usb"},
+                "application_id": "com.example.cn",
+                "touch_backend": "adb_shell_input",
+                "capture_backend": "adb",
+            })
+        );
+        for absent in [
+            "serial", "host", "port", "connect", "instance_index", "instance_name", "nemu_app_index", "start_emulator", "adb_path",
+        ] {
+            assert_eq!(entries[1].get(absent), None, "{absent}");
+        }
+        // The policy names the phone's alias as one more instance.
+        let rows = document["policy"]["facts"]["instances"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[1],
+            json!({
+                "instance_id": "azurlane-phone",
+                "server_id": "cn",
+                "game_id": "azurlane",
+                "host_id": "local",
+                "available": true,
+                "capability_operation_ids": ["operation.package.run"],
+                "preferred_task_ids": [],
+            })
+        );
+        // No phone: the document of `build`. A phone alone still has its policy, and the first
+        // start's configuration has no phone either.
+        assert_eq!(build_with_handsets(&emulators, &[]), build(&emulators));
+        let alone = build_with_handsets(&input(Vec::new(), None), std::slice::from_ref(&phone));
+        assert_eq!(alone["instances"].as_array().map(Vec::len), Some(1));
+        assert_eq!(alone["policy"]["facts"]["instances"][0]["instance_id"], "azurlane-phone");
+        assert_eq!(without_instances(&alone), build(&input(Vec::new(), None)));
     }
 }

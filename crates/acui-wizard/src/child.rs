@@ -5,8 +5,14 @@
 //! install stops, saying so). Every variable of the Runtime's and the Lab's own
 //! (`ACTINGCOMMAND_…`, `ACTINGLAB_…`) is removed from every child's environment, whatever the
 //! wizard was started with ([`cleared_variables`]); a child gets only those its [`Spec`] sets.
+//!
+//! An argument may be a secret ([`Spec::secret_arg`], the run's key salt): the child gets it as
+//! it is, and the wizard writes [`REDACTED`] for it wherever it shows the command line — the
+//! line every answer carries into the log ([`Spec::text`]), each reason [`run`] gives, the
+//! spec's `Debug` — and wherever the child's own output repeats it ([`Output`]).
 
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -76,13 +82,18 @@ pub enum OnTimeout {
     Leave,
 }
 
+/// What the wizard writes for a secret argument (see the module's description).
+pub const REDACTED: &str = "<redacted>";
+
 /// One program to run.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Spec {
     pub program: PathBuf,
     pub args: Vec<OsString>,
     pub env: Vec<(String, String)>,
     pub cwd: Option<PathBuf>,
+    /// The values of the secret arguments among `args` ([`Spec::secret_arg`]).
+    secrets: Vec<String>,
 }
 
 impl Spec {
@@ -92,12 +103,36 @@ impl Spec {
             args: Vec::new(),
             env: Vec::new(),
             cwd: None,
+            secrets: Vec::new(),
         }
     }
 
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
         self.args.push(arg.into());
         self
+    }
+
+    /// `value` as the next argument, a secret one (see the module's description).
+    pub fn secret_arg(mut self, value: &str) -> Self {
+        self.args.push(OsString::from(value));
+        if !value.is_empty() {
+            self.secrets.push(value.to_owned());
+        }
+        self
+    }
+
+    /// `text` with each secret in it written [`REDACTED`].
+    fn shown(&self, text: &str) -> String {
+        self.secrets
+            .iter()
+            .fold(text.to_owned(), |text, secret| text.replace(secret.as_str(), REDACTED))
+    }
+
+    /// `bytes`, a child's output, with each secret in it written [`REDACTED`].
+    fn scrubbed(&self, bytes: Vec<u8>) -> Vec<u8> {
+        self.secrets
+            .iter()
+            .fold(bytes, |bytes, secret| replaced(&bytes, secret.as_bytes(), REDACTED.as_bytes()))
     }
 
     pub fn env(mut self, name: &str, value: &str) -> Self {
@@ -110,15 +145,48 @@ impl Spec {
         self
     }
 
-    /// The command line as the log shows it.
+    /// The command line as the log shows it, each secret argument written [`REDACTED`].
     pub fn text(&self) -> String {
-        let mut text = quoted(&self.program.to_string_lossy());
+        let mut text = quoted(&self.shown(&self.program.to_string_lossy()));
         for arg in &self.args {
             text.push(' ');
-            text.push_str(&quoted(&arg.to_string_lossy()));
+            text.push_str(&quoted(&self.shown(&arg.to_string_lossy())));
         }
         text
     }
+}
+
+/// The spec with its secret arguments written [`REDACTED`], as [`Spec::text`] writes them.
+impl fmt::Debug for Spec {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let args: Vec<String> = self.args.iter().map(|arg| self.shown(&arg.to_string_lossy())).collect();
+        formatter
+            .debug_struct("Spec")
+            .field("program", &self.program)
+            .field("args", &args)
+            .field("env", &self.env)
+            .field("cwd", &self.cwd)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `bytes` with each `needle` in it replaced by `with`.
+fn replaced(bytes: &[u8], needle: &[u8], with: &[u8]) -> Vec<u8> {
+    if needle.is_empty() {
+        return bytes.to_vec();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at..].starts_with(needle) {
+            out.extend_from_slice(with);
+            at += needle.len();
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    out
 }
 
 fn quoted(word: &str) -> String {
@@ -129,7 +197,8 @@ fn quoted(word: &str) -> String {
     }
 }
 
-/// A finished child: its exit code (`None` when it had none), both streams, its time.
+/// A finished child: its exit code (`None` when it had none), both streams (each secret argument
+/// of its spec written [`REDACTED`] wherever the child repeated it), its time.
 #[derive(Debug, Clone)]
 pub struct Output {
     pub code: Option<i32>,
@@ -252,8 +321,8 @@ pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Outp
     }
     Ok(Output {
         code: status.code(),
-        stdout,
-        stderr,
+        stdout: spec.scrubbed(stdout),
+        stderr: spec.scrubbed(stderr),
         elapsed: started.elapsed(),
     })
 }

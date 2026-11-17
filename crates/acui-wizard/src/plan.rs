@@ -1,16 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The install plan (`actingcommand.install-wizard-plan.v1`): what the person chose on the
-//! window's pages — the games, each instance with its alias, game, server and backends, and the
-//! options. The window builds one; `acsetup install --plan <file>` reads one. Members a later
-//! wizard adds are read past.
+//! window's pages — the games, each instance with its alias, game, server and backends, each
+//! phone's instance likewise (`handsets`), and the options. The window builds one;
+//! `acsetup install --plan <file>` reads one. Members a later wizard adds are read past.
+//!
+//! A plan file holds no phone ([`parse_plan`]): the Lab names a phone by a device handle that
+//! holds only for the adb session that listed it (a replug or an adb server restart changes it:
+//! Runtime `contracts/device-binding.md`), so a handle written into a file is stale by the time
+//! the file is read. Phones are the window's alone, which lists them and installs them in one
+//! run.
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::alias::{alias_problem, MAX_ALIAS_BYTES};
 use crate::apps::Game;
-use crate::config::{backend_problem, DEFAULT_BACKEND};
+use crate::config::{
+    backend_problem, handset_backend_problem, DEFAULT_BACKEND, HANDSET_ALIAS_LIMIT, HANDSET_CAPTURE_DEFAULT,
+    HANDSET_KIND, HANDSET_TOUCH_DEFAULT,
+};
 use crate::text::{Lang, Said};
 
 pub const PLAN_SCHEMA: &str = "actingcommand.install-wizard-plan.v1";
@@ -28,8 +38,25 @@ pub struct Plan {
     pub mumu_root: Option<String>,
     #[serde(default)]
     pub instances: Vec<PlanInstance>,
+    /// The phones' instances: the window's alone, never a file's ([`parse_plan`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handsets: Vec<PlanHandset>,
     #[serde(default)]
     pub options: PlanOptions,
+}
+
+/// A phone's instance (an Android phone over USB, `config::HandsetInstance`): its alias, game,
+/// server and backends, a phone's own (`adb_shell_input` and `adb` unless chosen otherwise). The
+/// phone it stands for is the one the window's device list showed in the same run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanHandset {
+    pub alias: String,
+    pub game: String,
+    pub server: String,
+    #[serde(default = "handset_touch")]
+    pub touch_backend: String,
+    #[serde(default = "handset_capture")]
+    pub capture_backend: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,16 +114,40 @@ fn default_backend() -> String {
     DEFAULT_BACKEND.to_owned()
 }
 
+fn handset_touch() -> String {
+    HANDSET_TOUCH_DEFAULT.to_owned()
+}
+
+fn handset_capture() -> String {
+    HANDSET_CAPTURE_DEFAULT.to_owned()
+}
+
 impl Plan {
     pub fn lang(&self) -> Lang {
         Lang::from_wire(&self.language).unwrap_or(Lang::Zh)
     }
 }
 
-/// The plan in `bytes` (a UTF-8 byte-order mark allowed), as JSON; its rules are
-/// [`plan_problems`].
+/// Whether a plan file's JSON names a phone: a `handsets` entry, or an instance whose `device`
+/// is a phone's as the configuration writes it (`{"kind": "handset"}`).
+fn names_a_phone(document: &Value) -> bool {
+    document["handsets"].as_array().is_some_and(|handsets| !handsets.is_empty())
+        || document["instances"]
+            .as_array()
+            .is_some_and(|instances| instances.iter().any(|instance| instance["device"]["kind"] == HANDSET_KIND))
+}
+
+/// The plan file in `bytes` (a UTF-8 byte-order mark allowed), as JSON; its rules are
+/// [`plan_problems`]. A file that names a phone is refused before anything else: see the
+/// module's description.
 pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    if serde_json::from_slice::<Value>(bytes).is_ok_and(|document| names_a_phone(&document)) {
+        return Err(Said::new(
+            "计划文件里不能写手机实例：手机的设备句柄只在列出它的那次 adb 会话里有效，写进文件就过期了，所以从命令行安装不装手机",
+            "a plan file cannot hold a phone's instance: a phone's device handle holds only for the adb session that listed it and is stale once written into a file, so an install from the command line installs no phone",
+        ));
+    }
     serde_json::from_slice(bytes)
         .map_err(|error| Said::new("计划文件读不懂", "the plan file does not parse").with(error))
 }
@@ -105,9 +156,11 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
 /// game in the set and chosen once; each instance once by index and by alias (aliases compared
 /// as the Runtime compares them, byte for byte), its alias valid for its game (`alias`: no
 /// whitespace, within the game's alias limit), its game chosen, its server one of the game's,
-/// its backends a valid pair; with instances, the first-start pause only together with the
-/// wizard's start, which alone can set it (a first start with the instances and without the
-/// pause the options page promised is never possible). The watchdog needs no rule: it never
+/// its backends a valid pair; each phone's instance by the same rules, its alias within
+/// [`HANDSET_ALIAS_LIMIT`] bytes too and once among every instance's, its backends a phone's;
+/// with instances, the first-start pause only together with the wizard's start, which alone can
+/// set it (a first start with the instances and without the pause the options page promised is
+/// never possible). The watchdog needs no rule: it never
 /// starts a root that never started (Runtime `contracts/runtime-watchdog.md`, "Decision", row
 /// 3), so with the wizard's start left out the root stays down until a person starts it.
 pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
@@ -165,7 +218,40 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
             problems.push(problem.with(&named));
         }
     }
-    if !plan.instances.is_empty() && plan.options.pause_first_start && !plan.options.start_after_install {
+    for handset in &plan.handsets {
+        let named = format!("{HANDSET_KIND} {}", handset.alias);
+        let limit = games
+            .iter()
+            .find(|known| known.game == handset.game)
+            .map_or(MAX_ALIAS_BYTES, |game| game.alias_limit)
+            .min(HANDSET_ALIAS_LIMIT);
+        if let Some(problem) = alias_problem(&handset.alias, limit) {
+            problems.push(problem.with(HANDSET_KIND));
+        } else if !aliases.insert(handset.alias.as_str()) {
+            problems.push(
+                Said::new("有两个实例用了同一个名字，请改成不同的", "Two instances have the same name; give them different names")
+                    .with(&named),
+            );
+        }
+        if !chosen.contains(handset.game.as_str()) {
+            problems.push(
+                Said::new("实例的游戏没有勾选安装", "the instance's game is not among the games installed")
+                    .with(format!("{named}: {}", handset.game)),
+            );
+        } else if let Some(game) = games.iter().find(|known| known.game == handset.game) {
+            if game.server(&handset.server).is_none() {
+                problems.push(
+                    Said::new("这个游戏没有这个区服", "the game has no such server")
+                        .with(format!("{named}: {}", handset.server)),
+                );
+            }
+        }
+        if let Some(problem) = handset_backend_problem(&handset.touch_backend, &handset.capture_backend) {
+            problems.push(problem.with(&named));
+        }
+    }
+    let instances = !plan.instances.is_empty() || !plan.handsets.is_empty();
+    if instances && plan.options.pause_first_start && !plan.options.start_after_install {
         problems.push(Said::new(
             "要首次先暂停，就得勾「装完就启动」：只有向导启动了 ActingCommand 才能挂上暂停；不想启动，就不勾首次暂停（那样第一次启动时实例会直接开始执勤）",
             "The first-start pause needs \"start after install\": only a Runtime the wizard started takes the pause. Not to start it, leave the pause out too (the instances then go on duty at the first start)",
