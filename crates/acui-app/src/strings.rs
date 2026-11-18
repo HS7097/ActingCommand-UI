@@ -608,6 +608,11 @@ pub struct Labels {
     pub pause_all_applied: &'static str,
     pub pause_all_already: &'static str,
     pub pause_all_refused: &'static str,
+    /// "Pause all" whose answer said nothing, while the `Status` reads after it are watched; and
+    /// what they came to: it holds, confirmed late, or it did not hold and can be pressed again.
+    pub pause_all_watching: &'static str,
+    pub pause_all_late: &'static str,
+    pub pause_all_not_held: &'static str,
     pub resume_all_sending: &'static str,
     pub resume_all_done: &'static str,
     pub resume_all_still_paused: &'static str,
@@ -636,6 +641,13 @@ pub struct Labels {
     pub account_paused: &'static str,
     pub account_pause_already: &'static str,
     pub account_pause_refused: &'static str,
+    /// The same of "pause this account": watched, confirmed late, did not hold; and still on its
+    /// way, its runs finishing up or its device being handed back, once it has been watched for
+    /// its longest, which is neither confirmed nor failed and leaves what holds to the card.
+    pub account_pause_watching: &'static str,
+    pub account_pause_late: &'static str,
+    pub account_pause_not_held: &'static str,
+    pub account_pause_still_staging: &'static str,
     pub account_resume_sending: &'static str,
     pub account_resumed: &'static str,
     pub account_resumed_device_failed: &'static str,
@@ -1214,7 +1226,7 @@ pub struct Labels {
     pub goals_days: &'static str,
     pub goals_orphan: &'static str,
     /// Why a run does not read a variable's value, one sentence per `variable_problem` word
-    /// (Runtime `contracts/outcome-codes/catalog.json:10194-10254`); a word not given.
+    /// (Runtime `contracts/outcome-codes/catalog.json:10317-10377`); a word not given.
     pub goals_unapplied_not_an_option: &'static str,
     pub goals_unapplied_out_of_range: &'static str,
     pub goals_unapplied_off_step: &'static str,
@@ -1312,7 +1324,7 @@ pub struct Labels {
     pub goals_carried_importance: &'static str,
     pub goals_carried_validity: &'static str,
     /// Why the Runtime did not take a value, one sentence per `goal_problem` word (Runtime
-    /// `contracts/outcome-codes/catalog.json:10678-10756`, `runtime-host.json:21799-21825`), and
+    /// `contracts/outcome-codes/catalog.json:10832-10910`, `runtime-host.json:21799-21825`), and
     /// of a word this console has no sentence for (the word); the two with a bound, each with it in
     /// its unit (the bytes a value holds, the items a record holds); the values others come with: a
     /// range (min, max), and a sentence with its detail (sentence, detail).
@@ -2204,6 +2216,9 @@ pub const ZH: Labels = Labels {
     pause_all_applied: "全部暂停已生效",
     pause_all_already: "已经有一份全局暂停在生效，原来的理由不变；已刷新",
     pause_all_refused: "全部暂停没有成功：{}",
+    pause_all_watching: "还没收到确认，正在看全部暂停立住没有…",
+    pause_all_late: "确认得晚：全部暂停已生效",
+    pause_all_not_held: "这次全部暂停没有立住：现在没有全局暂停，可以再按一次",
     resume_all_sending: "正在请求全部开始执勤…",
     resume_all_done: "全局暂停已解除",
     resume_all_still_paused: "全局暂停已解除，{} 个实例仍在暂停",
@@ -2223,6 +2238,10 @@ pub const ZH: Labels = Labels {
     account_paused: "这个实例的调度已暂停，不再给它安排新任务",
     account_pause_already: "这个实例的调度已经有一份暂停在生效，原来的理由不变；已刷新",
     account_pause_refused: "暂停这个实例的调度没有成功：{} · {}",
+    account_pause_watching: "还没收到确认，正在看它立住没有…",
+    account_pause_late: "确认得晚：这个实例已暂停调度",
+    account_pause_not_held: "这次暂停没有立住：现在这个实例没有暂停，可以再按一次",
+    account_pause_still_staging: "还在暂停中（任务收尾或交还设备还没完），以卡片上的状态为准",
     account_resume_sending: "正在恢复这个实例的调度…要重新连一次设备，最多要半分钟左右",
     account_resumed: "这个实例的调度已恢复",
     account_resumed_device_failed: "这个实例的调度已恢复，但重新连接设备没有成功：{} · {}",
@@ -3464,6 +3483,9 @@ pub const EN: Labels = Labels {
     pause_all_applied: "Pause All is in effect",
     pause_all_already: "A global pause already holds and keeps its reason; refreshed",
     pause_all_refused: "Pause All did not succeed: {}",
+    pause_all_watching: "Not confirmed yet: watching whether Pause All took hold…",
+    pause_all_late: "Confirmed late: Pause All is in effect",
+    pause_all_not_held: "This Pause All did not take hold: no global pause holds now. You can press it again",
     resume_all_sending: "Asking to put all on duty…",
     resume_all_done: "The global pause is lifted",
     resume_all_still_paused: "The global pause is lifted; instances still paused: {}",
@@ -3483,6 +3505,10 @@ pub const EN: Labels = Labels {
     account_paused: "This instance's scheduling is paused: no new task is scheduled for it",
     account_pause_already: "A pause of this instance's scheduling already holds and keeps its reason; refreshed",
     account_pause_refused: "Pause This Instance's Scheduling did not succeed: {} · {}",
+    account_pause_watching: "Not confirmed yet: watching whether the pause took hold…",
+    account_pause_late: "Confirmed late: this instance's scheduling is paused",
+    account_pause_not_held: "This pause did not take hold: this instance is not paused now. You can press it again",
+    account_pause_still_staging: "Still pausing (finishing up tasks or handing the device back is not done yet); see the card for what holds now",
     account_resume_sending: "Resuming this instance's scheduling… its device is connected again; this can take about half a minute",
     account_resumed: "This instance's scheduling is resumed",
     account_resumed_device_failed: "This instance's scheduling is resumed, but connecting its device again did not succeed: {} · {}",
