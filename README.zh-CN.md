@@ -1147,7 +1147,8 @@ PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至
    `applications.json` 取名字，读不出时写文件夹名。
 2. **用途**：这一套给什么用。**MuMu 模拟器**默认勾上，和没有这一页时一样，并写明要先准备什么（装好 MuMu，版本
    不低于 Runtime 要求的，游戏已在里面装好并登录好）。**安卓真机**也能勾，并写明现在能做什么：能连接、能看画面；
-   跑任务要等后续版本。**iOS 真机**（还不支持）灰着、不能勾；读屏软件念名字时连原因一起念。一项都不勾也可以：这时
+   跑任务要等后续版本（它的策略行写 `available` false：Runtime 照常准备、自检这部手机，但从不派任务给它；画面靠监控台的
+   「刷新」，那是只读的截一帧）。**iOS 真机**（还不支持）灰着、不能勾；读屏软件念名字时连原因一起念。一项都不勾也可以：这时
    页面上写明向导只装核心部分、不建实例，以及以后怎么加实例。没勾 MuMu 时不进第 6 页，也不去找 MuMu；没勾安卓真机
    时不进第 7 页；两样都没勾时第 8 页也不进（「游戏」页的下一步直接到「选项」，「选项」页的上一步回到「游戏」，步骤栏里
    不进的页都显示成跳过）。把 MuMu 从勾上改成不勾，之前选好的模拟器和实例都清掉，和在第 6 页跳过一样；再勾回来，
@@ -1257,7 +1258,7 @@ PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至
 --key-salt-env ACSETUP_DEVICE_KEY_SALT --config <根>\actingd.config.json.part --bound-via ui --root <根>`，用的是第 7
 页在同一次运行的密钥盐下列出它时的设备键（盐同样只经 Lab 环境里的这个变量给出），在候选配置检查之前对着它绑：Lab
 按键重新找到这部手机，把它的序列号对着这个名字写进 `state\private\device-bindings.json`，状态根里别的什么都不写；只有
-`device_binding_changed` 算过，被拒就停下安装，写出代码和怎么办（比如 `device_key_unknown`：手机拔掉了或换了 USB 口；
+`device_binding_changed` 算过，被拒就停下安装，写出代码和怎么办（比如 `device_key_unknown`：手机现在不在 adb 的列表里，拔掉了或还没重新连好；
 `device_row_unbindable`：它的状态，没允许调试或缺驱动），没有手机实例时这一步跳过；`actingd check-config` 通过才改名
 就位（没有绑定的手机实例它会拒，`device_binding_missing`）；`actinglab adopt` 把这个根交给 Runtime
 自己的安装器；写监控台设置；建快捷方式（名字带根文件夹名，如「ActingCommand 监控台（AC2）」，同名的已经在

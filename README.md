@@ -1715,7 +1715,9 @@ but that bridge, which the question then names (closing is held off while it is 
 2. **Usage**: what ActingCommand is set up for. **MuMu emulator** is ticked by default, as the wizard was
    before this page, and says what it needs (MuMu installed, at least the version the Runtime takes, with
    the game installed and signed in). **Android phone** can be ticked too, and says what it does today:
-   it connects and shows its screen; running tasks comes in a later version. **iOS device** (not supported
+   it connects and shows its screen; running tasks comes in a later version (its policy row is written
+   `available` false, so the Runtime prepares and self-checks the phone but never sends it a task, and its
+   picture is the console's refresh, a read-only capture). **iOS device** (not supported
    yet) is greyed and cannot be ticked; a screen reader hears its reason with its name. Nothing ticked is
    allowed too: the page then says the wizard installs only the core and sets up no instance, and how to add
    instances later. Without MuMu, page 6 is passed by and MuMu is not looked for; without Android phone,
@@ -1868,7 +1870,7 @@ device key page 7 listed it with under the same run's key salt (again given only
 environment), against the candidate before its check: the Lab finds the phone again by its key and
 writes its serial for the name into `state\private\device-bindings.json` and nothing else of the state
 root; only `device_binding_changed` passes, and a refusal stops the install with its code and what to do
-(`device_key_unknown`: the phone was unplugged or moved to another USB port; `device_row_unbindable`: its
+(`device_key_unknown`: the phone is not in adb's list now, unplugged or not connected again yet; `device_row_unbindable`: its
 state, debugging not allowed or no driver, for one), the step skipped without a phone's instance; put the
 configuration in place only once `actingd check-config` passes (it refuses a phone's instance without a
 binding, `device_binding_missing`); hand the root to the Runtime's own installer with `actinglab

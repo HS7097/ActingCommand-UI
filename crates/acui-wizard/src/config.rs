@@ -35,7 +35,12 @@
 //! - with instances, `policy` in composer mode (no `catalog`): `facts` with one row per alias
 //!   (`instance_id` the alias, `server_id`, `game_id`, `host_id` `local`, `available`,
 //!   `capability_operation_ids` `["operation.package.run"]`, the entry operation every composed
-//!   task names, `preferred_task_ids` `[]`) and `resources.hosts` holding `local`; the alias set
+//!   task names, `preferred_task_ids` `[]`) and `resources.hosts` holding `local`. `available` is
+//!   true for an emulator and false for a phone: running tasks on a phone is not decided yet, and
+//!   an instance configured false stays unavailable whatever its self-check says, so the policy
+//!   never dispatches to it, while its device is still prepared and self-checked and a person's
+//!   read-only capture still takes its frame (Runtime `contracts/instance-fact-store.md`, "Device
+//!   self-checked instances" and "Backend self-check availability"); the alias set
 //!   must equal the configured one (`policy_instance_set_mismatch`). Without instances there is
 //!   no `policy`: a control-plane configuration.
 //! - `lab_module_authoring` and `lab_module_debugging` are left out (only the installer writes
@@ -131,12 +136,15 @@ pub fn build(input: &ConfigInput) -> Value {
 pub fn build_with_handsets(input: &ConfigInput, handsets: &[HandsetInstance]) -> Value {
     let mut entries: Vec<Value> = input.instances.iter().map(instance_entry).collect();
     entries.extend(handsets.iter().map(handset_entry));
-    // Each alias with its server and game, in the order of the entries.
-    let named: Vec<(&str, &str, &str)> = input
+    // Each alias with its server, its game and whether the policy may dispatch to it (a phone's
+    // may not: see the module's description), in the order of the entries.
+    let named: Vec<(&str, &str, &str, bool)> = input
         .instances
         .iter()
-        .map(|instance| (instance.alias.as_str(), instance.server.as_str(), instance.game.as_str()))
-        .chain(handsets.iter().map(|handset| (handset.alias.as_str(), handset.server.as_str(), handset.game.as_str())))
+        .map(|instance| (instance.alias.as_str(), instance.server.as_str(), instance.game.as_str(), true))
+        .chain(handsets.iter().map(|handset| {
+            (handset.alias.as_str(), handset.server.as_str(), handset.game.as_str(), false)
+        }))
         .collect();
     let mut document = json!({
         "schema_version": CONFIG_SCHEMA,
@@ -154,13 +162,13 @@ pub fn build_with_handsets(input: &ConfigInput, handsets: &[HandsetInstance]) ->
     if !named.is_empty() {
         let facts: Vec<Value> = named
             .iter()
-            .map(|(alias, server, game)| {
+            .map(|(alias, server, game, available)| {
                 json!({
                     "instance_id": alias,
                     "server_id": server,
                     "game_id": game,
                     "host_id": HOST_ID,
-                    "available": true,
+                    "available": available,
                     "capability_operation_ids": [PACKAGE_RUN],
                     "preferred_task_ids": [],
                 })
@@ -457,9 +465,11 @@ mod tests {
         ] {
             assert_eq!(entries[1].get(absent), None, "{absent}");
         }
-        // The policy names the phone's alias as one more instance.
+        // The policy names the phone's alias as one more instance, one it never dispatches to;
+        // the emulator's row stays available.
         let rows = document["policy"]["facts"]["instances"].as_array().unwrap();
         assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["available"], true);
         assert_eq!(
             rows[1],
             json!({
@@ -467,7 +477,7 @@ mod tests {
                 "server_id": "cn",
                 "game_id": "azurlane",
                 "host_id": "local",
-                "available": true,
+                "available": false,
                 "capability_operation_ids": ["operation.package.run"],
                 "preferred_task_ids": [],
             })

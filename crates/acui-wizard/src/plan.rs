@@ -149,8 +149,8 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
     if serde_json::from_slice::<Value>(bytes).is_ok_and(|document| names_a_phone(&document)) {
         return Err(Said::new(
-            "计划文件里不能写手机实例：手机的设备句柄只在列出它的那次 adb 会话里有效，写进文件就过期了，所以从命令行安装不装手机",
-            "a plan file cannot hold a phone's instance: a phone's device handle holds only for the adb session that listed it and is stale once written into a file, so an install from the command line installs no phone",
+            "计划文件里不能写手机实例：手机要用向导这一次运行自己的密钥盐算出的设备键来指认，这个盐不在任何文件里，所以从命令行安装不装手机",
+            "a plan file cannot hold a phone's instance: a phone is named by the device key made under the key salt of the wizard's own run, which is in no file, so an install from the command line installs no phone",
         ));
     }
     serde_json::from_slice(bytes)
@@ -383,5 +383,76 @@ mod tests {
         let none = plan(&none);
         assert!(none.instances.is_empty());
         assert_eq!(plan_problems(&none, &games()), Vec::<Said>::new());
+    }
+
+    #[test]
+    fn a_plan_file_that_names_a_phone_is_refused() {
+        let handsets = GOOD.replace(
+            "\"options\"",
+            r#""handsets": [{"alias": "phone-1", "game": "azurlane", "server": "cn", "device_key": "sha256:aa"}],
+        "options""#,
+        );
+        let device = GOOD.replace(
+            r#""server": "cn"}"#,
+            r#""server": "cn", "device": {"kind": "handset", "transport": "usb"}}"#,
+        );
+        for text in [handsets, device] {
+            let refused = parse_plan(text.as_bytes()).expect_err("a phone in a plan file");
+            assert!(refused.en.starts_with("a plan file cannot hold a phone's instance"), "{refused}");
+        }
+        // An empty list names no phone, and neither does an instance without a phone's device.
+        let empty = GOOD.replace("\"options\"", "\"handsets\": [],\n        \"options\"");
+        assert!(plan(&empty).handsets.is_empty());
+        let emulator = GOOD.replace(r#""server": "cn"}"#, r#""server": "cn", "device": {"kind": "emulator"}}"#);
+        if let Err(said) = parse_plan(emulator.as_bytes()) {
+            assert!(!said.en.starts_with("a plan file cannot hold a phone's instance"), "{said}");
+        }
+    }
+
+    #[test]
+    fn each_broken_rule_of_a_phones_instance_is_named() {
+        let phone = |alias: &str, key: &str| PlanHandset {
+            alias: alias.to_owned(),
+            game: "azurlane".to_owned(),
+            server: "cn".to_owned(),
+            touch_backend: HANDSET_TOUCH_DEFAULT.to_owned(),
+            capture_backend: HANDSET_CAPTURE_DEFAULT.to_owned(),
+            device_key: key.to_owned(),
+        };
+        let with = |handsets: Vec<PlanHandset>| Plan { handsets, ..plan(GOOD) };
+        // Two phones beside the emulators, each named by its own key: fine.
+        let good = with(vec![phone("phone-1", "sha256:aa"), phone("phone-2", "sha256:bb")]);
+        assert_eq!(plan_problems(&good, &games()), Vec::<Said>::new());
+        let broken = [
+            // No device key, one phone taken twice.
+            vec![phone("phone-1", "")],
+            vec![phone("phone-1", "sha256:aa"), phone("phone-2", "sha256:aa")],
+            // An emulator's alias, two phones with one alias, an empty alias, a leading `-`, and
+            // one byte over the game's limit of twelve.
+            vec![phone("azurlane-5", "sha256:aa")],
+            vec![phone("phone-1", "sha256:aa"), phone("phone-1", "sha256:bb")],
+            vec![phone("", "sha256:aa")],
+            vec![phone("-phone", "sha256:aa")],
+            vec![phone("phone-123456a", "sha256:aa")],
+            // A game not installed, a server the game does not have, an emulator's backends.
+            vec![PlanHandset { game: "arknights".to_owned(), ..phone("phone-1", "sha256:aa") }],
+            vec![PlanHandset { server: "kr".to_owned(), ..phone("phone-1", "sha256:aa") }],
+            vec![PlanHandset {
+                touch_backend: "nemu_ipc".to_owned(),
+                capture_backend: "nemu_ipc".to_owned(),
+                ..phone("phone-1", "sha256:aa")
+            }],
+        ];
+        for handsets in broken {
+            let text = format!("{handsets:?}");
+            assert!(!plan_problems(&with(handsets), &games()).is_empty(), "{text}");
+        }
+        // A phone alone is an instance too: the pause without the wizard's start is refused.
+        let mut alone = Plan { instances: Vec::new(), ..with(vec![phone("phone-1", "sha256:aa")]) };
+        assert_eq!(plan_problems(&alone, &games()), Vec::<Said>::new());
+        alone.options.start_after_install = false;
+        let problems = plan_problems(&alone, &games());
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].en.contains("start after install"), "{}", problems[0]);
     }
 }

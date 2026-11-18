@@ -289,8 +289,8 @@ fn refusal_words(outcome: &Value) -> Said {
     let values = &outcome["values"];
     match outcome["code"].as_str() {
         Some("device_key_unknown") => Said::new(
-            "这部手机断开了或换了 USB 口，请插好后重新运行向导",
-            "the phone was unplugged or moved to another USB port: plug it in and run the wizard again",
+            "这部手机现在不在设备桥的列表里（拔掉了，或者还没重新连好），请插好后重新运行向导",
+            "the phone is not in the device bridge's list now (unplugged, or not connected again yet): plug it in and run the wizard again",
         ),
         Some("device_row_unbindable") => match (values["device_row_problem"].as_str(), values["device_link_state"].as_str()) {
             (Some("state_not_device"), Some("unauthorized")) => Said::new(
@@ -493,7 +493,7 @@ mod tests {
         // Each refusal in a person's words, its code and values after them.
         let refused = |code: &str, values: Value| json!({"outcome": {"code": code, "category": "error", "values": values}});
         let unknown = judge_bind(Some(1), Some(&refused("device_key_unknown", json!({})))).unwrap_err();
-        assert!(unknown.zh.starts_with("这部手机断开了或换了 USB 口") && unknown.zh.contains("device_key_unknown"), "{unknown}");
+        assert!(unknown.zh.starts_with("这部手机现在不在设备桥的列表里") && unknown.zh.contains("device_key_unknown"), "{unknown}");
         let unauthorized = refused(
             "device_row_unbindable",
             json!({"alias": "a", "handle": "usb:8", "device_row_problem": "state_not_device", "device_link_state": "unauthorized"}),
