@@ -20,12 +20,14 @@
 //! it. A process the child started may have inherited the pipes and hold them long after the
 //! child exited: Windows hands a child every inheritable handle of its parent, and the adb server
 //! an adb client starts keeps them for its whole life (Runtime
-//! `crates/host-metrics/src/standard_handles.rs`, on actingd's own output). So the wizard waits
-//! for that end only so long after the exit: [`PIPE_GRACE`], then fails ([`OnHeld::Fail`]); or,
-//! for a child that may start the adb server and whose answer is its last line, [`HELD_GRACE`],
-//! then takes both streams as read by then, marked [`Output::held`], and leaves the threads still
-//! reading to the pipes' end ([`OnHeld::Take`]; the caller checks the line is whole:
-//! [`whole_line`]).
+//! `crates/host-metrics/src/standard_handles.rs` 3-28 at a8d0aa43). actingd keeps its own output
+//! from its children, and since Runtime 0.12.73 (#398 DB-3) so does actinglab, of its three
+//! standard handles, as it starts (`apps/actinglab/src/main.rs` 247-252); a Lab before that does
+//! not, and an install set may carry one. So the wizard waits for that end only so long after the
+//! exit: [`PIPE_GRACE`], then fails ([`OnHeld::Fail`]); or, for a child that may start the adb
+//! server and whose answer is its last line, [`HELD_GRACE`], then takes both streams as read by
+//! then, marked [`Output::held`], and leaves the threads still reading to the pipes' end
+//! ([`OnHeld::Take`]; the caller checks the line is whole: [`whole_line`]).
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;

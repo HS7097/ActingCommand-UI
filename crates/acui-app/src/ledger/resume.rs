@@ -39,7 +39,8 @@
 //! Runtime release up to 0.12.51 sets either.
 //!
 //! This console's own two are said as its own, not another tool's, and are
-//! resumed here as those are.
+//! resumed here as those are; its pause of an instance, a person's, in any
+//! stage, where another's still on its way gets no resume (`pause_text`).
 //!
 //! The hold of a Lab recording (Runtime 0.12.64), the pause the Lab's `record
 //! start` sets on the instance it records (`lab-record-<ms>`,
@@ -57,14 +58,15 @@
 use acui_rows::format_full;
 use acui_source::workbench::{lab_record_started, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
 use acui_source::{
-    resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
+    resume_paused, resumed_device, ClientFailure, PauseFact, PauseStage, PauseTarget,
+    ResumeOutcome, ResumedDevice,
 };
 
 use crate::ledger::paint::{age_text, code_short, models};
 use crate::ledger::state::{InstancesSnapshot, LedgerState, Phase, StatusReread};
 use crate::ledger::worker::Command;
 use crate::ledger::{find, LedgerHandle};
-use crate::strings::{fill, outcome_short, Labels};
+use crate::strings::{fill, outcome_informs, outcome_short, Labels};
 use crate::{launcher, report, ui, LedgerWindow, PauseItem};
 
 /// The reasons of a deployment's pause, which the installer lifts: acsetup's
@@ -328,9 +330,16 @@ fn unread(labels: &Labels, failure: &ClientFailure) -> (String, &'static str) {
     (code_short(labels, code), failure.operation)
 }
 
-/// A pause's line, `by` who lifts it, and whether a person may resume it here: one
-/// another tool, this console or a Lab recording set, global, or an instance's whose device
-/// is handed back — the Runtime refuses the resume of one still draining or handing it back.
+/// A pause's line, `by` who lifts it, and whether a person may resume it here: one another tool,
+/// this console or a Lab recording set, global, or an instance's whose device is handed back; and
+/// this console's own of an instance in any stage. Since Runtime 0.12.73 (#480 PG-2c) a person's
+/// pause (`stand`) is resumed in every stage and a tool's hold (`quiet_or_lift`) only once
+/// released: the Runtime refuses the resume of one still draining or handing its device back
+/// (runtime-host `host/policy_dispatch.rs` 1153-1191, `check_resumable`, at a8d0aa43). Its
+/// `Status` does not say which mode a pause has (contract `runtime.rs` 2398-2405), so the reason
+/// does: this console's own are a person's; a Lab recording's hold is a tool's
+/// (Runtime `crates/lab-ops/src/scheduling.rs` 135-146); any other is offered only released, as
+/// before. An instance's line still on its way says what it is doing.
 fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
     let scope = scope_text(labels, &fact.target);
     let (revision, since) = (fact.revision.to_string(), format_full(fact.since_unix_ms));
@@ -347,15 +356,18 @@ fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
         Lifter::Window if console_set(fact) => fill(labels.pause_console, &values),
         Lifter::Window => fill(labels.pause_other_tool, &values),
     };
+    // This console's own, a person's pause, in any stage; a Lab recording's hold, a tool's, and
+    // any other only once released.
+    let any_stage = matches!(by, Lifter::Window) && console_set(fact);
     let resumable = match fact.stage {
         None | Some(PauseStage::Released) => true,
         Some(PauseStage::Draining) => {
             text.push_str(labels.pause_draining);
-            false
+            any_stage
         }
         Some(PauseStage::Paused) => {
             text.push_str(labels.pause_releasing);
-            false
+            any_stage
         }
     };
     (text, resumable)
@@ -421,19 +433,29 @@ fn reread_text(labels: &Labels, reread: &Reread, state: &LedgerState) -> (String
 }
 
 /// What a press came back with, and whether it says a failure: a lift whose
-/// device did not connect says so too.
+/// device did not connect says so too; one that found the instance's first-start
+/// pause not applied yet, which holds it again, or its device held by a player,
+/// says that, a failure only by its code's category (`resumed_device`).
 fn outcome_text(labels: &Labels, scope: &str, outcome: &ResumeOutcome) -> (String, bool) {
     match outcome {
         ResumeOutcome::Resumed { revision, device_failure } => {
             let mut text = fill(labels.resume_done, &[scope, &revision.to_string()]);
-            if let Some(code) = device_failure {
-                let words = match outcome_short(labels, code) {
-                    Some(short) => format!("{code} · {short}"),
-                    None => code.clone(),
-                };
-                text.push_str(&fill(labels.resume_device_failed, &[&words]));
-            }
-            (text, device_failure.is_some())
+            let Some(code) = device_failure else {
+                return (text, false);
+            };
+            let words = match outcome_short(labels, code) {
+                Some(short) => format!("{code} · {short}"),
+                None => code.clone(),
+            };
+            let (template, failed) = match resumed_device(Some(code.as_str())) {
+                ResumedDevice::HeldAgain => (labels.resume_held_again, !outcome_informs(code)),
+                ResumedDevice::PlayerHolds => (labels.resume_player_hold, !outcome_informs(code)),
+                ResumedDevice::Fine | ResumedDevice::ReconnectFailed(_) => {
+                    (labels.resume_device_failed, true)
+                }
+            };
+            text.push_str(&fill(template, &[&words]));
+            (text, failed)
         }
         ResumeOutcome::Refused(failure) => {
             (failure_text(labels, scope, labels.resume_failed, failure), true)
@@ -545,10 +567,20 @@ fn log_text(id: u64, target: &PauseTarget, outcome: &ResumeOutcome) -> String {
         None => "global scheduling".to_owned(),
     };
     let said = match outcome {
-        ResumeOutcome::Resumed { revision, device_failure } => format!(
-            "resumed at revision {revision}, device failure {}",
-            device_failure.as_deref().unwrap_or("none")
-        ),
+        ResumeOutcome::Resumed { revision, device_failure } => {
+            let device = match resumed_device(device_failure.as_deref()) {
+                ResumedDevice::Fine => "device failure none".to_owned(),
+                ResumedDevice::HeldAgain => {
+                    "held again by its first-start pause, dispatch_paused_instance".to_owned()
+                }
+                ResumedDevice::PlayerHolds => {
+                    "a player holds the device, so nothing reconnected, player_hold_active"
+                        .to_owned()
+                }
+                ResumedDevice::ReconnectFailed(code) => format!("device failure {code}"),
+            };
+            format!("resumed at revision {revision}, {device}")
+        }
         ResumeOutcome::Refused(failure) => format!(
             "refused {} ({} {})",
             failure.runtime_code.as_deref().unwrap_or("-"),

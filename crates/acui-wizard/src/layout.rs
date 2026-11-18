@@ -36,9 +36,9 @@ pub const ROOT_FILES: [&str; 10] = [
 ];
 /// The root file `pack-catalog.json` replaced (Runtime `STANDARD_PACK_RETIRED_UI_FILE`): no
 /// program reads it any more, and the Runtime's `place` refuses a zip that carries it as a member
-/// no layout knows (`crates/lab-rescue/src/install/place.rs:189-190`). The wizard refuses it too,
-/// saying why ([`retired_format`]); the set check takes such a bundle for one of an older set,
-/// not a damaged one.
+/// no layout knows (`crates/lab-rescue/src/install/place.rs:198-199` at a8d0aa43). The wizard
+/// refuses it too, saying why ([`retired_format`]); the set check takes such a bundle for one of
+/// an older set, not a damaged one.
 pub const RETIRED_UI_FILE: &str = "ui.json";
 
 /// Why a bundle that carries [`RETIRED_UI_FILE`] is refused, and what to do instead.

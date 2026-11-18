@@ -10,7 +10,7 @@
 //! filled again in every window when the language changes, and directly for
 //! the lines the console fills. A worker thread never holds a table; it hands back a `Phrase`.
 
-use acui_rows::outcome::{explain, Tongue};
+use acui_rows::outcome::{explain, Category, Tongue};
 
 /// `zh` or `en`, as the settings file and `--lang` spell it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -421,8 +421,9 @@ pub struct Labels {
     /// A scheduling pause's line in the ledger window. Its scope: global, or
     /// an instance's (alias). Then scope, reason, revision, since: a pause
     /// another tool set, or this console (its Pause All or Pause This Account),
-    /// with the stage of an instance's that cannot be resumed
-    /// yet; one only whoever set it lifts, by the settings file; a deployment's,
+    /// with the stage of an instance's still on its way, which says what it is
+    /// doing and not whether it can be resumed (a person's pause can be in every
+    /// stage); one only whoever set it lifts, by the settings file; a deployment's,
     /// which the installer lifts; a Lab rescue operation's, which it lifts as it
     /// finishes, but for a stop's (`lab-down-`), which is lifted from the Lab.
     /// A Lab recording's hold of an instance (`lab-record-`): scope, reason,
@@ -455,13 +456,17 @@ pub struct Labels {
     pub resume_record_confirm: &'static str,
     /// The last resume. scope, owner epoch, revision: out. scope, new
     /// revision: lifted; then the device code of a reconnect that failed, with
-    /// its words. scope, runtime refusal code, client error code, client
-    /// operation: refused. scope, client error code, client operation: did not
-    /// succeed without a refusal code, not sent, not confirmed. scope, why: no
-    /// thread for it.
+    /// its words; or, of the two codes a self-check names that are no such
+    /// failure, that the instance's first-start pause held it again, or that a
+    /// player holds the device, each with the code and its words. scope, runtime
+    /// refusal code, client error code, client operation: refused. scope, client
+    /// error code, client operation: did not succeed without a refusal code, not
+    /// sent, not confirmed. scope, why: no thread for it.
     pub resume_sending: &'static str,
     pub resume_done: &'static str,
     pub resume_device_failed: &'static str,
+    pub resume_held_again: &'static str,
+    pub resume_player_hold: &'static str,
     pub resume_refused: &'static str,
     pub resume_failed: &'static str,
     pub resume_not_sent: &'static str,
@@ -608,6 +613,13 @@ pub struct Labels {
     pub pause_all_applied: &'static str,
     pub pause_all_already: &'static str,
     pub pause_all_refused: &'static str,
+    /// A pause the Runtime answered as failed, the top bar's and a card's alike: code, its
+    /// words. Whether a pause holds is not in that answer: a failure in a stage leaves a person's
+    /// pause in effect, while a fatal one before the pause was recorded (every failed Pause All is
+    /// one) leaves none, so the line points to the state the console shows. And a pause lifted by
+    /// a resume while its stages still ran, the top bar's and a card's alike.
+    pub pause_failed: &'static str,
+    pub pause_lifted_by_resume: &'static str,
     /// "Pause all" whose answer said nothing, while the `Status` reads after it are watched; and
     /// what they came to: it holds, confirmed late, or it did not hold and can be pressed again.
     pub pause_all_watching: &'static str,
@@ -641,16 +653,42 @@ pub struct Labels {
     pub account_paused: &'static str,
     pub account_pause_already: &'static str,
     pub account_pause_refused: &'static str,
-    /// The same of "pause this account": watched, confirmed late, did not hold; and still on its
-    /// way, its runs finishing up or its device being handed back, once it has been watched for
-    /// its longest, which is neither confirmed nor failed and leaves what holds to the card.
+    /// A pause of this account answered still on its way at the end of its caller's time: what
+    /// was in the way then, its words (`obstacle_*`) joined by `name_list`; with nothing in the
+    /// way, still waiting for the running tasks to finish, or still handing the device back. And
+    /// one the Runtime kept at its shutdown, until its next start.
+    pub account_pause_standing: &'static str,
+    pub account_pause_standing_draining: &'static str,
+    pub account_pause_standing_releasing: &'static str,
+    pub account_pause_kept_at_shutdown: &'static str,
+    /// What was in the way of a pause's stages, one short sentence per word of the Runtime's
+    /// closed list (`pause_obstacle`).
+    pub obstacle_contained_run: &'static str,
+    pub obstacle_policy_run: &'static str,
+    pub obstacle_lease: &'static str,
+    pub obstacle_automatic_start: &'static str,
+    pub obstacle_recovery_ladder: &'static str,
+    pub obstacle_queued_entry: &'static str,
+    pub obstacle_client_reset: &'static str,
+    pub obstacle_close_refused: &'static str,
+    pub obstacle_close_unconfirmed: &'static str,
+    pub obstacle_check_failed: &'static str,
+    /// The same of "pause this account": watched, confirmed late, did not hold, held and was
+    /// lifted later by a resume; and still on its way, its runs finishing up or its device being
+    /// handed back, once it has been watched for its longest, which is neither confirmed nor
+    /// failed and leaves what holds to the card.
     pub account_pause_watching: &'static str,
     pub account_pause_late: &'static str,
     pub account_pause_not_held: &'static str,
+    pub account_pause_lifted_later: &'static str,
     pub account_pause_still_staging: &'static str,
     pub account_resume_sending: &'static str,
     pub account_resumed: &'static str,
     pub account_resumed_device_failed: &'static str,
+    /// A lift that found the account's first-start pause not applied yet, which holds it again;
+    /// and one that found a player holding its device, which reconnects nothing.
+    pub account_resumed_held_again: &'static str,
+    pub account_resumed_player_hold: &'static str,
     pub account_resumed_global_holds: &'static str,
     pub account_resume_refused: &'static str,
     /// The top bar's performance preset: the row's caption, each known preset's name
@@ -1226,7 +1264,7 @@ pub struct Labels {
     pub goals_days: &'static str,
     pub goals_orphan: &'static str,
     /// Why a run does not read a variable's value, one sentence per `variable_problem` word
-    /// (Runtime `contracts/outcome-codes/catalog.json:10317-10377`); a word not given.
+    /// (Runtime `contracts/outcome-codes/catalog.json:10424-10484` at a8d0aa43); a word not given.
     pub goals_unapplied_not_an_option: &'static str,
     pub goals_unapplied_out_of_range: &'static str,
     pub goals_unapplied_off_step: &'static str,
@@ -1324,7 +1362,8 @@ pub struct Labels {
     pub goals_carried_importance: &'static str,
     pub goals_carried_validity: &'static str,
     /// Why the Runtime did not take a value, one sentence per `goal_problem` word (Runtime
-    /// `contracts/outcome-codes/catalog.json:10832-10910`, `runtime-host.json:21799-21825`), and
+    /// `contracts/outcome-codes/catalog.json:10939-11017`, `runtime-host.json:21820-21846`, at
+    /// a8d0aa43), and
     /// of a word this console has no sentence for (the word); the two with a bound, each with it in
     /// its unit (the bytes a value holds, the items a record holds); the values others come with: a
     /// range (min, max), and a sentence with its detail (sentence, detail).
@@ -2106,8 +2145,8 @@ pub const ZH: Labels = Labels {
     pause_instance: "实例 {} 的调度",
     pause_other_tool: "{}：被其他工具暂停（理由 {}，修订 {}，自 {}）",
     pause_console: "{}：被这个监控台暂停（理由 {}，修订 {}，自 {}）",
-    pause_draining: " · 正在等进行中的任务收尾，收尾后才能恢复",
-    pause_releasing: " · 正在交还设备，交还后才能恢复",
+    pause_draining: " · 正在等进行中的任务收尾",
+    pause_releasing: " · 正在交还设备",
     pause_setter: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停要由设下它的一方解除",
     pause_deploy: "{}：部署暂停（理由 {}，修订 {}，自 {}）· 这是安装器加的部署暂停，请用安装器恢复",
     pause_lab_rescue: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停是 Lab 救急操作挂的，操作结束会自己解除；停机（理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除",
@@ -2123,6 +2162,8 @@ pub const ZH: Labels = Labels {
     resume_sending: "正在恢复{}（owner epoch {}，修订 {}）…",
     resume_done: "已恢复{}（新修订 {}）",
     resume_device_failed: " · 设备还没连上：{}",
+    resume_held_again: " · 但它是新加的实例，又被首次启动暂停按住了，仍在暂停：{}",
+    resume_player_hold: " · 设备正被人占用，所以没有重新连接：{}",
     resume_refused: "恢复{}没有成功：Runtime 答 {} · 客户端 {}（{}）",
     resume_failed: "恢复{}没有成功：{}（{}）",
     resume_not_sent: "恢复{}的请求没有发出：{}（{}）",
@@ -2216,6 +2257,8 @@ pub const ZH: Labels = Labels {
     pause_all_applied: "全部暂停已生效",
     pause_all_already: "已经有一份全局暂停在生效，原来的理由不变；已刷新",
     pause_all_refused: "全部暂停没有成功：{}",
+    pause_failed: "暂停时 Runtime 出错：{} · {}；有没有暂停，以界面上显示的状态为准",
+    pause_lifted_by_resume: "这次暂停还没收尾完就被恢复了，现在没有暂停",
     pause_all_watching: "还没收到确认，正在看全部暂停立住没有…",
     pause_all_late: "确认得晚：全部暂停已生效",
     pause_all_not_held: "这次全部暂停没有立住：现在没有全局暂停，可以再按一次",
@@ -2238,13 +2281,30 @@ pub const ZH: Labels = Labels {
     account_paused: "这个实例的调度已暂停，不再给它安排新任务",
     account_pause_already: "这个实例的调度已经有一份暂停在生效，原来的理由不变；已刷新",
     account_pause_refused: "暂停这个实例的调度没有成功：{} · {}",
+    account_pause_standing: "这个实例的调度已暂停，还在收尾：{}",
+    account_pause_standing_draining: "这个实例的调度已暂停，还在等进行中的任务收尾",
+    account_pause_standing_releasing: "这个实例的调度已暂停，还在交还设备",
+    account_pause_kept_at_shutdown: "这个实例的调度已暂停；Runtime 在收尾完之前关闭了，暂停会保留到下次启动",
+    obstacle_contained_run: "有任务还在跑，已请它在下一个检查点停下",
+    obstacle_policy_run: "调度派的任务还没结算完",
+    obstacle_lease: "设备正被别的一方占用（客户端、直接运行、操作员的控制、Lab 操作或体检）",
+    obstacle_automatic_start: "Runtime 正在自动启动模拟器",
+    obstacle_recovery_ladder: "Runtime 正在做卡死恢复",
+    obstacle_queued_entry: "还有别的请求在排队等这个实例",
+    obstacle_client_reset: "有客户端在任务被取消后还要复位设备",
+    obstacle_close_refused: "关闭设备会话这次没被放行，会再试",
+    obstacle_close_unconfirmed: "关闭设备会话没能确认，这个实例被隔离了，不会再试；按「恢复这个实例的调度」会重新连接它",
+    obstacle_check_failed: "上一次收尾检查出了错（不致命），会再试",
     account_pause_watching: "还没收到确认，正在看它立住没有…",
     account_pause_late: "确认得晚：这个实例已暂停调度",
     account_pause_not_held: "这次暂停没有立住：现在这个实例没有暂停，可以再按一次",
+    account_pause_lifted_later: "这次暂停立住过，后来被恢复了",
     account_pause_still_staging: "还在暂停中（任务收尾或交还设备还没完），以卡片上的状态为准",
-    account_resume_sending: "正在恢复这个实例的调度…要重新连一次设备，最多要半分钟左右",
+    account_resume_sending: "正在恢复这个实例的调度…设备已经交还的话要重新连一次，最多要半分钟左右",
     account_resumed: "这个实例的调度已恢复",
     account_resumed_device_failed: "这个实例的调度已恢复，但重新连接设备没有成功：{} · {}",
+    account_resumed_held_again: "这个实例的调度已恢复，但它是新加的实例，又被首次启动暂停按住了，以卡片上的状态为准",
+    account_resumed_player_hold: "这个实例的调度已恢复；设备正被人占用，所以没有重新连接",
     account_resumed_global_holds: " · 全局暂停还在，这个实例仍不会被安排任务",
     account_resume_refused: "恢复这个实例的调度没有成功：{} · {}",
     performance_preset: "性能档位",
@@ -3373,8 +3433,8 @@ pub const EN: Labels = Labels {
     pause_instance: "Scheduling of Instance {}",
     pause_other_tool: "{}: Paused by Another Tool (Reason {}, Revision {}, Since {})",
     pause_console: "{}: Paused by This Console (Reason {}, Revision {}, Since {})",
-    pause_draining: " · Waiting for the Running Tasks to Finish; It Can Be Resumed After That",
-    pause_releasing: " · Handing the Device Back; It Can Be Resumed After That",
+    pause_draining: " · Waiting for the Running Tasks to Finish",
+    pause_releasing: " · Handing the Device Back",
     pause_setter: "{}: Paused (Reason {}, Revision {}, Since {}) · This Pause Is to Be Lifted by Whoever Set It",
     pause_deploy: "{}: Deployment Pause (Reason {}, Revision {}, Since {}) · The Installer Set It; Lift It with the Installer",
     pause_lab_rescue: "{}: Paused (Reason {}, Revision {}, Since {}) · A Lab Rescue Operation Set This Pause, and the Operation Lifts It When It Finishes; One a Stop Set (Reason Starting lab-down-) Is Not Lifted by Itself: Like One an Operation That Has Stopped Left Behind, Lift It from the Lab",
@@ -3390,6 +3450,8 @@ pub const EN: Labels = Labels {
     resume_sending: "Resuming {} (Owner Epoch {}, Revision {})…",
     resume_done: "Resumed {} (New Revision {})",
     resume_device_failed: " · The Device Is Not Connected Yet: {}",
+    resume_held_again: " · But as a Newly Added Instance Its First-Start Pause Held It Again, So It Is Still Paused: {}",
+    resume_player_hold: " · A Player Holds the Device, So It Was Not Connected Again: {}",
     resume_refused: "Resuming {} Did Not Succeed: the Runtime Answered {} · Client {} ({})",
     resume_failed: "Resuming {} Did Not Succeed: {} ({})",
     resume_not_sent: "The Resume of {} Was Not Sent: {} ({})",
@@ -3483,6 +3545,8 @@ pub const EN: Labels = Labels {
     pause_all_applied: "Pause All is in effect",
     pause_all_already: "A global pause already holds and keeps its reason; refreshed",
     pause_all_refused: "Pause All did not succeed: {}",
+    pause_failed: "The Runtime failed while pausing: {} · {}. Whether a pause holds, see what the console shows now",
+    pause_lifted_by_resume: "This pause was resumed before it finished up: no pause holds now",
     pause_all_watching: "Not confirmed yet: watching whether Pause All took hold…",
     pause_all_late: "Confirmed late: Pause All is in effect",
     pause_all_not_held: "This Pause All did not take hold: no global pause holds now. You can press it again",
@@ -3505,13 +3569,30 @@ pub const EN: Labels = Labels {
     account_paused: "This instance's scheduling is paused: no new task is scheduled for it",
     account_pause_already: "A pause of this instance's scheduling already holds and keeps its reason; refreshed",
     account_pause_refused: "Pause This Instance's Scheduling did not succeed: {} · {}",
+    account_pause_standing: "This instance's scheduling is paused, still finishing up: {}",
+    account_pause_standing_draining: "This instance's scheduling is paused, still waiting for the running tasks to finish",
+    account_pause_standing_releasing: "This instance's scheduling is paused, still handing the device back",
+    account_pause_kept_at_shutdown: "This instance's scheduling is paused; the Runtime closed before it finished up, and the pause stays until the next start",
+    obstacle_contained_run: "a task is still running; it was asked to stop at its next checkpoint",
+    obstacle_policy_run: "a scheduled task is not settled yet",
+    obstacle_lease: "another party holds the device (a client, a direct run, an operator's control, a Lab operation or a self-check)",
+    obstacle_automatic_start: "the Runtime is starting the emulator by itself",
+    obstacle_recovery_ladder: "the Runtime is recovering a stuck instance",
+    obstacle_queued_entry: "another request is queued for this instance",
+    obstacle_client_reset: "a client still owes the device its reset after a cancelled task",
+    obstacle_close_refused: "closing the device session was not let through this time; it is tried again",
+    obstacle_close_unconfirmed: "closing the device session could not be confirmed, so this instance is fenced and it is not tried again; Resume This Instance's Scheduling connects it again",
+    obstacle_check_failed: "the last check of the finishing up failed (not fatally); it is tried again",
     account_pause_watching: "Not confirmed yet: watching whether the pause took hold…",
     account_pause_late: "Confirmed late: this instance's scheduling is paused",
     account_pause_not_held: "This pause did not take hold: this instance is not paused now. You can press it again",
+    account_pause_lifted_later: "This pause took hold, and was resumed later",
     account_pause_still_staging: "Still pausing (finishing up tasks or handing the device back is not done yet); see the card for what holds now",
-    account_resume_sending: "Resuming this instance's scheduling… its device is connected again; this can take about half a minute",
+    account_resume_sending: "Resuming this instance's scheduling… a device already handed back is connected again; this can take about half a minute",
     account_resumed: "This instance's scheduling is resumed",
     account_resumed_device_failed: "This instance's scheduling is resumed, but connecting its device again did not succeed: {} · {}",
+    account_resumed_held_again: "This instance's scheduling is resumed, but as a newly added instance its first-start pause held it again; see the card for what holds now",
+    account_resumed_player_hold: "This instance's scheduling is resumed; a player holds its device, so it was not connected again",
     account_resumed_global_holds: " · The global pause still holds, so no task is scheduled for this instance yet",
     account_resume_refused: "Resume This Instance's Scheduling did not succeed: {} · {}",
     performance_preset: "Performance",
@@ -4386,4 +4467,11 @@ pub fn outcome_short(labels: &Labels, code: &str) -> Option<String> {
         Ok(None) => Some(labels.outcome_unknown_short.to_owned()),
         Err(error) => Some(fill(labels.outcome_table_unusable, &[&error.to_string()])),
     }
+}
+
+/// Whether an outcome code is of a category that is no failure, success or info, by the UI's
+/// table or the pinned Runtime's catalog. A code neither holds, or a table that does not parse,
+/// counts as a failure, so that it is said in red, never passed over.
+pub fn outcome_informs(code: &str) -> bool {
+    matches!(explain(code, Tongue::En), Ok(Some(words)) if words.category <= Category::Info)
 }

@@ -743,14 +743,26 @@ pub struct PauseFact {
 }
 
 /// Where an instance pause stands (`InstancePauseStage`): its runs still
-/// draining, its device being handed back, or handed back. The Runtime resumes
-/// only a released one; it refuses the other two (`scheduling_pause_draining`,
-/// `scheduling_pause_releasing`).
+/// draining, its device being handed back, or handed back. Since Runtime 0.12.73
+/// (#480 PG-2c) a person's pause (`stand`, this console's own among them) is
+/// resumed in every stage, and a tool's hold (`quiet_or_lift`, a Lab recording's)
+/// only once released: the Runtime refuses the other two of it
+/// (`scheduling_pause_draining`, `scheduling_pause_releasing`; runtime-host
+/// `host/policy_dispatch.rs` 1153-1191, `check_resumable`, at a8d0aa43).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PauseStage {
     Draining,
     Paused,
     Released,
+}
+
+/// The contract's stage as this crate's.
+pub(crate) const fn pause_stage(stage: InstancePauseStage) -> PauseStage {
+    match stage {
+        InstancePauseStage::Draining => PauseStage::Draining,
+        InstancePauseStage::Paused => PauseStage::Paused,
+        InstancePauseStage::Released => PauseStage::Released,
+    }
 }
 
 /// The one pause a conditional resume lifts (Workflow #338 R4): its scope, and
@@ -1722,11 +1734,7 @@ fn instance_pause_fact(
         reason: pause.pause_reason.as_str().to_owned(),
         revision: pause.revision,
         since_unix_ms: pause.since_unix_ms,
-        stage: Some(match pause.stage {
-            InstancePauseStage::Draining => PauseStage::Draining,
-            InstancePauseStage::Paused => PauseStage::Paused,
-            InstancePauseStage::Released => PauseStage::Released,
-        }),
+        stage: Some(pause_stage(pause.stage)),
         target: PauseTarget {
             scope: SchedulingPauseScope::Instance { instance_alias: alias.to_string() },
             expected: SchedulingPauseExpectation { owner_epoch, revision: pause.revision },
@@ -1949,8 +1957,9 @@ const RUNTIME_RESULT_UNEXPECTED: &str = "runtime_result_unexpected";
 #[derive(Debug, Clone)]
 pub enum ResumeOutcome {
     /// The pause is lifted: its scope's revision after the lift and, for an
-    /// instance, the device code of a reconnect that failed
-    /// (`selfcheck.failure_code`), which never rolls the resume back.
+    /// instance, its self-check's `failure_code`, which never rolls the resume
+    /// back: the code of a reconnect that failed, or one that says why none ran
+    /// ([`resumed_device`]).
     Resumed { revision: u64, device_failure: Option<String> },
     /// The Runtime answered and the resume did not succeed: its refusal, in
     /// `runtime_code`; or the client's own `runtime_operation_unsupported`,
@@ -1995,6 +2004,45 @@ pub fn resume_paused(state_root: &Path, target: &PauseTarget) -> ResumeOutcome {
                 ResumeOutcome::Unconfirmed(failure)
             }
         }
+    }
+}
+
+/// The two codes an instance resume's self-check names that are no failure of a reconnect, the
+/// host's own spellings, of a crate this one does not use (runtime-host `codes.rs` 620 and 987,
+/// at a8d0aa43).
+const DISPATCH_PAUSED_INSTANCE: &str = "dispatch_paused_instance";
+const PLAYER_HOLD_ACTIVE: &str = "player_hold_active";
+
+/// What an instance resume's self-check says of the account's device, by its `failure_code`
+/// (`ResumeOutcome::Resumed`'s `device_failure`), which names more than a reconnect that failed
+/// (Runtime 0.12.73; runtime-host `host/policy_dispatch.rs`, at a8d0aa43).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumedDevice<'a> {
+    /// No code: the reconnect passed, or none ran, the pause, a person's, lifted while it still
+    /// drained or handed its device back (#480 PG-2c; 4950-5008). The client hands back no cause
+    /// of the receipt that would tell the two apart (`scheduling_resume_without_reconnect`):
+    /// either way nothing failed.
+    Fine,
+    /// `dispatch_paused_instance` (Workflow #453 S2): the instance was added while the Runtime
+    /// was stopped and the pause it starts with (`start_paused`) was not applied yet, so the
+    /// lift held it again with `instance.added` instead, at the revision the resume answers,
+    /// and nothing reconnected (4837-4874, 4972-4988): it is still paused.
+    HeldAgain,
+    /// `player_hold_active`: a player holds the device, so the lift reconnected nothing, which
+    /// the contract calls the expected, not a failure (`contracts/scheduling-pause.md` 709-720).
+    PlayerHolds,
+    /// Any other: the code of the reconnect's failing step.
+    ReconnectFailed(&'a str),
+}
+
+/// What `device_failure`, an instance resume's self-check's `failure_code`, says of its device
+/// ([`ResumedDevice`]).
+pub fn resumed_device(device_failure: Option<&str>) -> ResumedDevice<'_> {
+    match device_failure {
+        None => ResumedDevice::Fine,
+        Some(DISPATCH_PAUSED_INSTANCE) => ResumedDevice::HeldAgain,
+        Some(PLAYER_HOLD_ACTIVE) => ResumedDevice::PlayerHolds,
+        Some(code) => ResumedDevice::ReconnectFailed(code),
     }
 }
 
@@ -2205,4 +2253,27 @@ fn read_material_online(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resumed_device, ResumedDevice};
+
+    #[test]
+    fn a_resume_with_no_code_is_fine() {
+        assert_eq!(resumed_device(None), ResumedDevice::Fine);
+    }
+
+    #[test]
+    fn a_first_start_pause_held_again_and_a_player_hold_are_no_reconnect_failures() {
+        assert_eq!(resumed_device(Some("dispatch_paused_instance")), ResumedDevice::HeldAgain);
+        assert_eq!(resumed_device(Some("player_hold_active")), ResumedDevice::PlayerHolds);
+    }
+
+    #[test]
+    fn any_other_code_is_a_reconnect_that_failed() {
+        for code in ["input_backend_open_failed", "capture_backend_open_failed", "dispatch_paused"] {
+            assert_eq!(resumed_device(Some(code)), ResumedDevice::ReconnectFailed(code), "{code}");
+        }
+    }
 }
