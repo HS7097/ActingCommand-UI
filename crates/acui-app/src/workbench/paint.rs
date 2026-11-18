@@ -37,11 +37,11 @@ use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, QuietShown};
 use acui_source::workbench::stop::{stop_time, Origin as RunOrigin, Refusal, Reset, StopTime};
 use acui_source::workbench::{
-    PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
+    Obstacle, PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
     SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
     MODE_OBSERVE, MODE_PACE, SETUP_FIRST_START,
 };
-use acui_source::ClientFailure;
+use acui_source::{resumed_device, ClientFailure, PauseStage, ResumedDevice};
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use super::actions::{
@@ -72,7 +72,7 @@ use super::tasks::{
 use crate::ledger::paint::{age_text, models};
 use crate::ledger::resume::Lifter;
 use crate::report;
-use crate::strings::{fill, outcome_short, Labels};
+use crate::strings::{fill, outcome_informs, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
     AccountCard, BackendGroupItem, GoalControl, GoalListData, GoalRowData, GoalRowKind, IdlePick,
@@ -2716,6 +2716,13 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         Said::Sending(Write::ResumeAll) => (labels.resume_all_sending.to_owned(), false),
         Said::Sending(Write::Configure { .. }) => (labels.config_sending.to_owned(), false),
         Said::PauseApplied => (labels.pause_all_applied.to_owned(), false),
+        Said::PauseLifted => (labels.pause_lifted_by_resume.to_owned(), false),
+        // A failure of the Runtime's, in red, which lifted nothing.
+        Said::PauseFailed { code } => {
+            let words = outcome_short(labels, code)
+                .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
+            (fill(labels.pause_failed, &[code.as_str(), words.as_str()]), true)
+        }
         Said::AlreadyPaused => (labels.pause_all_already.to_owned(), false),
         Said::Resumed if view.still_paused == 0 => (labels.resume_all_done.to_owned(), false),
         Said::Resumed => {
@@ -4224,11 +4231,15 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
 
 /// What the last press of an account card's own button came to in words, and whether that is
 /// a failure. A refusal says its code as the Runtime gave it, then the code's short words, and
-/// so does a lift whose reconnect of the device failed. A lift while a global pause holds
-/// (`global_holds`) says that the account is still not scheduled, as the top bar's says the
-/// pauses that still hold. A pause whose answer said nothing says it is watched, and then what the
-/// reads after it came to: only one that did not hold is a failure, and one still on its way at
-/// the watch's end is neither confirmed nor failed.
+/// so do a pause whose stages failed, which lifted nothing, and a lift whose reconnect of the
+/// device failed. A pause still on its way when it answered says what was in its way then, or,
+/// with nothing in it, what it was still doing; one lifted by a resume or kept at a shutdown
+/// during its stages says so; none of these is a failure. A lift that found the account held
+/// again by its first-start pause, or its device held by a player, says so, a failure only by its
+/// code's category. A lift while a global pause holds (`global_holds`) says that the account is
+/// still not scheduled, as the top bar's says the pauses that still hold. A pause whose answer said
+/// nothing says it is watched, and then what the reads after it came to: only one that did not
+/// hold is a failure, and one still on its way at the watch's end is neither confirmed nor failed.
 fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) -> (String, bool) {
     let coded = |template: &str, code: &str| {
         let words = outcome_short(labels, code)
@@ -4243,16 +4254,43 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
             (labels.account_resume_sending.to_owned(), false)
         }
         AccountSaid::Paused => (labels.account_paused.to_owned(), false),
+        AccountSaid::PauseStanding { stage, in_the_way } => {
+            let text = match in_the_way.as_deref() {
+                Some(words) if !words.is_empty() => {
+                    let words: Vec<&str> =
+                        words.iter().map(|word| obstacle_text(labels, *word)).collect();
+                    fill(labels.account_pause_standing, &[&words.join(labels.name_list)])
+                }
+                // Nothing in the way at that read: the stage says what it was still doing, the
+                // hand-back unless it still drained.
+                _ => match stage {
+                    Some(PauseStage::Draining) => labels.account_pause_standing_draining.to_owned(),
+                    _ => labels.account_pause_standing_releasing.to_owned(),
+                },
+            };
+            (text, false)
+        }
+        AccountSaid::PauseLifted => (labels.pause_lifted_by_resume.to_owned(), false),
+        AccountSaid::PauseKept => (labels.account_pause_kept_at_shutdown.to_owned(), false),
+        AccountSaid::PauseFailed { code } => (coded(labels.pause_failed, code.as_str()), true),
         AccountSaid::AlreadyPaused => (labels.account_pause_already.to_owned(), false),
         AccountSaid::Resumed { device_failure } => {
-            let mut text = match device_failure {
-                None => labels.account_resumed.to_owned(),
-                Some(code) => coded(labels.account_resumed_device_failed, code.as_str()),
+            // In red only by its code's category: an informing one is no failure.
+            let informs = device_failure.as_deref().is_some_and(outcome_informs);
+            let (mut text, failed) = match resumed_device(device_failure.as_deref()) {
+                ResumedDevice::Fine => (labels.account_resumed.to_owned(), false),
+                ResumedDevice::HeldAgain => (labels.account_resumed_held_again.to_owned(), !informs),
+                ResumedDevice::PlayerHolds => {
+                    (labels.account_resumed_player_hold.to_owned(), !informs)
+                }
+                ResumedDevice::ReconnectFailed(code) => {
+                    (coded(labels.account_resumed_device_failed, code), true)
+                }
             };
             if global_holds {
                 text.push_str(labels.account_resumed_global_holds);
             }
-            (text, device_failure.is_some())
+            (text, failed)
         }
         AccountSaid::PauseMoved => (labels.resume_all_moved.to_owned(), false),
         AccountSaid::Refused { write: AccountWrite::Pause, code } => {
@@ -4266,6 +4304,7 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
         AccountSaid::PauseWatching => (labels.account_pause_watching.to_owned(), false),
         AccountSaid::PauseLate => (labels.account_pause_late.to_owned(), false),
         AccountSaid::PauseNotHeld => (labels.account_pause_not_held.to_owned(), true),
+        AccountSaid::PauseLiftedLater => (labels.account_pause_lifted_later.to_owned(), false),
         AccountSaid::PauseStillStaging => (labels.account_pause_still_staging.to_owned(), false),
         AccountSaid::NotSent { not_this_root } => {
             (not_sent(labels, labels.write_not_sent, *not_this_root), true)
@@ -4275,6 +4314,22 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
             (fill(labels.write_no_thread, &[why.as_str()]), true)
         }
         AccountSaid::Restarted => (labels.write_restarted.to_owned(), false),
+    }
+}
+
+/// One thing in the way of a pause's stages, in a person's words (vocabulary `pause_obstacle`).
+fn obstacle_text(labels: &Labels, word: Obstacle) -> &'static str {
+    match word {
+        Obstacle::ContainedRun => labels.obstacle_contained_run,
+        Obstacle::PolicyRun => labels.obstacle_policy_run,
+        Obstacle::Lease => labels.obstacle_lease,
+        Obstacle::AutomaticStart => labels.obstacle_automatic_start,
+        Obstacle::RecoveryLadder => labels.obstacle_recovery_ladder,
+        Obstacle::QueuedEntry => labels.obstacle_queued_entry,
+        Obstacle::ClientReset => labels.obstacle_client_reset,
+        Obstacle::CloseRefused => labels.obstacle_close_refused,
+        Obstacle::CloseUnconfirmed => labels.obstacle_close_unconfirmed,
+        Obstacle::CheckFailed => labels.obstacle_check_failed,
     }
 }
 

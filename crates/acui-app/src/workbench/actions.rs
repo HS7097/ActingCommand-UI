@@ -22,27 +22,34 @@
 //! Each account's card has a button of its own (`account_view`), on the same terms as the top
 //! bar's pause and resume but under a ticket of that account's, one out per account: with no
 //! pause of its own, "pause this account" sends that instance's pause with this console's own
-//! reason (`pause_account`); under the one this console set there, handed back, "resume this
+//! reason (`pause_account`); under the one this console set there, in any stage, "resume this
 //! account" lifts exactly the pause the newest `Status` showed, by its owner epoch and revision
 //! (`resume_paused`), at one press. A pause of the account another tool set gets no button on
 //! the card, which says who lifts it; the ledger window resumes those it may.
+//!
+//! Both pauses are a person's (Runtime 0.12.73, #480 PG-2c): nothing but a person's resume lifts
+//! one once it is recorded. A pause of an account answers at the latest at the end of its
+//! caller's time, perhaps still on its way, and then says what was in the way; or that a resume
+//! or a shutdown came during its stages; and an answer that its stages failed is no pause lifted
+//! (`PauseOutcome`).
 //!
 //! A pause whose answer said nothing, of every account or of one, is not left at that
 //! (UI-PF1): the `Status` reads after it are watched for the pause of its scope (`PauseWatch`,
 //! `pause_verdict`), and its line says so meanwhile. Its stage says what came of it, not a time:
 //! a pause shown holding, the global one or one of an account with its device handed back,
 //! holds, confirmed late; one still draining or handing its device back is watched on, as the
-//! Runtime moves it on by itself, and at ten minutes from the press is said to be still on its
-//! way, as the card shows, neither confirmed nor failed; one shown gone after a read showed it
-//! did not hold; and none shown did not hold only once three reads landed after the answer and
-//! the Runtime's own time to settle one has passed since the press, or ten minutes have. Each
-//! read after a verdict is watched too, until one says it holds, another party's pause shows
-//! there (only the console's own reason counts as the press's), or ten minutes from the press
-//! end it: a pause said not to hold that a read shows after all is confirmed late, or watched
-//! again while on its way, and one still on its way that a read shows held or gone is said so,
-//! each with a line in the log. Once the watch is over, a read that shows otherwise takes back
-//! a line saying the pause did not hold or is still on its way. Nothing is sent again by
-//! itself, and a resume whose answer said nothing is said as it was.
+//! Runtime moves it on by itself to held or leaves it so until a person resumes it, and at ten
+//! minutes from the press is said to be still on its way, as the card shows, neither confirmed nor
+//! failed; one shown gone after a read showed it held and was lifted later, by a person's resume;
+//! and none shown did not hold only once three reads landed after the answer and the Runtime's own
+//! time to record one has passed since the press, or ten minutes have. Each read after a verdict is watched too, until one says it holds,
+//! another party's pause shows there (only the console's own reason counts as the press's), it is
+//! gone after a read showed it, or ten minutes from the press end it: a pause said not to hold that
+//! a read shows after all is confirmed late, or watched again while on its way, and one still on
+//! its way that a read shows held or gone is said so, each with a line in the log. Once the watch
+//! is over, a read that shows otherwise takes back a line saying the pause did not hold, was
+//! lifted later or is still on its way. Nothing is sent again by itself, and a resume whose answer
+//! said nothing is said as it was.
 //!
 //! Picking a preset, or going back to the file's setting, is one change of settings
 //! (`ConfigFlow`). It names the version of the newest snapshot, and only a snapshot or an
@@ -135,12 +142,14 @@ use acui_source::workbench::rules::{
 };
 use acui_source::workbench::{
     configure, pause_account, pause_global, pause_verdict, ActivityKind, ConfigEdit, ConfigOutcome,
-    ConfigRead, ConfigRefusal, InstanceLive, PauseOutcome, PauseSeen, PauseVerdict, PresetMember,
-    PresetSetting, RefusalWhy, SettingSource, SettingValue, SettingsRead, ACCOUNT_PAUSE_SETTLES,
-    CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, GLOBAL_PAUSE_SETTLES, PAUSE_WATCH_LIMIT,
+    ConfigRead, ConfigRefusal, InstanceLive, Obstacle, PauseOutcome, PauseSeen, PauseVerdict,
+    PresetMember, PresetSetting, RefusalWhy, SettingSource, SettingValue, SettingsRead,
+    ACCOUNT_PAUSE_SETTLES, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, GLOBAL_PAUSE_SETTLES,
+    PAUSE_WATCH_LIMIT,
 };
 use acui_source::{
-    resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
+    resume_paused, resumed_device, ClientFailure, PauseFact, PauseStage, PauseTarget,
+    ResumeOutcome, ResumedDevice,
 };
 
 use super::model::{DeviceBusy, Link, Page};
@@ -303,10 +312,21 @@ impl AccountWrite {
 pub enum AccountSaid {
     Sending(AccountWrite),
     Paused,
+    /// The pause holds and was still on its way at the end of its caller's time: where it stood,
+    /// and what was in the way then (`PauseOutcome::Standing`). No failure.
+    PauseStanding { stage: Option<PauseStage>, in_the_way: Option<Vec<Obstacle>> },
+    /// A person's resume lifted the pause during its stages: none holds now. No failure.
+    PauseLifted,
+    /// The Runtime shut down during its stages: the pause is kept until the next start. No
+    /// failure.
+    PauseKept,
+    /// Its stages failed, which lifts nothing of a person's pause: `code` is the Runtime's own,
+    /// shown as it gave it, with its words.
+    PauseFailed { code: String },
     /// A pause of the account already holds: it keeps its reason, and this press set nothing.
     AlreadyPaused,
-    /// The pause is lifted; `device_failure` is the device code of the reconnect that followed
-    /// it and failed (`selfcheck.failure_code`), which never rolls the resume back.
+    /// The pause is lifted; `device_failure` is the self-check's `failure_code`, which never
+    /// rolls the resume back: a reconnect that failed, or why none ran (`resumed_device`).
     Resumed { device_failure: Option<String> },
     /// The pause was changed or lifted elsewhere: nothing was lifted here.
     PauseMoved,
@@ -322,10 +342,14 @@ pub enum AccountSaid {
     PauseWatching,
     /// They showed it holding, its device handed back: confirmed late.
     PauseLate,
-    /// They showed it and then no more, or none in the reads and the time it is watched for:
-    /// it did not hold, and can be pressed again. The reads after are watched until ten minutes
-    /// from the press; past that, one showing a pause there takes the line back.
+    /// They showed none in the reads and the time it is watched for: it was never recorded, did
+    /// not hold, and can be pressed again. The reads after are watched until ten minutes from the
+    /// press; past that, one showing a pause there takes the line back.
     PauseNotHeld,
+    /// They showed it and then no more: it held, and a person's resume lifted it later, as
+    /// nothing else lifts a person's pause. No failure; the watch ends, and a read showing a pause
+    /// there takes the line back.
+    PauseLiftedLater,
     /// They showed it still draining or handing its device back ten minutes after the press
     /// (`PAUSE_WATCH_LIMIT`), which ends the watch: neither confirmed nor failed, as the card
     /// shows. A read showing it handed back or gone takes the line back.
@@ -354,8 +378,8 @@ struct AccountSlot {
 /// that answer, when the watch began; and what the last of them came to. It is kept past a
 /// verdict that the pause did not hold or is still on its way, so that a later read showing
 /// otherwise says so, but never past [`PAUSE_WATCH_LIMIT`] from the press; one that holds ends it,
-/// and so does another party's pause there, which only the press's own reason is not
-/// (`PauseSeen::of`).
+/// and so do another party's pause there, which only the press's own reason is not
+/// (`PauseSeen::of`), and a pause lifted after a read showed it, which no later read brings back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PauseWatch {
     ticket: Ticket,
@@ -373,11 +397,11 @@ impl PauseWatch {
     }
 
     /// One more `Status` read, landed at `now` and showing `seen` of the pause's scope, the
-    /// Runtime settling such a pause within `settles`: what the reads so far come to. A verdict
+    /// Runtime showing such a pause within `settles`: what the reads so far come to. A verdict
     /// other than the last goes in the log under `thread`, naming the press's ticket and `alias`,
     /// the account's, as its answer did: what the last one was, what this read showed, and how
-    /// long after the press. One that holds, or that is watched again, goes quietly; one that does
-    /// not hold, or is still on its way at the end, as the problem it is.
+    /// long after the press. One that holds, that was lifted later, or that is watched again, goes
+    /// quietly; one that does not hold, or is still on its way at the end, as the problem it is.
     fn read(
         &mut self,
         seen: PauseSeen,
@@ -389,7 +413,6 @@ impl PauseWatch {
         self.reads = self.reads.saturating_add(1);
         let watched = now.saturating_duration_since(self.pressed);
         let verdict = pause_verdict(seen, self.shown, self.reads, watched, settles);
-        let shown_before = self.shown;
         self.shown |= matches!(seen, PauseSeen::Staging | PauseSeen::Holds);
         let was = std::mem::replace(&mut self.verdict, verdict);
         if verdict == was {
@@ -403,14 +426,15 @@ impl PauseWatch {
             PauseVerdict::Watching => "unconfirmed",
             PauseVerdict::NotHeld => "unconfirmed and said not to hold",
             PauseVerdict::StillStaging => "unconfirmed and said still on its way",
-            // A pause that holds, or another party's, ends the watch.
+            // A pause that holds, another party's, or one lifted later ends the watch.
             PauseVerdict::Held => "unconfirmed and said paused",
             PauseVerdict::Overtaken => "unconfirmed and left to another party's pause",
+            PauseVerdict::LiftedLater => "unconfirmed and said lifted later",
         };
         let (then, said) = match verdict {
             PauseVerdict::Held => ("seen paused", "confirmed late"),
-            PauseVerdict::NotHeld if shown_before => ("seen paused and gone again", "did not hold"),
             PauseVerdict::NotHeld => ("not seen paused", "did not hold"),
+            PauseVerdict::LiftedLater => ("seen paused and gone again", "held, lifted later"),
             PauseVerdict::StillStaging => {
                 ("still draining or handing its device back", "left to the card")
             }
@@ -426,20 +450,23 @@ impl PauseWatch {
             "{of}: {before}, then {then} after {reads}, {seconds} s after the press: {said}"
         );
         match verdict {
-            PauseVerdict::Held | PauseVerdict::Watching | PauseVerdict::Overtaken => {
-                report::log_quiet(thread, &line)
-            }
+            PauseVerdict::Held
+            | PauseVerdict::LiftedLater
+            | PauseVerdict::Watching
+            | PauseVerdict::Overtaken => report::log_quiet(thread, &line),
             PauseVerdict::NotHeld | PauseVerdict::StillStaging => report::log(thread, &line),
         }
         verdict
     }
 
     /// Whether the watch is over once a read at `now` came to `verdict`: a pause that holds,
-    /// another party's pause there, or [`PAUSE_WATCH_LIMIT`] since the press ends it, the last
-    /// verdict standing.
+    /// another party's pause there, a pause lifted after a read showed it, or
+    /// [`PAUSE_WATCH_LIMIT`] since the press ends it, the last verdict standing.
     fn over(&self, verdict: PauseVerdict, now: Instant) -> bool {
-        matches!(verdict, PauseVerdict::Held | PauseVerdict::Overtaken)
-            || now.saturating_duration_since(self.pressed) >= PAUSE_WATCH_LIMIT
+        matches!(
+            verdict,
+            PauseVerdict::Held | PauseVerdict::Overtaken | PauseVerdict::LiftedLater
+        ) || now.saturating_duration_since(self.pressed) >= PAUSE_WATCH_LIMIT
     }
 }
 
@@ -496,6 +523,12 @@ pub enum Reread {
 pub enum Said {
     Sending(Write),
     PauseApplied,
+    /// A person's resume lifted the pause while its stages still ran: none holds now. A global
+    /// pause has no stages, so 0.12.73 never answers it so; it is read as an account's is.
+    PauseLifted,
+    /// The Runtime answered that the pause failed, which lifts nothing of a person's pause:
+    /// `code` is the Runtime's own, for its words.
+    PauseFailed { code: String },
     AlreadyPaused,
     Resumed,
     /// The pause was changed or lifted elsewhere: nothing was lifted here.
@@ -1165,12 +1198,14 @@ impl Actions {
     /// A `Status` read that counts, landed at `now` with these `instances`. A confirmation is
     /// of one pause, and goes with it. A pause whose answer said nothing is watched by it
     /// (`PauseWatch`), and its line says what the reads so far came to, this one's verdict over
-    /// an earlier one's, until a pause that holds, another party's pause there or the end of the
-    /// watch ends it (`PauseWatch::over`); after that, a read showing otherwise takes back a line
-    /// saying it did not hold or is still on its way. A line saying a press worked goes
-    /// once `Status` says otherwise: the reads begun before that press were let go, so this says
-    /// someone changed it since. So does one saying a pause was confirmed late, which is said only
-    /// once it holds, handed back: a read showing it gone after that says someone lifted it.
+    /// an earlier one's, until a pause that holds, another party's pause there, a pause gone after
+    /// a read showed it or the end of the watch ends it (`PauseWatch::over`); after that, a read
+    /// showing otherwise takes back a line saying it did not hold, was lifted later or is still on
+    /// its way. A line saying a press worked goes once `Status` says otherwise: the reads begun
+    /// before that press were let go, so this says someone changed it since. So does one saying a
+    /// pause was confirmed late, which is said only once it holds, handed back: a read showing it
+    /// gone after that says someone lifted it. A pause of an account that answered still on its
+    /// way is said to hold once a read shows its device handed back: what was in its way is over.
     /// Whether it shows an unconfirmed switch over: then the writes are to be counted once more
     /// (`super::wrote`), so that the snapshot that judges it is read after this.
     pub fn status_read(
@@ -1200,8 +1235,10 @@ impl Actions {
             Some(PauseVerdict::Watching | PauseVerdict::StillStaging) => {
                 self.said.insert(SaidAt::Scheduling, Said::PauseWatching);
             }
-            // Another party's global pause: the top bar says whose it is.
-            Some(PauseVerdict::Overtaken) => {
+            // Another party's global pause: the top bar says whose it is. Never lifted later: a
+            // read that shows the global pause shows it holding, which ends the watch; were it,
+            // the top bar shows that none holds.
+            Some(PauseVerdict::Overtaken | PauseVerdict::LiftedLater) => {
                 self.said.remove(&SaidAt::Scheduling);
             }
             None => {}
@@ -1215,7 +1252,7 @@ impl Actions {
         // after all takes it back, as it does a lift's line.
         let overtaken = match self.said.get(&SaidAt::Scheduling) {
             Some(Said::PauseApplied | Said::PauseLate) => global.is_none(),
-            Some(Said::Resumed | Said::PauseNotHeld) => global.is_some(),
+            Some(Said::Resumed | Said::PauseNotHeld | Said::PauseLifted) => global.is_some(),
             _ => false,
         };
         if overtaken {
@@ -1236,6 +1273,7 @@ impl Actions {
             match verdict {
                 Some(PauseVerdict::Held) => slot.said = Some(AccountSaid::PauseLate),
                 Some(PauseVerdict::NotHeld) => slot.said = Some(AccountSaid::PauseNotHeld),
+                Some(PauseVerdict::LiftedLater) => slot.said = Some(AccountSaid::PauseLiftedLater),
                 Some(PauseVerdict::StillStaging) => {
                     slot.said = Some(AccountSaid::PauseStillStaging);
                 }
@@ -1251,12 +1289,34 @@ impl Actions {
             }
             let paused = pause.is_some();
             let released = matches!(pause.and_then(|pause| pause.stage), Some(PauseStage::Released));
-            // "Did not hold" says the account is not paused now, and "still pausing" that its pause
-            // is still on its way: once the watch is over, a read that shows otherwise takes either
-            // back, as one does a lift's line.
-            let overtaken = match slot.said {
-                Some(AccountSaid::Paused | AccountSaid::PauseLate) => !paused,
-                Some(AccountSaid::Resumed { .. } | AccountSaid::PauseNotHeld) => paused,
+            // A pause that answered still on its way holds as any other once its device is handed
+            // back: what it said was in its way is over.
+            if released && matches!(slot.said, Some(AccountSaid::PauseStanding { .. })) {
+                slot.said = Some(AccountSaid::Paused);
+            }
+            // "Did not hold" and "lifted later" say the account is not paused now, and "still
+            // pausing" that its pause is still on its way: once the watch is over, a read that
+            // shows otherwise takes either back, as one does a lift's line. A resume that found the
+            // account's first-start pause not applied yet left it paused by that one: only a read
+            // showing no pause takes that line back.
+            let overtaken = match &slot.said {
+                Some(
+                    AccountSaid::Paused
+                    | AccountSaid::PauseLate
+                    | AccountSaid::PauseStanding { .. }
+                    | AccountSaid::PauseKept,
+                ) => !paused,
+                Some(AccountSaid::Resumed { device_failure }) => {
+                    match resumed_device(device_failure.as_deref()) {
+                        ResumedDevice::HeldAgain => !paused,
+                        _ => paused,
+                    }
+                }
+                Some(
+                    AccountSaid::PauseNotHeld
+                    | AccountSaid::PauseLiftedLater
+                    | AccountSaid::PauseLifted,
+                ) => paused,
                 Some(AccountSaid::PauseStillStaging) => !paused || released,
                 _ => false,
             };
@@ -1455,14 +1515,13 @@ pub fn view(
 /// An account card's own button now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountEntry {
-    /// None: no Runtime answers; the account's own pause is another's, which the card says who
-    /// lifts; or it is this console's and still drains or hands the device back, which the
-    /// Runtime refuses to lift.
+    /// None: no Runtime answers, or the account's own pause is another's, which the card says who
+    /// lifts.
     Off,
     /// "Pause this account", and whether it can be pressed now.
     Pause { offered: bool },
     /// "Resume this account": of the pause this console set there, as the newest `Status`
-    /// showed it, and whether it can be pressed now.
+    /// showed it, in whatever stage, and whether it can be pressed now.
     Resume { target: PauseTarget, offered: bool },
 }
 
@@ -1479,10 +1538,15 @@ pub struct AccountView {
 
 /// The card's own button of `instance`, an account of the newest `Status` while it answers:
 /// with no pause of its own, "pause this account"; under this console's own (its reason, and
-/// one only whoever set it lifts by the settings file is not this console's to lift), handed
-/// back, "resume this account"; under any other, none. Either can be pressed while no press of
-/// that account is out. A fixture is offered the pause too: the Runtime's refusal says why not.
-/// `global_holds`: that `Status` shows a global pause.
+/// one only whoever set it lifts by the settings file is not this console's to lift), in any
+/// stage, "resume this account"; under any other, none. This console's own is a person's pause,
+/// which the Runtime resumes while it still drains or hands the device back too (Runtime 0.12.73;
+/// runtime-host `host/policy_dispatch.rs` 1153-1191, `check_resumable`, at a8d0aa43), without
+/// a reconnect then (4930-5008), unless the instance is fenced or its hand-back has begun
+/// closing the device session (4804-4824, 4943-4966), when the resume reconnects it; the card's
+/// main line still says which stage it is in. Either can
+/// be pressed while no press of that account is out. A fixture is offered the pause too: the
+/// Runtime's refusal says why not. `global_holds`: that `Status` shows a global pause.
 pub fn account_view(
     instance: &InstanceLive,
     actions: &Actions,
@@ -1494,8 +1558,7 @@ pub fn account_view(
         None => AccountEntry::Pause { offered },
         Some(pause)
             if pause.reason == CONSOLE_PAUSE_ACCOUNT
-                && lifter(pause, elsewhere) == Lifter::Window
-                && pause.stage == Some(PauseStage::Released) =>
+                && lifter(pause, elsewhere) == Lifter::Window =>
         {
             AccountEntry::Resume { target: pause.target.clone(), offered }
         }
@@ -2346,7 +2409,17 @@ enum Written {
 impl Written {
     fn said(self, write: Write) -> Said {
         match self {
-            Self::Pause(PauseOutcome::Applied { .. }) => Said::PauseApplied,
+            // A global pause has no stages: 0.12.73 answers it with no cause, and one still on its
+            // way or kept at a shutdown would hold all the same.
+            Self::Pause(
+                PauseOutcome::Applied { .. }
+                | PauseOutcome::Standing { .. }
+                | PauseOutcome::KeptAtShutdown { .. },
+            ) => Said::PauseApplied,
+            Self::Pause(PauseOutcome::LiftedByResume { .. }) => Said::PauseLifted,
+            Self::Pause(PauseOutcome::Failed(failure)) => {
+                Said::PauseFailed { code: refusal(&failure).to_owned() }
+            }
             Self::Pause(PauseOutcome::Refused(failure)) => {
                 let code = refusal(&failure);
                 if code == ALREADY_PAUSED {
@@ -2416,13 +2489,19 @@ impl Written {
     fn log(&self, write: Write, ticket: Ticket) {
         let prefix = format!("ticket {}", ticket.0);
         match self {
-            Self::Pause(PauseOutcome::Applied { revision }) => report::log_quiet(
-                write.thread(),
-                &format!("{prefix}: paused at revision {revision}"),
-            ),
+            Self::Pause(
+                outcome @ (PauseOutcome::Applied { .. }
+                | PauseOutcome::Standing { .. }
+                | PauseOutcome::LiftedByResume { .. }
+                | PauseOutcome::KeptAtShutdown { .. }),
+            ) => report::log_quiet(write.thread(), &format!("{prefix}: {}", took_line(outcome))),
             Self::Resume(ResumeOutcome::Resumed { revision, .. }) => report::log_quiet(
                 write.thread(),
                 &format!("{prefix}: resumed at revision {revision}"),
+            ),
+            Self::Pause(PauseOutcome::Failed(failure)) => report::log(
+                write.thread(),
+                &format!("{prefix}: failed; whether a pause holds, the status tells: {}", failure_line(failure)),
             ),
             Self::Pause(PauseOutcome::Refused(failure))
             | Self::Resume(ResumeOutcome::Refused(failure)) => {
@@ -2497,6 +2576,59 @@ impl Written {
                 report::log(write.thread(), &format!("{prefix}: no thread, not sent: {error}"));
             }
         }
+    }
+}
+
+/// What the log says of a pause the Runtime answered `Completed`, after its ticket, the top bar's
+/// and a card's alike: its revision and, when the receipt said more, what: still on its way at the
+/// end of its caller's time, and where it stood and what was in the way; lifted by a resume or
+/// kept at a shutdown, and where it stood; or a cause this console does not read, by its code.
+fn took_line(outcome: &PauseOutcome) -> String {
+    match outcome {
+        PauseOutcome::Applied { revision, cause: None } => format!("paused at revision {revision}"),
+        PauseOutcome::Applied { revision, cause: Some(code) } => {
+            format!("paused at revision {revision}, with a cause this console does not read: {code}")
+        }
+        PauseOutcome::Standing { revision, stage, in_the_way } => format!(
+            "paused at revision {revision}, still on its way at the end of its caller's time, \
+             in stage {}; in the way: {}",
+            stage_word(*stage),
+            in_the_way_words(in_the_way.as_deref()),
+        ),
+        PauseOutcome::LiftedByResume { revision, stage } => format!(
+            "paused at revision {revision}, and lifted by a resume in stage {}: none holds now",
+            stage_word(*stage)
+        ),
+        PauseOutcome::KeptAtShutdown { revision, stage } => format!(
+            "paused at revision {revision}, and kept at the Runtime's shutdown in stage {}: the \
+             next start restores it",
+            stage_word(*stage)
+        ),
+        // No pause the Runtime took: each has a line of its own.
+        PauseOutcome::Refused(failure)
+        | PauseOutcome::Failed(failure)
+        | PauseOutcome::NotSent(failure)
+        | PauseOutcome::Unconfirmed(failure) => failure_line(failure),
+    }
+}
+
+/// An instance pause's stage as the wire spells it, for the log; one the receipt carried none of
+/// this build reads, so.
+fn stage_word(stage: Option<PauseStage>) -> &'static str {
+    match stage {
+        Some(PauseStage::Draining) => "draining",
+        Some(PauseStage::Paused) => "paused",
+        Some(PauseStage::Released) => "released",
+        None => "not read",
+    }
+}
+
+/// What was in a pause's way, by its words, for the log.
+fn in_the_way_words(in_the_way: Option<&[Obstacle]>) -> String {
+    match in_the_way {
+        None => "not read".to_owned(),
+        Some([]) => "nothing".to_owned(),
+        Some(words) => words.iter().map(|word| word.as_str()).collect::<Vec<_>>().join(", "),
     }
 }
 
@@ -2584,6 +2716,14 @@ impl AccountWritten {
     fn said(self, write: AccountWrite) -> AccountSaid {
         match self {
             Self::Pause(PauseOutcome::Applied { .. }) => AccountSaid::Paused,
+            Self::Pause(PauseOutcome::Standing { stage, in_the_way, .. }) => {
+                AccountSaid::PauseStanding { stage, in_the_way }
+            }
+            Self::Pause(PauseOutcome::LiftedByResume { .. }) => AccountSaid::PauseLifted,
+            Self::Pause(PauseOutcome::KeptAtShutdown { .. }) => AccountSaid::PauseKept,
+            Self::Pause(PauseOutcome::Failed(failure)) => {
+                AccountSaid::PauseFailed { code: refusal(&failure).to_owned() }
+            }
             Self::Pause(PauseOutcome::Refused(failure)) => {
                 let code = refusal(&failure);
                 if code == ALREADY_PAUSED {
@@ -2617,26 +2757,52 @@ impl AccountWritten {
     }
 
     /// Into the technical log, naming the account, as `Written::log` does the top bar's: what
-    /// went as it should and the refusals that only say the state moved on quietly, the rest,
-    /// a reconnect that failed after a lift included, as the problems they are.
+    /// went as it should, a pause still on its way, lifted or kept during its stages, a lift that
+    /// found the account held again or its device held by a player, and the refusals that only say
+    /// the state moved on quietly; the rest, a pause whose stages failed and a reconnect that
+    /// failed after a lift included, as the problems they are.
     fn log(&self, alias: &str, write: AccountWrite, ticket: Ticket) {
         let thread = write.thread();
         let prefix = format!("ticket {} of {alias}", ticket.0);
         match self {
-            Self::Pause(PauseOutcome::Applied { revision }) => {
-                report::log_quiet(thread, &format!("{prefix}: paused at revision {revision}"));
-            }
-            Self::Resume(ResumeOutcome::Resumed { revision, device_failure: None }) => {
-                report::log_quiet(thread, &format!("{prefix}: resumed at revision {revision}"));
-            }
-            Self::Resume(ResumeOutcome::Resumed { revision, device_failure: Some(code) }) => {
-                report::log(
-                    thread,
-                    &format!(
-                        "{prefix}: resumed at revision {revision}; the device's reconnect \
-                         failed: {code}"
+            Self::Pause(
+                outcome @ (PauseOutcome::Applied { .. }
+                | PauseOutcome::Standing { .. }
+                | PauseOutcome::LiftedByResume { .. }
+                | PauseOutcome::KeptAtShutdown { .. }),
+            ) => report::log_quiet(thread, &format!("{prefix}: {}", took_line(outcome))),
+            Self::Pause(PauseOutcome::Failed(failure)) => report::log(
+                thread,
+                &format!("{prefix}: failed; whether a pause holds, the status tells: {}", failure_line(failure)),
+            ),
+            Self::Resume(ResumeOutcome::Resumed { revision, device_failure }) => {
+                match resumed_device(device_failure.as_deref()) {
+                    ResumedDevice::Fine => report::log_quiet(
+                        thread,
+                        &format!("{prefix}: resumed at revision {revision}"),
                     ),
-                );
+                    ResumedDevice::HeldAgain => report::log_quiet(
+                        thread,
+                        &format!(
+                            "{prefix}: resumed, and held again by its first-start pause at \
+                             revision {revision}, not applied before: dispatch_paused_instance"
+                        ),
+                    ),
+                    ResumedDevice::PlayerHolds => report::log_quiet(
+                        thread,
+                        &format!(
+                            "{prefix}: resumed at revision {revision}; a player holds the \
+                             device, so nothing reconnected: player_hold_active"
+                        ),
+                    ),
+                    ResumedDevice::ReconnectFailed(code) => report::log(
+                        thread,
+                        &format!(
+                            "{prefix}: resumed at revision {revision}; the device's reconnect \
+                             failed: {code}"
+                        ),
+                    ),
+                }
             }
             Self::Pause(PauseOutcome::Refused(failure))
             | Self::Resume(ResumeOutcome::Refused(failure)) => {

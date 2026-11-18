@@ -32,13 +32,17 @@
 //! - **Output held by the adb server** ([`taken`]): the Lab serves the list and the bind in its
 //!   own process, each running `adb devices -l` (Runtime `crates/lab-ops/src/core_ops.rs`;
 //!   `crates/lab-ops/src/devices.rs` `run_adb`), and an adb client starts the adb server when
-//!   none of its version runs. actinglab does not keep its own output handles from its children
-//!   as actingd does (Runtime `apps/actingd/src/standard_handles.rs`, the one caller of
-//!   `clear_own_inheritance`), so that server inherits the Lab's output pipes and holds them for
-//!   its whole life. Both are therefore read without waiting for the pipes' end
-//!   ([`OnHeld::Take`]): once the Lab has exited, an answer whose stdout ends with its whole
-//!   result line ([`whole_line`]) is judged as any other, its exit code and outcome too, and the
-//!   log says the pipes were held ([`held_said`]); one that does not fails, saying so.
+//!   none of its version runs. Since Runtime 0.12.73 (#398 DB-3) actinglab makes its own stdin,
+//!   stdout and stderr not inheritable as it starts, before any child (Runtime
+//!   `apps/actinglab/src/main.rs` 247-252 at a8d0aa43, `clear_all_own_inheritance`;
+//!   `crates/host-metrics/src/standard_handles.rs` 20-43), so that server no longer inherits the
+//!   Lab's output pipes. A Lab before 0.12.73 lets that server inherit them, and it holds them for
+//!   its whole life; an install set may carry one, and a clear the system refuses leaves the pipes
+//!   inheritable, the Lab going on with one line on stderr. Both are therefore still read without
+//!   waiting for the pipes' end ([`OnHeld::Take`]): once the Lab has exited, an answer whose stdout
+//!   ends with its whole result line ([`whole_line`]) is judged as any other, its exit code and
+//!   outcome too, and the log says the pipes were held when they were ([`held_said`]); one that
+//!   does not fails, saying so.
 
 use std::ffi::OsString;
 use std::path::Path;

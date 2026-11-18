@@ -30,11 +30,15 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now Runtime v0.12.71 (`f0c64ae8`), a release.
-- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
-  `runtime-client` [3, 11] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.71: each of
-  them declares a `ledger` maximum within [3, 9] and an `actingd-config` and a `runtime-client` range that
-  meet the console's. From v0.12.68 a game root carries
+  of Runtime v0.12.47; the pin is now Runtime v0.12.73 (`a8d0aa43`), a release.
+- **Works with the 0.12 Runtime from v0.12.73 on**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
+  `runtime-client` [12, 12] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73: it declares a `ledger`
+  maximum within [3, 9] and an `actingd-config` and a `runtime-client` range that meet the console's. It does
+  not fit v0.12.72 or earlier, which declare `runtime-client` at most 11: every pause this console sends, Pause
+  All and an instance's alike, carries the member `pause_mode` of revision 12, which such a Runtime cannot
+  decode, so it ends the connection without an answer and sets no pause (see "Data source"). So move the
+  Runtime to v0.12.73 first, then switch to this console; a console pinned to v0.12.71 keeps working with
+  v0.12.73 meanwhile. From v0.12.68 a game root carries
   `pack-catalog.json` in place of `ui.json` (see "Data source"): the setup wizard lays `pack-catalog.json` and
   refuses an older bundle that carries `ui.json`. The exception is a game root laid before, by an earlier
   setup wizard or a Runtime before v0.12.68, that still holds `ui.json`: `actingctl packs` warns on it, so the
@@ -49,7 +53,8 @@ and guesses nothing.
   `ledger` range ends at 8 or below (UI v0.12.21 and earlier) cannot read offline a ledger that holds a
   revision-9 record, while its online reads are not touched (see "Data source"); so switch the console
   before moving to v0.12.71 too. Apart from such notes, whether another Runtime fits is judged from
-  the interfaces each side declares, not from version numbers (see "Component interfaces").
+  the interfaces each side declares, not from version numbers (see "Data source" for each pin's, and
+  "Setup wizard acsetup" for the install set's check of them).
 - **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
   0.12 Runtime. The 0.11 series is not maintained.
 - **What changed**: each release's notes on its Releases page say what changed in it.
@@ -240,9 +245,47 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.71 (`f0c64ae8`), a
-release, published as a pre-release. It merges Runtime PR #1800, whose head (`7b4705ff`, three commits on
-top of v0.12.69) the console was pinned to before, and it is the first release that declares `ledger`
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.73 (`a8d0aa43`), a
+release, published as a pre-release. Against v0.12.71 (`f0c64ae8`), the pin before, v0.12.72 and v0.12.73
+raise `runtime-client` to 12 and `package` to 19; `ledger` [3, 9] and the Runtime's `actingd-config`
+[5, 33], `install-control` [0, 0] and `runtime-outcomes` [1, 1] stay. The console's `runtime-client` range
+moves to [12, 12], its lower end with it. Revision 12 (#480 PG-2c) adds the request member
+`PauseScheduling.pause_mode` (`stand` or `quiet_or_lift`, `stand` when absent), and the pinned client writes
+it on every pause, the global one too; a Runtime of revision 11 or lower (v0.12.72 and earlier) cannot
+decode such a request and ends the connection without a receipt, so none of this console's pauses can reach
+it: the console sees no answer, watches the status, and says the pause did not take hold. The range says
+so, and the setup wizard refuses an install set that pairs this console with such a Runtime; the console's
+own handshake carries no revision, so a console pointed at an older Runtime still connects and reads, and
+only its pauses fail. Revision 12 also declares the status members `InstancePauseState.pause_mode` and
+`in_the_way`, which no 0.12.73 Runtime answers (the release that first answers them raises the Runtime's
+own minimum to 12). `package` 19 (#463 INT-1), an interrupt entry with `then: end_run` and no handlers and
+the `result` word `environment_reset`, is the packs' and the installer's. No crate the locks list changed its
+dependencies, so both locks change only in the rev. Of the Runtime crates the console links, ledger,
+ledger-forensics and runtime-config have the same source; the contract and runtime-client give what the
+console now reads of a pause: `pause_scheduling_as` with `SchedulingPauseMode`, which hands back the
+receipt's outcome beside its result (`SchedulingPauseAnswer`), and the vocabularies `instance_pause_stage`
+and `pause_obstacle` as the values `pause_stage` and `in_the_way` of that outcome's cause. Their other
+changes (the new members of `PauseScheduling` and `InstancePauseState`, the interrupt result
+`environment_reset`, the word `interrupt_limit_cause_invalid` of `standard_pack_problem`) and the execution
+kernel's new answer of `ContainedTaskRuntime::shared_interrupt_shown` touch nothing the console builds,
+matches or implements. In the outcome-code catalog it embeds, v0.12.72 and v0.12.73 add twelve codes (among
+them the pause's informing causes `scheduling_pause_standing`, `scheduling_pause_lifted_by_resume` and
+`scheduling_pause_kept_at_shutdown`, the resume's `scheduling_resume_without_reconnect`, and
+`contained_task_environment_reset`, which a run's end in the ledger may carry), one location, four keys and
+four vocabularies, and the tokens `global_paused` of `emulator_autostart_skip_reason` and
+`interrupt_limit_cause_invalid` of `standard_pack_problem`, with no code retired or removed and no `console_`
+or `setup_` name; no code changed its category between the two pins (`scheduling_pause_kept_at_shutdown` was
+an error in v0.12.72 and is informing since v0.12.73), and a Runtime code still gets its category's general
+sentence. What the console does differently is the pause and the resume of an instance (#480 PG-2c; see
+"Running"): a person's pause stands until a person lifts it, answers within the drain timeout and the 30 s
+checkpoint grace, perhaps still on its way and with what is in its way, is not lifted by a failure of the
+Runtime's own, and is resumed in every stage, without a reconnect while its device is not handed back yet
+(a fenced instance, or one whose hand-back has begun closing its device session, still reconnects).
+v0.12.72 (#480 PG-1) also keeps the Runtime from starting an emulator by itself under a global pause. #398
+DB-3: actinglab makes its own standard handles not inheritable as it starts, so an adb server it starts no
+longer holds the setup wizard's pipes; the wizard still reads the Lab's answer without the pipes' end, for a
+Lab before it. The pin before, v0.12.71, merges Runtime PR #1800, whose head (`7b4705ff`, three commits on
+top of v0.12.69) the console was pinned to before that, and it is the first release that declares `ledger`
 revision 9 (v0.12.70, `240cdb1a`, still declares [3, 8]). Against that head, v0.12.70 raises `package` to
 18; `ledger` [3, 9], `runtime-client` [3, 11] and the Runtime's `actingd-config` [5, 33], `install-control`
 [0, 0] and `runtime-outcomes` [1, 1] stay, so the console's ranges do not move (its `actingd-config` stays
@@ -500,10 +543,10 @@ device switches its two backends while the Runtime runs, #402 HS-1 to HS-4, and 
 long as the contract's `BACKEND_SWITCH_WAIT_MS` and the client's IO margin say;
 with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
 `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
-v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 11, ledger revision 9):
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 12, ledger revision 9):
 
 ```
-rev = "f0c64ae855dece55139055c2badb11595b10926d"
+rev = "a8d0aa438e7fbfae1b776c9f686f246dc103e576"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -785,7 +828,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the instance's latest self-check. Apply switches that instance at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.71, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.73, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1450,9 +1493,12 @@ finished only says so. Of probes in flight, only the newest one's answer is show
   ends, and the daemon outlives the console.
 
 The workbench's top bar has **Pause All** and **Put All on Duty**. Pause All asks the Runtime for a
-global pause of scheduling: no new task is scheduled, and a task already running finishes on its own.
-Put All on Duty lifts that global pause; a global pause another tool set is lifted only after the person
-confirms it, and a pause whose reason the settings file lists in `resume_elsewhere_reasons` (see
+global pause of scheduling: no new task is scheduled, and a task already running finishes on its own; since
+Runtime v0.12.72 (#480 PG-1) the Runtime also starts no emulator by itself meanwhile (neither the configured
+start at its own start, nor the emulator watch's restart, nor an idle wake's). Only a resume lifts it, as it
+always has; a global pause has no stages and is answered at once, so the pause mode of #480 PG-2c (v0.12.73)
+changes nothing for it. Put All on Duty lifts that global pause; a global pause another tool set is lifted only
+after the person confirms it, and a pause whose reason the settings file lists in `resume_elsewhere_reasons` (see
 "Settings file") is to be lifted by whoever set it, so it cannot be lifted there. The ledger window can
 resume, conditionally, a pause another tool set (below). The global pause the setup wizard sets after a
 new installation's first start (reason `first-start`) has words of its own: Put All on Duty's
@@ -1465,16 +1511,42 @@ Each instance's card has a button of its own. While the instance has no pause of
 This Instance's Scheduling**: one `PauseScheduling` of that instance alone, with the console's own reason
 `console_pause_account` and the same drain timeout as Pause All (the lowest the Runtime takes, 1 s), sent
 once on a worker thread over a fresh person's connection (actor `user`) and never again by itself. No new
-task of that instance is scheduled. Unlike the global pause an instance pause drains: a task still running
-on the instance once that second has passed is asked to stop at its next checkpoint, and the Runtime
-answers once the device is handed back, so a press can take about half a minute, which the card says
-while it is out. Under the pause the console set there, once its device is handed back, the button is
-**Resume This Instance's Scheduling**: one conditional `ResumeScheduling` of that instance, its condition the owner
-epoch and the revision of the status read the card was painted from, so the Runtime refuses it and lifts
-nothing once that pause has changed. It goes at one press, without the confirmation Put All on Duty asks
-of another tool's pause, since the console set this pause itself. The resume connects the device again;
-a reconnect that fails is said in red with its code, and the resume stands. What a press came to is said
-on the card: done (a resume done while a global pause holds adds that no task is scheduled for the
+task of that instance is scheduled. It is a person's pause (`stand`, Runtime v0.12.73 on, #480 PG-2c):
+nothing but a person's resume lifts it, not something in its way, not a shutdown of the Runtime, not a
+failure of the Runtime's own. Unlike the global pause an instance pause drains: a task still running on the
+instance once that second has passed is asked to stop at its next checkpoint, and then the device is handed
+back once nothing uses it. The Runtime answers once that is done or, at the latest, at the end of the drain
+timeout and its 30 s checkpoint grace, 31 s after the press, which the card says while it is out. An answer
+before the hand-back is done is no failure: the card says that the instance's scheduling is paused and what
+was still in its way (a task still running, a scheduled task not settled yet, another party holding the
+device, the Runtime's own emulator start or stuck recovery, another request queued for the instance, a
+client's reset owed, a close of the device session refused for now or a check that failed, each tried
+again), or, with nothing in its way at that moment, that it was still waiting for the running tasks or still
+handing the device back; the Runtime carries the rest on by itself, and the card's main line says the stage
+until the device is handed back. A close of the device session that could not be confirmed fences the
+instance and is not tried again: the card says so, and that Resume This Instance's Scheduling connects it
+again. The card says as well when a resume lifted the pause before it finished up (no pause holds then),
+and when the Runtime closed before it finished up (the pause is kept, and the next start restores it). A
+pause the Runtime answers as failed is said in red with the code and its words, and with no claim either
+way about the pause: a failure in a stage (a fatal error, or one that fenced the instance) leaves a
+person's pause in effect, while a fatal error before the pause was recorded leaves none, and the answer
+does not tell the two apart, so the card's state says whether a pause holds. A refusal, a pause the
+Runtime denied or whose record it could not write, set nothing. Under the pause the console set there, in whatever
+stage, the button is **Resume This Instance's Scheduling**: one conditional `ResumeScheduling` of that
+instance, its condition the owner epoch and the revision of the status read the card was painted from, so
+the Runtime refuses it and lifts nothing once that pause has changed. It goes at one press, without the
+confirmation Put All on Duty asks of another tool's pause, since the console set this pause itself; the
+Runtime resumes a person's pause in every stage. A pause whose device is handed back is resumed by
+connecting the device again, which can take about half a minute; a reconnect that fails is said in red with
+its code, and the resume stands. One still draining or handing its device back is lifted at once and
+connects nothing (what still used the instance goes on), and the card says it is resumed; but a fenced
+instance (a close of its device session that could not be confirmed) and one whose hand-back has already
+begun closing its device session are resumed by the reconnect, as a handed-back one is. Two codes of the
+resume's self-check name no failed reconnect, and the card says what they mean, in red only when the code's
+category is not informing: `dispatch_paused_instance`, an instance added while the Runtime was stopped whose
+first-start pause was not applied yet, so the Runtime holds it again with that pause (`instance.added`) and
+the card says it is resumed but held again by it; and `player_hold_active`, a player holding the device, so
+nothing reconnected. What a press came to is said on the card: done (a resume done while a global pause holds adds that no task is scheduled for the
 instance until that one is lifted too); a pause that already holds, which keeps its reason; a refusal,
 in red, its code verbatim and the code's words (a fixture instance, for one, is refused with
 `fixture_execution_scope_forbidden`); or not confirmed, which is not sent again. While
@@ -1554,7 +1626,8 @@ through or was stopped.
 - **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
   each instance's pause of its last status read (reason, revision, since), each by its own scope. One
   another tool or the console itself set (the console's own line says "Paused by This Console", not
-  "Paused by Another Tool") — the global one, or an instance's whose device is handed back — carries
+  "Paused by Another Tool") — the global one, an instance's whose device is handed back, or the console's own
+  instance pause in any stage — carries
   "Resume Scheduling…": the first press only shows the statement "resume this one pause" and "Confirm
   and Resume"; the confirm sends one conditional `ResumeScheduling` on a worker thread, over a fresh
   person's connection (actor `user`), its condition the owner epoch of that status read and the scope's revision,
@@ -1585,7 +1658,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.71
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.73
   has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). A Lab recording's hold (Runtime 0.12.64 on) is a kind of its own: an
   instance's pause whose reason is exactly `lab-record-<unix ms>`, digits only after the prefix (the
@@ -1606,9 +1679,17 @@ through or was stopped.
   conditional `ResumeScheduling`, as for any other pause. After such a resume the recording's end
   finds no pause of its own and answers `already_gone`, which is no failure. One whose reason
   `resume_elsewhere_reasons` lists, or any while that line cannot be used, is of the first kind: only
-  why, no button. An instance
-  pause still draining or handing its device back gets none either: the Runtime refuses its resume
-  then. Each line shows its pause's reason verbatim, whatever the operator wrote.
+  why, no button. Any other instance
+  pause still draining or handing its device back gets none either, and its line says what it is still
+  doing: a Lab recording's hold is a tool's (`quiet_or_lift`), whose resume the Runtime refuses until its
+  device is handed back, and the 0.12.73 status does not say which mode another tool's pause has. The
+  console's own instance pause is a person's, which the Runtime resumes in every stage (v0.12.73 on); one
+  still draining or handing its device back is lifted without a reconnect, unless the instance is fenced or
+  its hand-back has begun closing its device session, when the resume reconnects it. A resume whose self-check names
+  `dispatch_paused_instance` says that the instance, added while the Runtime was stopped, is held again by its
+  first-start pause, and one naming `player_hold_active` that a player holds the device, so it was not
+  connected again; each with the code and its words, in red only when the code's category is not
+  informing. Each line shows its pause's reason verbatim, whatever the operator wrote.
 
 ## Instance configuration
 
@@ -1638,7 +1719,9 @@ next to itself first and asks for the folder when there is none. It checks every
 each of the three program zips file by file against its own `BUILD-MANIFEST.json` (with the commit the set
 names), the `interfaces` of the console's and the Runtime's manifests as the Runtime's
 `contracts/component-interfaces.md` checks them (`runtime-client` and `actingd-config` must overlap, the
-Runtime's highest `ledger` and `runtime-outcomes` revisions must lie in the console's range), and each
+Runtime's highest `ledger` and `runtime-outcomes` revisions must lie in the console's range; this console
+declares `runtime-client` [12, 12], so a set whose Runtime declares at most 11, v0.12.72 or earlier, is
+refused), and each
 standard pack's `bundle.json`, `applications.json`, `schedule.json` and `interfaces.json` (its `package`
 revision must lie within the range this Runtime declares). The vision files must carry ONNX Runtime's
 two files exactly as the Runtime pins them (`ort/onnxruntime.dll`, 17,328,152 bytes, SHA-256
@@ -1885,9 +1968,10 @@ start it again (below); confirm the Runtime is online with `actinglab status`; i
 (`actinglab watchdog install`). Steps not chosen show "Skipped". Every child program runs without a window;
 the window shows each answer's reading, and the setup log has it too, with the answer's whole output on a
 line of its own. The Lab's answers to the phone list (page 7) and to the binds (step 7) may come while the
-adb server it started still holds the Lab's output open: the Lab runs adb, an adb that finds no adb server
-of its own version running starts one, and that server inherits the Lab's output and keeps it for as long
-as it runs. So once
+adb server it started still holds the Lab's output open, with a Lab before Runtime 0.12.73: the Lab runs
+adb, an adb that finds no adb server of its own version running starts one, and that server inherited the
+Lab's output and kept it for as long as it ran (from 0.12.73 the Lab makes its own standard handles not
+inheritable as it starts, #398 DB-3, so its answer ends as any other). So once
 the Lab has exited and its answer ends with its whole result line, the wizard takes that answer as any
 other (its exit code and outcome judged as ever) and the setup log says the output was still held; an
 answer that is not whole fails as before, saying why.
