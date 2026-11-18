@@ -7,8 +7,9 @@
 //! A plan file holds no phone ([`parse_plan`]): the Lab names a phone by a device handle that
 //! holds only for the adb session that listed it (a replug or an adb server restart changes it:
 //! Runtime `contracts/device-binding.md`), so a handle written into a file is stale by the time
-//! the file is read. Phones are the window's alone, which lists them and installs them in one
-//! run.
+//! the file is read; and the device key the window names it by is made under the run's own key
+//! salt, which no file holds and no later run has. Phones are the window's alone, which lists
+//! them and installs them in one run.
 
 use std::collections::BTreeSet;
 
@@ -47,7 +48,9 @@ pub struct Plan {
 
 /// A phone's instance (an Android phone over USB, `config::HandsetInstance`): its alias, game,
 /// server and backends, a phone's own (`adb_shell_input` and `adb` unless chosen otherwise). The
-/// phone it stands for is the one the window's device list showed in the same run.
+/// phone it stands for is the one the window's device list showed in the same run, named by its
+/// `device_key` there (`devices`: the keyed digest of its serial under the run's key salt), by
+/// which the install's bind finds it again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanHandset {
     pub alias: String,
@@ -57,6 +60,8 @@ pub struct PlanHandset {
     pub touch_backend: String,
     #[serde(default = "handset_capture")]
     pub capture_backend: String,
+    #[serde(default)]
+    pub device_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,7 +162,9 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
 /// as the Runtime compares them, byte for byte), its alias valid for its game (`alias`: no
 /// whitespace, within the game's alias limit), its game chosen, its server one of the game's,
 /// its backends a valid pair; each phone's instance by the same rules, its alias within
-/// [`HANDSET_ALIAS_LIMIT`] bytes too and once among every instance's, its backends a phone's;
+/// [`HANDSET_ALIAS_LIMIT`] bytes too and once among every instance's, its backends a phone's,
+/// its phone named by a device key and no phone taken twice (one device drives one instance,
+/// Runtime `contracts/device-binding.md`, "The private binding file");
 /// with instances, the first-start pause only together with the wizard's start, which alone can
 /// set it (a first start with the instances and without the pause the options page promised is
 /// never possible). The watchdog needs no rule: it never
@@ -218,8 +225,17 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
             problems.push(problem.with(&named));
         }
     }
+    let mut phones = BTreeSet::new();
     for handset in &plan.handsets {
         let named = format!("{HANDSET_KIND} {}", handset.alias);
+        if handset.device_key.is_empty() {
+            problems.push(
+                Said::new("手机实例没有对应的手机（缺设备键），绑不上", "a phone's instance names no phone (no device key), so it cannot be bound")
+                    .with(&named),
+            );
+        } else if !phones.insert(handset.device_key.as_str()) {
+            problems.push(Said::new("同一部手机选了两次", "one phone is chosen twice").with(&named));
+        }
         let limit = games
             .iter()
             .find(|known| known.game == handset.game)

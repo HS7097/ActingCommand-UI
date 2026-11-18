@@ -15,12 +15,23 @@
 //! it was said; and a failure counts them as written and names where they stay
 //! ([`Left::pre_laid_tools`]). Without it, nothing changes: the root must be new or empty.
 //!
+//! A phone's instance is bound to its phone in step 7, between the configuration's candidate
+//! (step 6) and its check (step 8), which refuses a phone without a binding
+//! (`device_binding_missing`): the root's own Lab binds each by the device key the phone page
+//! listed it with, under the same run's key salt ([`Request::key_salt`]), against the candidate
+//! (`devices`). The bind writes in the state root `<root>\state`, which step 1 created empty: its
+//! `private` folder and in it `device-bindings.json`, the one file that holds the phones'
+//! serials, nothing else. No later step asks the state root to be empty (Runtime
+//! `contracts/device-binding.md`, "Against a candidate configuration": check-config, adopt and
+//! the first start each take a state root that holds only that file); a failure names what the
+//! binds left there, read back after each ([`Left::bindings`]).
+//!
 //! The order departs from the design in two places:
 //!
 //! - With instances and the first-start pause, the Runtime first starts with the same
 //!   configuration without its instances, and the pause is set: a global pause stops no run
 //!   already under way, so a Runtime started with its instances could dispatch before the pause
-//!   holds. Step 13 then connects the instances in three parts, each answer checked: the formal
+//!   holds. Step 14 then connects the instances in three parts, each answer checked: the formal
 //!   close (`actingctl request-shutdown --wait 60`, `runtime_shutdown_completed`), the full
 //!   configuration put in place by the Runtime's `config replace` while no Runtime runs
 //!   (`runtime_running` false), and the installer's start again (`actinglab up`, exit 0, no
@@ -56,10 +67,12 @@ use serde_json::Value;
 
 use crate::archive::Archive;
 use crate::config::{
-    self, ConfigInput, ConfigInstance, CONFIG_FILE, CONFIG_PART, FULL_CONFIG, PACKAGES_DIR, STATE_DIR,
+    self, ConfigInput, ConfigInstance, HandsetInstance, CONFIG_FILE, CONFIG_PART, FULL_CONFIG, PACKAGES_DIR, STATE_DIR,
 };
 use crate::console;
+use crate::devices;
 use crate::digest::sha256_file;
+use crate::key_salt::KeySalt;
 use crate::log::{unix_ms, InstallLog};
 use crate::manifest::{ManifestFile, Program, MANIFEST_FILE};
 use crate::mumu;
@@ -83,6 +96,8 @@ pub enum Step {
     Packs,
     PackCheck,
     Config,
+    /// The phones' instances bound to their phones (see the module's description).
+    Phones,
     CheckConfig,
     Adopt,
     ConsoleSettings,
@@ -95,13 +110,14 @@ pub enum Step {
 }
 
 impl Step {
-    pub const ALL: [Step; 15] = [
+    pub const ALL: [Step; 16] = [
         Step::Prepare,
         Step::Programs,
         Step::Vision,
         Step::Packs,
         Step::PackCheck,
         Step::Config,
+        Step::Phones,
         Step::CheckConfig,
         Step::Adopt,
         Step::ConsoleSettings,
@@ -113,7 +129,7 @@ impl Step {
         Step::Watchdog,
     ];
 
-    /// 1 to 15.
+    /// 1 to 16.
     pub fn number(self) -> usize {
         Step::ALL.iter().position(|step| *step == self).map_or(0, |at| at + 1)
     }
@@ -126,6 +142,7 @@ impl Step {
             Step::Packs => Said::new("铺标准包和随带的许可文件", "Lay out the standard packages and their licence files"),
             Step::PackCheck => Said::new("检查标准包", "Check the standard packages"),
             Step::Config => Said::new("生成配置", "Write the configuration"),
+            Step::Phones => Said::new("绑定手机", "Bind the phones"),
             Step::CheckConfig => Said::new("用 Runtime 校验配置", "Check the configuration with the Runtime"),
             Step::Adopt => Said::new("交给 Runtime 的安装器接管", "Hand the root to the Runtime's installer"),
             Step::ConsoleSettings => Said::new("写监控台设置", "Write the console's settings"),
@@ -152,7 +169,7 @@ pub enum Event {
     /// A line of what was done or found (also in the log).
     Line(Said),
     /// What the checks before the install just did, or which part of a step of several parts
-    /// runs now (step 13's close, swap and start), in a person's words: no path, repository or
+    /// runs now (step 14's close, swap and start), in a person's words: no path, repository or
     /// commit (the `Line` beside it carries those, for the log and the command line). The
     /// window shows these as they come; nothing writes them down.
     Plain(Said),
@@ -181,7 +198,7 @@ pub struct Left {
     /// A Runtime of the root may be running: the wizard ran its start (a start that did not
     /// answer in time, or failed, may have left it running) and has not seen it closed since.
     pub running: bool,
-    /// The wizard closed the Runtime it had started (`runtime_shutdown_completed`: step 13's
+    /// The wizard closed the Runtime it had started (`runtime_shutdown_completed`: step 14's
     /// formal close, or the close after a failure) and has not started it again.
     pub closed: bool,
     /// The close was the one after a failure ([`Run::stop_after_failure`]).
@@ -195,6 +212,11 @@ pub struct Left {
     /// Where the Tools the wizard laid before the install stay (`<root>\tools`,
     /// [`pre_lay_tools`]), when the install took them.
     pub pre_laid_tools: Option<PathBuf>,
+    /// The phones' instances step 7 bound, by alias.
+    pub phones: Vec<String>,
+    /// What step 7's binds left in the state root, as read back after each bind whatever it
+    /// answered: `<root>\state\private` and its `device-bindings.json`, each when it is there.
+    pub bindings: Vec<PathBuf>,
 }
 
 /// What a person does about what a failed install left, in order, each with the command or the
@@ -202,8 +224,9 @@ pub struct Left {
 /// `actingctl request-shutdown`), or, when the wizard closed it itself, that there is none to
 /// stop; remove the watchdog task it registered (`actingctl watchdog uninstall`), delete the
 /// shortcuts it created; where the Tools it laid before the install stay, with what keeps their
-/// folder from being deleted (the adb server the phone page's adb may have left running); then
-/// delete the folder. Only what the install did is named.
+/// folder from being deleted (the adb server the phone page's adb may have left running); what
+/// the phones' binds wrote in the state root, which goes with the folder and holds the phones'
+/// serials; then delete the folder. Only what the install did is named.
 pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
     let root = strip_verbatim(&root.to_string_lossy()).trim_end_matches(['\\', '/']).to_owned();
     let actingctl = format!("\"{root}\\runtime\\actingctl.exe\"");
@@ -273,6 +296,29 @@ pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
             format!("The Tools the wizard laid for the phone page before the install (adb and the Lab among them) stay in {tools}. Should deleting them say a file is in use, the adb in them still runs in the background: restart the computer, then delete them."),
         ));
     }
+    if !left.bindings.is_empty() {
+        let list: Vec<String> = left.bindings.iter().map(|path| strip_verbatim(&path.to_string_lossy())).collect();
+        let (zh_bound, en_bound) = if left.phones.is_empty() {
+            ("还没有手机绑上".to_owned(), "no phone was bound yet".to_owned())
+        } else {
+            (format!("已绑上 {}", left.phones.join("、")), format!("bound: {}", left.phones.join(", ")))
+        };
+        // Read as Windows path text, so that the rule is the same on every platform.
+        let file = left.bindings.iter().any(|path| {
+            last_segment(&path.to_string_lossy()).is_some_and(|name| name.eq_ignore_ascii_case(devices::BINDINGS_FILE))
+        });
+        steps.push(if file {
+            Said::new(
+                format!("绑定手机时写进了 {}（{zh_bound}）。手机的序列号只记在这个文件里，不要把它发给别人；它在安装文件夹里面，随整个文件夹一起删掉。", list.join("、")),
+                format!("Binding the phones wrote {} ({en_bound}). The phones' serials are kept in this file alone, so do not send it to anyone; it lies inside the install folder and goes when the whole folder is deleted.", list.join(", ")),
+            )
+        } else {
+            Said::new(
+                format!("绑定手机时建了 {}（{zh_bound}，里面没有绑定文件）。它在安装文件夹里面，随整个文件夹一起删掉。", list.join("、")),
+                format!("Binding the phones created {} ({en_bound}; no binding file in it). It lies inside the install folder and goes when the whole folder is deleted.", list.join(", ")),
+            )
+        });
+    }
     steps.push(if steps.is_empty() {
         Said::new(
             format!("可以删除整个 {root} 文件夹，再重新运行向导。"),
@@ -334,6 +380,10 @@ pub struct Request {
     /// The Tools [`pre_lay_tools`] laid into `root` before the install, which the install takes
     /// as its own (see the module's description); `None`: the root must be new or empty.
     pub pre_laid: Option<PreLaid>,
+    /// The run's key salt the phone page listed the phones with: step 7 hands the Lab the same
+    /// one, so that each phone's device key ([`crate::plan::PlanHandset::device_key`]) finds its
+    /// phone again. Required with phones; `None` without.
+    pub key_salt: Option<KeySalt>,
 }
 
 /// The Tools laid into `<root>\tools` before the install ([`pre_lay_tools`]).
@@ -350,6 +400,14 @@ pub struct PreLaid {
     /// The lines the install log is to carry, each with the time it was said (milliseconds
     /// since the Unix epoch): the log opens with the install, which writes them first.
     pub lines: Vec<(u128, String)>,
+}
+
+impl PreLaid {
+    /// One more line for the install log, stamped now: what the phone page's device bridge,
+    /// these Tools, answered before the install ([`PreLaid::lines`]).
+    pub fn note(&mut self, line: &str) {
+        self.lines.push((unix_ms(), line.to_owned()));
+    }
 }
 
 /// Why [`pre_lay_tools`] stopped, and what it left; nothing is deleted.
@@ -587,8 +645,10 @@ pub struct Done {
     pub started: bool,
     pub paused: bool,
     pub watchdog: bool,
-    /// How many instances the configuration binds.
+    /// How many instances the configuration binds, the phones' among them.
     pub instances: usize,
+    /// The phones' instances step 7 bound, by alias.
+    pub phones: Vec<String>,
     /// What each step did, in order.
     pub summary: Vec<(Step, Said)>,
 }
@@ -605,11 +665,24 @@ struct Bound {
     start_emulator: bool,
 }
 
+/// One phone's instance as the configuration will name it and step 7 bind it.
+struct Handset {
+    alias: String,
+    game: String,
+    server: String,
+    application_id: String,
+    touch_backend: String,
+    capture_backend: String,
+    /// The phone's device key, as the phone page listed it.
+    device_key: String,
+}
+
 /// What the checks found, for the steps.
 struct Checked {
     set: VerifiedSet,
     mumu_root: Option<String>,
     bound: Vec<Bound>,
+    handsets: Vec<Handset>,
 }
 
 struct Run<'a> {
@@ -674,7 +747,7 @@ impl Run<'_> {
     }
 
     /// After a failure, a Runtime of the root that may be running without a pause the install
-    /// confirmed ([`Pause::Held`]) is closed formally (`request-shutdown`, judged as step 13's
+    /// confirmed ([`Pause::Held`]) is closed formally (`request-shutdown`, judged as step 14's
     /// close is): a failed install leaves no Runtime playing the games. A close that is refused
     /// or fails leaves `running` set, so the failure says how to stop it by hand ([`cleanup`]).
     fn stop_after_failure(&mut self) {
@@ -797,9 +870,15 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     let root = request.root.clone();
     let started = plan.options.start_after_install;
     let paused = started && plan.options.pause_first_start;
-    // The Runtime starts without its instances, which come once the pause holds.
-    let staged = paused && !checked.bound.is_empty();
-    let aliases: Vec<String> = checked.bound.iter().map(|bound| bound.alias.clone()).collect();
+    // The Runtime starts without its instances, the phones' among them, which come once the
+    // pause holds.
+    let staged = paused && !(checked.bound.is_empty() && checked.handsets.is_empty());
+    let aliases: Vec<String> = checked
+        .bound
+        .iter()
+        .map(|bound| bound.alias.clone())
+        .chain(checked.handsets.iter().map(|handset| handset.alias.clone()))
+        .collect();
 
     run.step(Step::Prepare, |run| prepare(run))?;
     run.step(Step::Programs, |run| lay_programs(run, &checked.set, request.pre_laid.is_some()))?;
@@ -812,6 +891,12 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         part = path;
         Ok(summary)
     })?;
+    match (checked.handsets.is_empty(), request.key_salt.as_ref()) {
+        (true, _) => run.skip(Step::Phones, Said::new("没有手机实例", "no phone's instance"))?,
+        (false, Some(salt)) => run.step(Step::Phones, |run| bind_phones(run, &part, &checked.handsets, salt))?,
+        // The checks refuse phones without the salt; should one get here, it fails loud.
+        (false, None) => run.step(Step::Phones, |_| Err(no_key_salt()))?,
+    }
     let config_path = root.join(CONFIG_FILE);
     let full_path = staged.then(|| root.join(FULL_CONFIG));
     run.step(Step::CheckConfig, |run| {
@@ -873,9 +958,18 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         paused,
         watchdog: plan.options.watchdog,
         instances: aliases.len(),
+        phones: run.left.phones.clone(),
         summary: run.summary,
         root,
     })
+}
+
+/// Why phones cannot be bound without the run's key salt.
+fn no_key_salt() -> Said {
+    Said::new(
+        "这次安装没有列手机时用的那把设备键盐，绑不了手机：手机只能在向导窗口里列出并在同一次运行里装上",
+        "this install has no key salt the phones were listed with, so no phone can be bound: phones are listed and installed in one run of the wizard's window",
+    )
 }
 
 /// The checks before anything is written (but the Tools laid before the install,
@@ -900,15 +994,11 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
             .with(format!("{}, {}", pre_laid.dir.display(), request.root.display())));
         }
     }
-    // A phone's instance needs its bind between the configuration and its check, which this
-    // version does not run: refused before anything, never left out.
-    if !plan.handsets.is_empty() {
+    // A phone is found again in step 7 by the key the phone page listed it with, under the same
+    // salt: without the salt none can be, which is said before anything is written.
+    if !plan.handsets.is_empty() && request.key_salt.is_none() {
         let aliases: Vec<&str> = plan.handsets.iter().map(|handset| handset.alias.as_str()).collect();
-        return Err(Said::new(
-            "这一版向导还不会装手机实例：绑定手机的那一步还没有做",
-            "this version of the wizard installs no phone's instance yet: the step that binds a phone is not there yet",
-        )
-        .with(aliases.join(", ")));
+        return Err(no_key_salt().with(aliases.join(", ")));
     }
     let set = {
         let report = &mut *run.report;
@@ -1042,10 +1132,39 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
             start_emulator: wanted.start_emulator,
         });
     }
+    let mut handsets = Vec::new();
+    for wanted in &plan.handsets {
+        let game = set
+            .bundle(&wanted.game)
+            .map(|bundle| &bundle.game)
+            .ok_or_else(|| Said::new("安装集里没有这个游戏", "the install set has no such game").with(&wanted.game))?;
+        let server = game
+            .server(&wanted.server)
+            .ok_or_else(|| Said::new("这个游戏没有这个区服", "the game has no such server").with(&wanted.server))?;
+        handsets.push(Handset {
+            alias: wanted.alias.clone(),
+            game: wanted.game.clone(),
+            server: wanted.server.clone(),
+            application_id: server.application_id.clone(),
+            touch_backend: wanted.touch_backend.clone(),
+            capture_backend: wanted.capture_backend.clone(),
+            device_key: wanted.device_key.clone(),
+        });
+    }
+    if !handsets.is_empty() {
+        run.say(Said::new("手机实例（安装时绑定）", "phones' instances (bound during the install)").with(
+            handsets
+                .iter()
+                .map(|handset| format!("{} {}", handset.alias, handset.device_key))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ))?;
+    }
     Ok(Checked {
         set,
         mumu_root,
         bound,
+        handsets,
     })
 }
 
@@ -1303,6 +1422,18 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
             start_emulator: bound.start_emulator,
         });
     }
+    let mut handsets = Vec::new();
+    for handset in &checked.handsets {
+        handsets.push(HandsetInstance {
+            alias: handset.alias.clone(),
+            instance_id: config::mint_instance_id()?,
+            application_id: handset.application_id.clone(),
+            game: handset.game.clone(),
+            server: handset.server.clone(),
+            touch_backend: handset.touch_backend.clone(),
+            capture_backend: handset.capture_backend.clone(),
+        });
+    }
     let input = ConfigInput {
         state_root,
         salt: config::mint_salt()?,
@@ -1310,7 +1441,7 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
         instances,
     };
     let part = run.root.join(CONFIG_PART);
-    write_new(&part, &config::render(&config::build(&input)))?;
+    write_new(&part, &config::render(&config::build_with_handsets(&input, &handsets)))?;
     for instance in &input.instances {
         run.say(Said::new("实例", "instance").with(format!(
             "{} = MuMu #{} {}/{} {} ({} / {}{})",
@@ -1324,14 +1455,68 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
             if instance.start_emulator { ", start_emulator" } else { "" }
         )))?;
     }
+    for handset in &handsets {
+        run.say(Said::new("手机实例", "phone's instance").with(format!(
+            "{} = {} {}/{} {} ({} / {})",
+            handset.alias,
+            config::HANDSET_KIND,
+            handset.game,
+            handset.server,
+            handset.instance_id,
+            handset.touch_backend,
+            handset.capture_backend
+        )))?;
+    }
     Ok((
         part.clone(),
         Said::new("配置候选已写（密钥盐不记日志）", "configuration candidate written (the salt is not logged)").with(format!(
-            "{} ({} instances)",
+            "{} ({} instances, {} of them phones)",
             part.display(),
-            input.instances.len()
+            input.instances.len() + handsets.len(),
+            handsets.len()
         )),
     ))
+}
+
+/// Step 7 (see the module's description): each phone's instance bound to its phone by the
+/// root's own Lab ([`devices::bind`]) against the candidate `part` step 6 wrote, by the device
+/// key the phone page listed it with under the run's `salt`, each answer judged
+/// ([`devices::judge_bind`]: `device_binding_changed`, else the refusal's code in a person's
+/// words); the first that fails stops the step. After each bind, whatever it answered, what the
+/// binds left in the state root is read back ([`Left::bindings`]); each phone bound is counted
+/// ([`Left::phones`]).
+fn bind_phones(run: &mut Run<'_>, part: &Path, handsets: &[Handset], salt: &KeySalt) -> Result<Said, Said> {
+    let root = run.root.clone();
+    let private = root.join(STATE_DIR).join(devices::PRIVATE_DIR);
+    let file = private.join(devices::BINDINGS_FILE);
+    for handset in handsets {
+        run.plain(Said::new(
+            format!("正在绑定手机实例「{}」……", handset.alias),
+            format!("Binding the phone's instance \"{}\"…", handset.alias),
+        ));
+        let answer = devices::bind(&root, &handset.alias, &handset.device_key, part, salt);
+        run.left.bindings = [&private, &file].into_iter().filter(|path| path.exists()).cloned().collect();
+        let answer = answer?;
+        run.answered(Said::new("devices bind 答复", "devices bind answered").with(&handset.alias), &answer)?;
+        devices::judge_bind(answer.code, answer.line.as_ref()).map_err(|problem| {
+            Said::new("手机实例没有绑上", "the phone's instance was not bound")
+                .with(&handset.alias)
+                .with_said(&problem)
+        })?;
+        run.left.phones.push(handset.alias.clone());
+        run.say(Said::new("手机实例已绑定", "the phone's instance is bound").with(format!(
+            "{} ← {}",
+            handset.alias, handset.device_key
+        )))?;
+    }
+    if !file.is_file() {
+        return Err(Said::new(
+            "绑定都答复了成功，状态根里却没有绑定文件",
+            "every bind answered success, yet the state root holds no binding file",
+        )
+        .with(file.display()));
+    }
+    Ok(Said::new("已绑定", "bound").with(format!("{} → {}", run.left.phones.join(", "), file.display())))
 }
 
 fn write_new(path: &Path, text: &str) -> Result<(), Said> {
@@ -1505,7 +1690,7 @@ fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
     .with(format!("reason {FIRST_START_REASON}")))
 }
 
-/// Step 13 (see the module's description), three parts, each answer judged: the formal close
+/// Step 14 (see the module's description), three parts, each answer judged: the formal close
 /// ([`runtime::judge_shutdown`]); the full configuration at `full` put in place by the Runtime's
 /// `config replace` (bound to its SHA-256) while no Runtime runs ([`runtime::judge_replace`]),
 /// and the file in place read back; the installer's start again ([`runtime::judge_up`]), which
@@ -1643,11 +1828,14 @@ mod tests {
 
     #[test]
     fn the_steps_are_numbered_in_their_order() {
-        assert_eq!(Step::ALL.len(), 15);
+        assert_eq!(Step::ALL.len(), 16);
         for (at, step) in Step::ALL.iter().enumerate() {
             assert_eq!(step.number(), at + 1);
             assert!(!step.title().zh.is_empty() && !step.title().en.is_empty());
         }
+        // The phones are bound against the candidate, before its check.
+        assert_eq!(Step::Config.number() + 1, Step::Phones.number());
+        assert_eq!(Step::Phones.number() + 1, Step::CheckConfig.number());
         // The instances come after the pause, the last read after them, the watchdog last.
         assert!(Step::Pause.number() < Step::Bind.number());
         assert!(Step::Bind.number() < Step::Status.number());
@@ -1673,6 +1861,8 @@ mod tests {
                 watchdog: true,
                 shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk"), PathBuf::from(r"X:\Menu\b.lnk")],
                 pre_laid_tools: None,
+                phones: Vec::new(),
+                bindings: Vec::new(),
             },
         );
         assert_eq!(all.len(), 4);
@@ -1687,7 +1877,16 @@ mod tests {
         let running = cleanup(root, &Left { running: true, ..Left::default() });
         assert_eq!(running.len(), 2);
         assert!(running[0].zh.contains("没有暂停") && running[0].en.contains("not paused"));
-        // Step 13 closed the Runtime and failed before it started again: nothing to stop, the
+        // What step 7's binds wrote is named, before the folder; a folder without the file says
+        // so, and names no serial's file.
+        let bindings = vec![PathBuf::from(r"X:\Root\state\private"), PathBuf::from(r"X:\Root\state\private\device-bindings.json")];
+        let bound = cleanup(root, &Left { phones: vec!["p1".into()], bindings, ..Left::default() });
+        assert_eq!(bound.len(), 2);
+        assert!(bound[0].en.contains(r"X:\Root\state\private\device-bindings.json") && bound[0].en.contains("bound: p1"), "{}", bound[0]);
+        assert!(bound[0].zh.contains("不要把它发给别人"));
+        let folder = cleanup(root, &Left { bindings: vec![PathBuf::from(r"X:\Root\state\private")], ..Left::default() });
+        assert!(folder[0].en.contains("no binding file") && !folder[0].en.contains("serials"), "{}", folder[0]);
+        // Step 14 closed the Runtime and failed before it started again: nothing to stop, the
         // pause kept; no command to stop it is given.
         let closed = cleanup(root, &Left { closed: true, pause: Pause::Held, ..Left::default() });
         assert_eq!(closed.len(), 2);

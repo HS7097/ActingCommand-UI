@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The 0.12 setup wizard's window (Workflow #429 UI-W2b): eleven pages, a step bar on the left,
+// The 0.12 setup wizard's window (Workflow #429 UI-W2b): twelve pages, a step bar on the left,
 // the language switch at the top right, Back / Next / Cancel at the bottom. It is drawn with
 // the console's kit in its flat skin, so the two programs look like one family. Every word is
 // the Rust side's (src/gui/labels.rs): the static ones through `Strings`, everything that
@@ -42,8 +42,18 @@ export struct EmulatorRow {
     picked: bool,
 }
 
-// One account: the emulator, its name, and what it plays. The first entry of `games` and of
-// `servers` is "choose…", which stands for none chosen.
+// One device the phone page lists: its model, connection and state in `text`; `hint` says what
+// to do about a row that cannot be ticked (`usable` false), empty for one that can.
+export struct PhoneRow {
+    text: string,
+    hint: string,
+    picked: bool,
+    usable: bool,
+}
+
+// One account: the emulator or the phone, its name, and what it plays. The first entry of
+// `games` and of `servers` is "choose…", which stands for none chosen. A phone's (`phone`) touch
+// and capture indexes are into a phone's own lists, and it has no emulator to open.
 export struct AccountRow {
     emulator: string,
     alias: string,
@@ -55,6 +65,7 @@ export struct AccountRow {
     capture-index: int,
     start-emulator: bool,
     advanced: bool,
+    phone: bool,
 }
 
 // The words that never change while a language is shown.
@@ -110,8 +121,12 @@ export global Strings {
     in property <string> open-folder;
     in property <string> copy-error;
     in property <string> open-log;
+    in property <string> refresh;
     in property <[string]> touch-options;
     in property <[string]> capture-options;
+    // A phone's own backends.
+    in property <[string]> phone-touch-options;
+    in property <[string]> phone-capture-options;
 }
 
 // Each page's number, as the Rust side numbers them (src/gui/mod.rs, the one table of them),
@@ -123,6 +138,7 @@ export global Pages {
     in property <int> location;
     in property <int> games;
     in property <int> emulators;
+    in property <int> phones;
     in property <int> accounts;
     in property <int> options;
     in property <int> confirm;
@@ -155,9 +171,10 @@ export global Wiz {
     // 1 Welcome.
     in property <string> welcome-what;
     in property <string> welcome-space;
-    // 2 Usage: the MuMu box (the phone boxes cannot be ticked yet), and with nothing ticked
-    // what the install will be.
+    // 2 Usage: the MuMu and Android boxes (the iOS box cannot be ticked yet), and with nothing
+    // ticked what the install will be.
     in property <bool> usage-mumu;
+    in property <bool> usage-android;
     in property <string> usage-note;
     // 3 Files.
     in property <string> set-where;
@@ -182,26 +199,40 @@ export global Wiz {
     in property <string> emu-caution;
     in property <[EmulatorRow]> emulators;
     in property <bool> emu-skippable;
-    // 7 Accounts.
+    // 7 Phones: what the page is for, where the device bridge is laid, what it does now (with a
+    // progress bar while busy, determinate while it lays), what stops the page, the rows.
+    in property <string> phones-body;
+    in property <string> phones-note;
+    in property <string> phones-text;
+    in property <bool> phones-busy;
+    in property <float> phones-progress;
+    in property <bool> phones-indeterminate;
+    in property <string> phones-line;
+    in property <string> phones-problem;
+    in property <string> phones-caution;
+    in property <[PhoneRow]> phones;
+    in property <bool> phones-refreshable;
+    // 8 Accounts: the note for the kinds of instance the page holds.
     in property <[AccountRow]> accounts;
+    in property <string> accounts-note;
     in property <[string]> account-problems;
-    // 8 Options.
+    // 9 Options.
     in property <bool> opt-desktop;
     in property <bool> opt-start-menu;
     in property <bool> opt-watchdog;
     in property <bool> opt-start;
     in property <bool> opt-pause;
-    // 9 Confirm.
+    // 10 Confirm.
     in property <[KeyValue]> summary;
     in property <string> confirm-note;
-    // 10 Install: `install-current` is the row of the step under way, -1 before the first.
+    // 11 Install: `install-current` is the row of the step under way, -1 before the first.
     in property <string> install-pre;
     in property <[MarkLine]> install-steps;
     in property <int> install-current;
     in property <string> install-detail;
     in property <float> install-progress;
     in property <bool> install-indeterminate;
-    // 11 Finish.
+    // 12 Finish.
     in property <bool> finished-ok;
     in property <string> finish-body;
     in property <string> finish-next;
@@ -217,7 +248,7 @@ export global Wiz {
     callback language(bool);
     callback dialog-answer(bool);
     callback choose-set-folder();
-    // 0 MuMu; the phone boxes never ask.
+    // 0 MuMu, 1 Android; the iOS box never asks.
     callback usage-toggled(int);
     callback root-edited(string);
     callback browse-root();
@@ -225,6 +256,8 @@ export global Wiz {
     callback search-again();
     callback skip-emulators();
     callback emulator-toggled(int);
+    callback phone-toggled(int);
+    callback refresh-phones();
     callback alias-edited(int, string);
     callback game-picked(int, int);
     callback server-picked(int, int);
@@ -603,8 +636,8 @@ component WelcomePage inherits ScrollView {
     }
 }
 
-// What the wizard sets up for: MuMu, or none. The phone boxes are greyed with their reason
-// under them: a box that did nothing once ticked would fail without a word.
+// What the wizard sets up for: MuMu, Android phones, or none. The iOS box is greyed with its
+// reason under it: a box that did nothing once ticked would fail without a word.
 component UsagePage inherits ScrollView {
     viewport-width: self.visible-width;
     VerticalLayout {
@@ -623,21 +656,18 @@ component UsagePage inherits ScrollView {
             padding-left: 26px;
             Caption { text: Strings.usage-mumu-note; }
         }
-        // Until the wizard can bind a phone.
         Tick {
             text: Strings.usage-android;
-            reason: Strings.usage-android-note;
-            enabled: false;
+            checked: Wiz.usage-android;
+            toggled => {
+                Wiz.usage-toggled(1);
+            }
         }
         HorizontalLayout {
             padding-left: 26px;
-            // A greyed box's reason is said with its words already (`reason`), so a screen
-            // reader passes the line by; the same under iOS.
-            Caption {
-                text: Strings.usage-android-note;
-                accessible-role: none;
-            }
+            Caption { text: Strings.usage-android-note; }
         }
+        // Until there is a back end for it.
         Tick {
             text: Strings.usage-ios;
             reason: Strings.usage-ios-note;
@@ -645,6 +675,8 @@ component UsagePage inherits ScrollView {
         }
         HorizontalLayout {
             padding-left: 26px;
+            // A greyed box's reason is said with its words already (`reason`), so a screen
+            // reader passes the line by.
             Caption {
                 text: Strings.usage-ios-note;
                 accessible-role: none;
@@ -781,6 +813,64 @@ component EmulatorsPage inherits ScrollView {
                 text: Strings.skip-step;
                 clicked => {
                     Wiz.skip-emulators();
+                }
+            }
+        }
+    }
+}
+
+// The phones the root's own device bridge sees: each row its model, connection and state; only a
+// row that can be bound can be ticked, every other is listed as it is with what to do about it.
+component PhonesPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 8px;
+        alignment: start;
+        Body { text: Wiz.phones-body; }
+        if Wiz.phones-note != "": Caption { text: Wiz.phones-note; }
+        if Wiz.phones-text != "": Body { text: Wiz.phones-text; }
+        if Wiz.phones-busy: VerticalLayout {
+            spacing: 6px;
+            ProgressIndicator {
+                progress: Wiz.phones-progress;
+                indeterminate: Wiz.phones-indeterminate;
+            }
+            Caption {
+                text: Wiz.phones-line;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+        if Wiz.phones-problem != "": Problem { text: Wiz.phones-problem; }
+        if Wiz.phones-caution != "": Caution { text: Wiz.phones-caution; }
+        for row[index] in Wiz.phones: VerticalLayout {
+            spacing: 2px;
+            Tick {
+                text: row.text;
+                checked: row.picked;
+                enabled: row.usable;
+                reason: row.hint;
+                toggled => {
+                    Wiz.phone-toggled(index);
+                }
+            }
+            // A row that cannot be ticked has its hint said with its words already (`reason`).
+            if row.hint != "": HorizontalLayout {
+                padding-left: 26px;
+                Caption {
+                    text: row.hint;
+                    accessible-role: none;
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: start;
+            SkinButton {
+                text: Strings.refresh;
+                enabled: Wiz.phones-refreshable;
+                clicked => {
+                    Wiz.refresh-phones();
                 }
             }
         }
@@ -929,7 +1019,7 @@ component AccountLine inherits VerticalLayout {
             }
             SkinComboBox {
                 width: 170px;
-                model: Strings.touch-options;
+                model: root.account.phone ? Strings.phone-touch-options : Strings.touch-options;
                 current-index: root.account.touch-index;
                 selected(value) => {
                     Wiz.touch-picked(root.index, self.current-index);
@@ -949,14 +1039,15 @@ component AccountLine inherits VerticalLayout {
             }
             SkinComboBox {
                 width: 170px;
-                model: Strings.capture-options;
+                model: root.account.phone ? Strings.phone-capture-options : Strings.capture-options;
                 current-index: root.account.capture-index;
                 selected(value) => {
                     Wiz.capture-picked(root.index, self.current-index);
                 }
             }
         }
-        Tick {
+        // A phone has no emulator to open.
+        if !root.account.phone: Tick {
             text: Strings.start-emulator;
             checked: root.account.start-emulator;
             toggled => {
@@ -987,6 +1078,7 @@ component AccountsPage inherits ScrollView {
         spacing: 8px;
         alignment: start;
         Body { text: Strings.accounts-body; }
+        if Wiz.accounts-note != "": Body { text: Wiz.accounts-note; }
         Caption { text: Strings.name-hint; }
         HorizontalLayout {
             spacing: 8px;
@@ -1283,6 +1375,7 @@ export component WizardWindow inherits Window {
                 if Wiz.page == Pages.location: RootPage { }
                 if Wiz.page == Pages.games: GamesPage { }
                 if Wiz.page == Pages.emulators: EmulatorsPage { }
+                if Wiz.page == Pages.phones: PhonesPage { }
                 if Wiz.page == Pages.accounts: AccountsPage { }
                 if Wiz.page == Pages.options: OptionsPage { }
                 if Wiz.page == Pages.confirm: ConfirmPage { }

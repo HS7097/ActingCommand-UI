@@ -3,7 +3,7 @@
 //! leads to (Runtime `contracts/lab-two-entries.md`: `actingctl` leaves with LAB-7, the Lab's
 //! rows take its place): a row of `tools\actinglab.exe` wherever one serves the step, the
 //! Runtime's own `runtime\actingcommand-actingd.exe check-config` where none can yet, and
-//! `runtime\actingctl.exe request-shutdown` for step 13's close, the form tried on a test machine
+//! `runtime\actingctl.exe request-shutdown` for step 14's close, the form tried on a test machine
 //! (the Lab's formal stop, `down`, keeps a hold the console does not lift). Every Lab
 //! process the wizard starts is `ACTINGCOMMAND_INITIATOR=Lab-救急` (the same contract, §4.2: the
 //! word for "a Lab process the UI starts outside its workbench: the launcher, acsetup, the
@@ -13,6 +13,8 @@
 //!
 //! | step | command | why this face |
 //! |---|---|---|
+//! | the phone page, before the install | `actinglab --json help devices`, `help devices bind`, then `actinglab --json devices --root <root> --key-salt-env <variable>` (`devices`) | core rows; `help` reads the operation table the Lab's build embeds and nothing else; `devices` lists on a root that holds only its tools, its adb the root's own |
+//! | the phones' bind | `actinglab --json devices bind <alias> --device-key <key> --key-salt-env <variable> --config <candidate> --bound-via ui --root <root>` (`devices`) | core row; with `--config` it checks the alias in the candidate and writes the state root the candidate names, before check-config |
 //! | configuration check | `runtime\actingcommand-actingd.exe check-config --config <candidate> --install-root <root>` (`apps/actingd/src/check_config.rs` `run`) | the Lab's `check-config` row checks the root's own configuration file and needs it in place to locate the root (`crates/lab-ops/src/locate.rs`; `crates/lab-rescue/src/rescue.rs` `check_config`); the candidate is checked before it is put in place |
 //! | standard packages | `actinglab --json standard-pack check --root <game root>` (`apps/actinglab/src/standard_pack_cli.rs`) | the one command; it reads only the game root, no configuration |
 //! | adopt | `actinglab --json adopt` (rescue row; `rescue.rs` `installer` → `install adopt --root`) | served row; journals the initiator |
@@ -59,6 +61,7 @@ use serde_json::Value;
 
 use crate::child::{self, json_line, outcome_of, outcome_text, OnTimeout, Spec};
 use crate::config::STATE_DIR;
+use crate::key_salt::KeySalt;
 use crate::text::Said;
 use crate::winpath::strip_verbatim;
 
@@ -106,14 +109,14 @@ pub const RUN_ACTIVITIES: [&str; 3] = ["policy_run", "direct_run", "host_run"];
 /// One program's answer.
 #[derive(Debug, Clone)]
 pub struct Answer {
-    /// The command line as the log shows it ([`Spec::text`]: a secret argument, the run's key
-    /// salt, written `<redacted>`).
+    /// The command line as the log shows it ([`Spec::text`]: a secret argument written
+    /// `<redacted>`; the run's key salt is no argument at all, [`lab_salted`]).
     pub command: String,
     pub code: Option<i32>,
     pub line: Option<Value>,
     pub outcome: child::Outcome,
-    /// Both streams as [`child::run`] hands them over: a secret argument the program repeated
-    /// is written `<redacted>` there too, so neither [`Answer::reason`] nor
+    /// Both streams as [`child::run`] hands them over: a secret argument or variable the
+    /// program repeated is written `<redacted>` there too, so neither [`Answer::reason`] nor
     /// [`Answer::log_stdout`] carries one.
     pub stdout: String,
     pub stderr: String,
@@ -226,7 +229,7 @@ pub fn check_config(root: &Path, config: &Path) -> Result<CheckConfig, Said> {
 }
 
 /// `<root>\tools\actinglab.exe --json <words…>`, as `Lab-救急`, in the root.
-pub fn lab(root: &Path, words: &[OsString], timeout: Duration, on_timeout: OnTimeout) -> Result<Answer, Said> {
+fn lab_spec(root: &Path, words: &[OsString]) -> Spec {
     let mut spec = Spec::new(&actinglab(root))
         .arg("--json")
         .env(INITIATOR_VARIABLE, RESCUE_INITIATOR)
@@ -234,7 +237,26 @@ pub fn lab(root: &Path, words: &[OsString], timeout: Duration, on_timeout: OnTim
     for word in words {
         spec = spec.arg(word.clone());
     }
-    answer(&spec, timeout, on_timeout)
+    spec
+}
+
+/// `<root>\tools\actinglab.exe --json <words…>`, as `Lab-救急`, in the root.
+pub fn lab(root: &Path, words: &[OsString], timeout: Duration, on_timeout: OnTimeout) -> Result<Answer, Said> {
+    answer(&lab_spec(root, words), timeout, on_timeout)
+}
+
+/// [`lab`] with the run's key salt as the Lab's variable `variable` and nowhere else
+/// ([`KeySalt::pass_in_env`]): `words` name the variable (`--key-salt-env <variable>`), so the
+/// command line [`Answer::command`] carries into the log holds no salt.
+pub fn lab_salted(
+    root: &Path,
+    words: &[OsString],
+    salt: &KeySalt,
+    variable: &str,
+    timeout: Duration,
+    on_timeout: OnTimeout,
+) -> Result<Answer, Said> {
+    answer(&salt.pass_in_env(lab_spec(root, words), variable), timeout, on_timeout)
 }
 
 fn words(list: &[&str]) -> Vec<OsString> {

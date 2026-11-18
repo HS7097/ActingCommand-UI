@@ -136,6 +136,18 @@ pub fn longest_item_id(bytes: &[u8]) -> Result<usize, Said> {
 /// whitespace or control characters, and cut at a character so the whole stays within `limit`
 /// bytes.
 pub fn default_alias(label: &str, folder: &str, index: u16, limit: usize) -> String {
+    suffixed(label, folder, &index.to_string(), limit)
+}
+
+/// The alias the window offers for the phone it lists as number `number` (1 on) playing a game:
+/// `<name>-phone<number>`, cut as [`default_alias`] cuts: an emulator's default `<name>-<index>`
+/// is never one.
+pub fn default_phone_alias(label: &str, folder: &str, number: usize, limit: usize) -> String {
+    suffixed(label, folder, &format!("phone{number}"), limit)
+}
+
+/// `<name>-<tail>` as [`default_alias`] describes it; `tail` alone when the name has no room.
+fn suffixed(label: &str, folder: &str, tail: &str, limit: usize) -> String {
     let clean = |text: &str| -> String {
         text.chars()
             .filter(|character| !character.is_whitespace() && !character.is_control())
@@ -148,10 +160,10 @@ pub fn default_alias(label: &str, folder: &str, index: u16, limit: usize) -> Str
     if name.is_empty() {
         name = "instance".to_owned();
     }
-    let suffix = format!("-{index}");
+    let suffix = format!("-{tail}");
     let room = limit.min(MAX_ALIAS_BYTES).saturating_sub(suffix.len());
     if room == 0 {
-        return index.to_string();
+        return tail.to_owned();
     }
     let mut end = 0;
     for (at, character) in name.char_indices() {
@@ -162,7 +174,7 @@ pub fn default_alias(label: &str, folder: &str, index: u16, limit: usize) -> Str
         end = next;
     }
     if end == 0 {
-        return index.to_string();
+        return tail.to_owned();
     }
     format!("{}{suffix}", &name[..end])
 }

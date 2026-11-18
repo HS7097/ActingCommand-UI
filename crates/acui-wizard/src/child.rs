@@ -6,10 +6,14 @@
 //! (`ACTINGCOMMAND_…`, `ACTINGLAB_…`) is removed from every child's environment, whatever the
 //! wizard was started with ([`cleared_variables`]); a child gets only those its [`Spec`] sets.
 //!
-//! An argument may be a secret ([`Spec::secret_arg`], the run's key salt): the child gets it as
-//! it is, and the wizard writes [`REDACTED`] for it wherever it shows the command line — the
-//! line every answer carries into the log ([`Spec::text`]), each reason [`run`] gives, the
-//! spec's `Debug` — and wherever the child's own output repeats it ([`Output`]).
+//! An argument may be a secret ([`Spec::secret_arg`]): the child gets it as it is, and the wizard
+//! writes [`REDACTED`] for it wherever it shows the command line — the line every answer carries
+//! into the log ([`Spec::text`]), each reason [`run`] gives, the spec's `Debug` — and wherever the
+//! child's own output repeats it ([`Output`]). So may a variable of the child's environment
+//! ([`Spec::secret_env`], the run's key salt, which the Lab reads from a variable it is named on
+//! the command line): the value is on no command line at all, the spec's `Debug` writes
+//! [`REDACTED`] for it, and so does the child's output wherever it repeats it. The command line
+//! a child is visible by to the user's other processes then names the variable, never its value.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -92,7 +96,8 @@ pub struct Spec {
     pub args: Vec<OsString>,
     pub env: Vec<(String, String)>,
     pub cwd: Option<PathBuf>,
-    /// The values of the secret arguments among `args` ([`Spec::secret_arg`]).
+    /// The values of the secret arguments among `args` ([`Spec::secret_arg`]) and of the secret
+    /// variables among `env` ([`Spec::secret_env`]).
     secrets: Vec<String>,
 }
 
@@ -140,6 +145,17 @@ impl Spec {
         self
     }
 
+    /// The variable `name` of the child's environment set to `value`, a secret one (see the
+    /// module's description): never on the command line, written [`REDACTED`] in the spec's
+    /// `Debug` and in the child's output.
+    pub fn secret_env(mut self, name: &str, value: &str) -> Self {
+        self.env.push((name.to_owned(), value.to_owned()));
+        if !value.is_empty() {
+            self.secrets.push(value.to_owned());
+        }
+        self
+    }
+
     pub fn cwd(mut self, dir: &Path) -> Self {
         self.cwd = Some(dir.to_path_buf());
         self
@@ -156,15 +172,17 @@ impl Spec {
     }
 }
 
-/// The spec with its secret arguments written [`REDACTED`], as [`Spec::text`] writes them.
+/// The spec with its secret arguments written [`REDACTED`], as [`Spec::text`] writes them, and
+/// the values of its secret variables too.
 impl fmt::Debug for Spec {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let args: Vec<String> = self.args.iter().map(|arg| self.shown(&arg.to_string_lossy())).collect();
+        let env: Vec<(&str, String)> = self.env.iter().map(|(name, value)| (name.as_str(), self.shown(value))).collect();
         formatter
             .debug_struct("Spec")
             .field("program", &self.program)
             .field("args", &args)
-            .field("env", &self.env)
+            .field("env", &env)
             .field("cwd", &self.cwd)
             .finish_non_exhaustive()
     }
@@ -198,7 +216,7 @@ fn quoted(word: &str) -> String {
 }
 
 /// A finished child: its exit code (`None` when it had none), both streams (each secret argument
-/// of its spec written [`REDACTED`] wherever the child repeated it), its time.
+/// or variable of its spec written [`REDACTED`] wherever the child repeated it), its time.
 #[derive(Debug, Clone)]
 pub struct Output {
     pub code: Option<i32>,

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The wizard's window (Workflow #429 UI-W2b): eleven pages over the back end the command line
+//! The wizard's window (Workflow #429 UI-W2b): twelve pages over the back end the command line
 //! uses too. The pages only gather choices and run read-only checks (the install set, the
-//! folder, MuMu and the other ActingCommand); nothing is written before "Install" on page 9,
-//! and then `acui_wizard::install` does it all on a worker thread, step by step. What the
-//! usage page ticks decides the pages after the games: without MuMu, the emulator and instance
-//! pages are passed by and MuMu is not looked for.
+//! folder, MuMu, the other ActingCommand and the phones); nothing is written before "Install" on
+//! page 10 but the device bridge the phone page lays into the install folder to find the phones
+//! with (`acui_wizard::pre_lay_tools`, said on that page and kept by the install), and then
+//! `acui_wizard::install` does it all on a worker thread, step by step. What the usage page
+//! ticks decides the pages after the games: without MuMu, the emulator page is passed by and
+//! MuMu is not looked for; without Android phones, the phone page; with neither, the instance
+//! page too.
 //!
 //! Everything the window shows is painted from `State` in the language picked: a switch of
 //! language paints it all again. Work that waits (hashing the set, a folder check, the emulator
@@ -22,18 +25,27 @@ use std::time::Duration;
 
 use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
-use acui_wizard::alias::{alias_problem, default_alias, MAX_ALIAS_BYTES};
+use acui_wizard::alias::{alias_problem, default_alias, default_phone_alias, MAX_ALIAS_BYTES};
 use acui_wizard::apps::Game;
-use acui_wizard::config::{backend_problem, CAPTURE_BACKENDS, DEFAULT_BACKEND, TOUCH_BACKENDS};
+use acui_wizard::config::{
+    backend_problem, handset_backend_problem, CAPTURE_BACKENDS, DEFAULT_BACKEND, HANDSET_ALIAS_LIMIT,
+    HANDSET_CAPTURE_BACKENDS, HANDSET_CAPTURE_DEFAULT, HANDSET_TOUCH_BACKENDS, HANDSET_TOUCH_DEFAULT, TOUCH_BACKENDS,
+};
+use acui_wizard::devices::{self, row_use, Asked, DeviceRow, RowUse};
+use acui_wizard::key_salt::KeySalt;
 use acui_wizard::log::LOG_FILE;
+use acui_wizard::manifest::Program;
 use acui_wizard::mumu::{self, Discovery, MumuInstance, MINIMUM_VERSION};
 use acui_wizard::occupancy::{self, OtherRoot};
-use acui_wizard::plan::{Plan, PlanInstance, PlanOptions, PLAN_SCHEMA};
+use acui_wizard::plan::{Plan, PlanHandset, PlanInstance, PlanOptions, PLAN_SCHEMA};
 use acui_wizard::platform;
-use acui_wizard::root::{check_root, is_installation_root, plain_size, text_issues, RootIssue};
+use acui_wizard::root::{check_root, check_root_beside_tools, is_installation_root, plain_size, text_issues, RootIssue};
+use acui_wizard::runtime::Answer;
 use acui_wizard::set::{self, InstallSet, SetError, SetFault, VerifiedSet, SET_FILE};
 use acui_wizard::winpath::strip_verbatim;
-use acui_wizard::{cleanup, install, Done, Event, Failure, Lang, Left, Request, Said, Step};
+use acui_wizard::{
+    cleanup, install, pre_lay_tools, Done, Event, Failure, Lang, Left, PreLaid, PreLayFailure, Request, Said, Step,
+};
 
 use crate::desktop;
 use labels::{fill, Labels, EN, ZH};
@@ -49,11 +61,12 @@ const FILES: usize = 2;
 const LOCATION: usize = 3;
 const GAMES: usize = 4;
 const EMULATORS: usize = 5;
-const ACCOUNTS: usize = 6;
-const OPTIONS: usize = 7;
-const CONFIRM: usize = 8;
-const INSTALL: usize = 9;
-const FINISH: usize = 10;
+const PHONES: usize = 6;
+const ACCOUNTS: usize = 7;
+const OPTIONS: usize = 8;
+const CONFIRM: usize = 9;
+const INSTALL: usize = 10;
+const FINISH: usize = 11;
 /// How many pages there are.
 const PAGE_COUNT: usize = FINISH + 1;
 
@@ -98,6 +111,8 @@ enum SetState {
 enum RootLine {
     Fresh,
     Empty,
+    /// It holds only the device bridge the phone page laid into it.
+    PreLaid,
     Space { free: u64, need: u64 },
     Issue(RootIssue),
     Contains(String),
@@ -124,9 +139,42 @@ struct EmuRow {
     confirmed: bool,
 }
 
+/// The phone page's work ([`App::phone_work`]): the device bridge laid into the install folder,
+/// the Lab asked what it can do, the phones listed.
+enum PhoneState {
+    /// Not begun, or let go of (the Android box unticked).
+    Idle,
+    /// Laying the device bridge: the line said last, the bytes laid.
+    Laying { line: Option<Said>, done: u64, total: u64 },
+    Asking,
+    Listing,
+    /// The list is shown (`State::phone_rows`); `keys_unmade` when the answer says the rows carry
+    /// no key, and why.
+    Listed { keys_unmade: Option<String> },
+    /// The run's key salt could not be minted: no phone can be told apart.
+    NoSalt(Said),
+    /// The device bridge could not be laid; what it wrote is in `State::stray`.
+    LayFailed(PreLayFailure),
+    /// The set's Lab lacks these parameters to bind a phone before the install.
+    Unable(Vec<String>),
+    /// Asking or listing failed.
+    Failed(Said),
+}
+
+/// One device the phone page lists, and whether it is ticked (only a row a phone's instance may
+/// take, `devices::row_use`).
+struct DeviceEntry {
+    row: DeviceRow,
+    picked: bool,
+}
+
+/// One instance of the instance page: an emulator's, or a phone's (`device_key`).
 #[derive(Clone)]
 struct Account {
+    /// The MuMu index; for a phone, its number among the phones ticked (1 on), for its default
+    /// name alone.
     index: u16,
+    /// The emulator's name; for a phone, its model as the list gave it (empty when none).
     name: String,
     alias: String,
     /// The person typed the name; it no longer follows the game.
@@ -138,6 +186,9 @@ struct Account {
     start_emulator: bool,
     confirmed_in_use: bool,
     advanced: bool,
+    /// A phone's instance: the phone's device key, as the phone page listed it under the run's
+    /// key salt; `None` for an emulator's.
+    device_key: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -172,9 +223,26 @@ struct State {
     picking: bool,
     /// Why the last folder picker did not open.
     picker_error: Option<String>,
-    /// The usage page's MuMu box. Off, the emulator and instance pages are passed by, MuMu is
-    /// not looked for and there is no instance; the phone boxes cannot be ticked yet.
+    /// The usage page's MuMu box. Off, the emulator page is passed by, MuMu is not looked for and
+    /// there is no emulator's instance.
     use_mumu: bool,
+    /// The usage page's Android box. Off, the phone page is passed by and there is no phone's
+    /// instance; with neither box, the instance page too.
+    use_android: bool,
+    /// The run's key salt (`acui_wizard::key_salt`), minted when the window opens, which the
+    /// phone page lists with and the install binds with; why not, when the system's random
+    /// source failed.
+    key_salt: Result<KeySalt, Said>,
+    /// The device bridge the phone page laid, one for each install folder it laid one into; the
+    /// install takes the one of its folder ([`State::pre_laid_here`]).
+    pre_laid: Vec<PreLaid>,
+    /// The `tools` folders a lay that failed wrote into, which stay as they are.
+    stray: Vec<PathBuf>,
+    phone: PhoneState,
+    phone_generation: u64,
+    /// The install folder the phone page's work was for.
+    phone_root: Option<PathBuf>,
+    phone_rows: Vec<DeviceEntry>,
     set_dir: Option<PathBuf>,
     preview: Option<Preview>,
     set: SetState,
@@ -241,6 +309,28 @@ impl State {
             _ => None,
         }
     }
+
+    /// The device bridge the phone page laid into the folder in the box, if it laid one there.
+    fn pre_laid_here(&self) -> Option<&PreLaid> {
+        let root = self.root();
+        self.pre_laid.iter().find(|laid| laid.root == root)
+    }
+
+    /// Every `tools` folder the phone page wrote into, laid whole or in part, each once.
+    fn laid_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = self.pre_laid.iter().map(|laid| laid.dir.clone()).collect();
+        for dir in &self.stray {
+            if !dirs.contains(dir) {
+                dirs.push(dir.clone());
+            }
+        }
+        dirs
+    }
+
+    /// The phone page is writing: it holds the window until it is done.
+    fn laying(&self) -> bool {
+        matches!(self.phone, PhoneState::Laying { .. })
+    }
 }
 
 struct App {
@@ -300,6 +390,7 @@ fn number_pages(window: &WizardWindow) {
     pages.set_location(LOCATION as i32);
     pages.set_games(GAMES as i32);
     pages.set_emulators(EMULATORS as i32);
+    pages.set_phones(PHONES as i32);
     pages.set_accounts(ACCOUNTS as i32);
     pages.set_options(OPTIONS as i32);
     pages.set_confirm(CONFIRM as i32);
@@ -332,6 +423,15 @@ pub fn run() -> ExitCode {
         picker_error: None,
         // As the wizard was before the usage page: for MuMu.
         use_mumu: true,
+        use_android: false,
+        // Once for the whole run: the phone page's list and the install's bind need the same.
+        key_salt: KeySalt::mint(),
+        pre_laid: Vec::new(),
+        stray: Vec::new(),
+        phone: PhoneState::Idle,
+        phone_generation: 0,
+        phone_root: None,
+        phone_rows: Vec::new(),
         set_dir,
         preview,
         set,
@@ -394,19 +494,24 @@ impl App {
         wiz.on_search_again(|| with_app(App::search));
         wiz.on_skip_emulators(|| with_app(App::skip_emulators));
         wiz.on_emulator_toggled(|row| with_app(|app| app.emulator_toggled(row)));
+        wiz.on_phone_toggled(|row| with_app(|app| app.phone_toggled(row)));
+        wiz.on_refresh_phones(|| with_app(App::refresh_phones));
         wiz.on_alias_edited(|row, text| with_app(|app| app.alias_edited(row, text.to_string())));
         wiz.on_game_picked(|row, pick| with_app(|app| app.game_picked(row, pick)));
         wiz.on_server_picked(|row, pick| with_app(|app| app.server_picked(row, pick)));
+        // A phone's lists are a phone's own (`account_row`).
         wiz.on_touch_picked(|row, pick| {
             with_app(|app| app.account_changed(row, |account| {
-                if let Some(backend) = usize::try_from(pick).ok().and_then(|pick| TOUCH_BACKENDS.get(pick)) {
+                let backends: &[&str] = if account.device_key.is_some() { &HANDSET_TOUCH_BACKENDS } else { &TOUCH_BACKENDS };
+                if let Some(backend) = usize::try_from(pick).ok().and_then(|pick| backends.get(pick)) {
                     account.touch = (*backend).to_owned();
                 }
             }))
         });
         wiz.on_capture_picked(|row, pick| {
             with_app(|app| app.account_changed(row, |account| {
-                if let Some(backend) = usize::try_from(pick).ok().and_then(|pick| CAPTURE_BACKENDS.get(pick)) {
+                let backends: &[&str] = if account.device_key.is_some() { &HANDSET_CAPTURE_BACKENDS } else { &CAPTURE_BACKENDS };
+                if let Some(backend) = usize::try_from(pick).ok().and_then(|pick| backends.get(pick)) {
                     account.capture = (*backend).to_owned();
                 }
             }))
@@ -480,8 +585,11 @@ impl App {
         strings.set_open_folder(l.open_folder.into());
         strings.set_copy_error(l.copy_error.into());
         strings.set_open_log(l.open_log.into());
+        strings.set_refresh(l.refresh.into());
         strings.set_touch_options(shared(TOUCH_BACKENDS));
         strings.set_capture_options(shared(CAPTURE_BACKENDS));
+        strings.set_phone_touch_options(shared(HANDSET_TOUCH_BACKENDS));
+        strings.set_phone_capture_options(shared(HANDSET_CAPTURE_BACKENDS));
     }
 
     // ---- Painting -------------------------------------------------------------------------
@@ -503,8 +611,11 @@ impl App {
                     1
                 } else if index == INSTALL && failed {
                     4
-                } else if (index == EMULATORS || index == ACCOUNTS) && !state.use_mumu {
-                    // Passed by without MuMu (`App::next`).
+                } else if (index == EMULATORS && !state.use_mumu)
+                    || (index == PHONES && !state.use_android)
+                    || (index == ACCOUNTS && !state.use_mumu && !state.use_android)
+                {
+                    // Passed by without MuMu, without phones, without either (`App::next`).
                     3
                 } else if index == ACCOUNTS && page > ACCOUNTS && state.accounts.is_empty() {
                     3
@@ -516,7 +627,8 @@ impl App {
             })
             .collect();
         wiz.set_steps(model(steps));
-        wiz.set_back_shown((USAGE..=CONFIRM).contains(&page));
+        // While the phone page lays the device bridge, it holds the window (`App::back`).
+        wiz.set_back_shown((USAGE..=CONFIRM).contains(&page) && !(page == PHONES && state.laying()));
         wiz.set_next_shown(page <= CONFIRM);
         wiz.set_next_text(if page == CONFIRM { l.install } else { l.next }.into());
         wiz.set_next_enabled(can_next(&state));
@@ -524,11 +636,14 @@ impl App {
         wiz.set_cancel_enabled(page != INSTALL);
         wiz.set_log_line(log_path(&state).map_or_else(String::new, |log| fill(l.log_line, &[&log.display().to_string()])).into());
         wiz.set_picking(state.picking);
+        // Once the phone page laid the device bridge, quitting leaves it: the question says where.
+        let laid: Vec<String> = state.laid_dirs().iter().map(|dir| strip_verbatim(&dir.to_string_lossy())).collect();
+        let quit = if laid.is_empty() { l.quit_ask.to_owned() } else { fill(l.quit_ask_laid, &[&laid.join(l.list_separator)]) };
         let question = state.ask.map(|ask| match ask {
-            Ask::Quit => (l.quit_ask, l.quit_yes, l.quit_no),
-            Ask::TakeInUse(_) => (l.emu_take_ask, l.emu_take_yes, l.emu_take_no),
-            Ask::NoEmulator => (l.emu_none_ask, l.emu_none_yes, l.emu_none_no),
-            Ask::Busy => (l.busy_note, l.ok, ""),
+            Ask::Quit => (quit.clone(), l.quit_yes, l.quit_no),
+            Ask::TakeInUse(_) => (l.emu_take_ask.to_owned(), l.emu_take_yes, l.emu_take_no),
+            Ask::NoEmulator => (l.emu_none_ask.to_owned(), l.emu_none_yes, l.emu_none_no),
+            Ask::Busy => (l.busy_note.to_owned(), l.ok, ""),
         });
         wiz.set_dialog_shown(question.is_some());
         if let Some((text, yes, no)) = question {
@@ -543,7 +658,11 @@ impl App {
             LOCATION => paint_location(&state, &wiz),
             GAMES => paint_games(&state, &wiz),
             EMULATORS => paint_emulators(&state, &wiz),
-            ACCOUNTS => wiz.set_account_problems(shared(account_problems(&state))),
+            PHONES => paint_phones(&state, &wiz),
+            ACCOUNTS => {
+                wiz.set_accounts_note(accounts_note(&state).into());
+                wiz.set_account_problems(shared(account_problems(&state)));
+            }
             OPTIONS => paint_options(&state, &wiz),
             CONFIRM => paint_confirm(&state, &wiz),
             INSTALL => paint_install(&state, &wiz),
@@ -585,20 +704,48 @@ impl App {
         };
         match page {
             WELCOME | USAGE | FILES | LOCATION | ACCOUNTS | OPTIONS => self.go(page + 1),
-            // Without MuMu the emulator and instance pages are passed by: no search, no instance
-            // (the usage page let go of them when MuMu was unticked).
+            // Without MuMu the emulator page is passed by, without phones the phone page, and
+            // without either the instance page: no search, no instance (the usage page let go of
+            // them when its box was unticked).
             GAMES => {
-                let mumu = self.state.borrow().use_mumu;
-                self.go(if mumu { EMULATORS } else { OPTIONS });
+                let (mumu, android) = {
+                    let state = self.state.borrow();
+                    (state.use_mumu, state.use_android)
+                };
+                self.go(if mumu {
+                    EMULATORS
+                } else if android {
+                    PHONES
+                } else {
+                    OPTIONS
+                });
             }
             EMULATORS => {
-                let picked = self.state.borrow().emu_rows.iter().any(|row| row.picked);
+                let (picked, android) = {
+                    let state = self.state.borrow();
+                    (state.emu_rows.iter().any(|row| row.picked), state.use_android)
+                };
                 if picked {
                     sync_accounts(&mut self.state.borrow_mut());
-                    self.go(ACCOUNTS);
+                    self.go(if android { PHONES } else { ACCOUNTS });
+                } else if android {
+                    // The phones may still bring instances: whether there are none is the phone
+                    // page's to say.
+                    drop_emulators(&mut self.state.borrow_mut());
+                    self.go(PHONES);
                 } else {
                     self.ask(Ask::NoEmulator);
                 }
+            }
+            // No phone ticked is a choice too (`can_next`): the instance page comes only with
+            // some instance to set up.
+            PHONES => {
+                let any = {
+                    let mut state = self.state.borrow_mut();
+                    sync_accounts(&mut state);
+                    !state.accounts.is_empty()
+                };
+                self.go(if any { ACCOUNTS } else { OPTIONS });
             }
             CONFIRM => self.start_install(),
             _ => {}
@@ -609,8 +756,16 @@ impl App {
         let target = {
             let state = self.state.borrow();
             match state.page {
-                OPTIONS if !state.use_mumu => GAMES,
-                OPTIONS if state.accounts.is_empty() => EMULATORS,
+                // The device bridge is being laid: the page holds until it is done.
+                PHONES if state.laying() => return,
+                PHONES if !state.use_mumu => GAMES,
+                PHONES => EMULATORS,
+                ACCOUNTS if state.use_android => PHONES,
+                ACCOUNTS => EMULATORS,
+                OPTIONS if !state.accounts.is_empty() => ACCOUNTS,
+                OPTIONS if state.use_android => PHONES,
+                OPTIONS if state.use_mumu => EMULATORS,
+                OPTIONS => GAMES,
                 page @ USAGE..=CONFIRM => page - 1,
                 _ => return,
             }
@@ -641,6 +796,17 @@ impl App {
                     self.search();
                 }
             }
+            // Begun afresh when it has not begun, or was for another install folder; else what
+            // it found stays, and "Refresh" lists again.
+            PHONES => {
+                let fresh = {
+                    let state = self.state.borrow();
+                    matches!(state.phone, PhoneState::Idle) || state.phone_root.as_ref() != Some(&state.root())
+                };
+                if fresh {
+                    self.phone_work();
+                }
+            }
             ACCOUNTS => self.paint_accounts(),
             _ => {}
         }
@@ -648,10 +814,14 @@ impl App {
     }
 
     fn cancel(&self) {
-        let page = self.state.borrow().page;
+        let (page, laying) = {
+            let state = self.state.borrow();
+            (state.page, state.laying())
+        };
         match page {
             INSTALL => {}
             FINISH => self.close(),
+            _ if laying => self.ask(Ask::Busy),
             _ => self.ask(Ask::Quit),
         }
     }
@@ -665,9 +835,15 @@ impl App {
     }
 
     fn close_requested(&self) -> CloseRequestResponse {
+        // The phone page laying the device bridge writes as the install does.
         let (page, running, asking, picking) = {
             let state = self.state.borrow();
-            (state.page, matches!(state.install, InstallState::Running), state.ask.is_some(), state.picking)
+            (
+                state.page,
+                matches!(state.install, InstallState::Running) || state.laying(),
+                state.ask.is_some(),
+                state.picking,
+            )
         };
         if page == FINISH {
             return CloseRequestResponse::HideWindow;
@@ -704,7 +880,7 @@ impl App {
                 }
             }
             Some(Ask::NoEmulator) if yes => {
-                self.state.borrow_mut().accounts.clear();
+                drop_emulators(&mut self.state.borrow_mut());
                 self.go(OPTIONS);
                 return;
             }
@@ -737,7 +913,16 @@ impl App {
                         state.emu_generation += 1;
                     }
                 }
-                // The phone boxes are greyed and never ask.
+                // Android unticked lets go of the phones chosen and of what the phone page found
+                // or is still finding: ticked again, it lists afresh. The device bridge it laid
+                // stays where it is (the install takes it, `State::pre_laid_here`).
+                1 => {
+                    state.use_android = !state.use_android;
+                    if !state.use_android {
+                        drop_phones(&mut state);
+                    }
+                }
+                // The iOS box is greyed and never asks.
                 _ => {}
             }
         }
@@ -934,14 +1119,19 @@ impl App {
         self.paint();
     }
 
-    /// Checks the folder in the box as it is now, on a worker.
+    /// Checks the folder in the box as it is now, on a worker. A folder the phone page laid the
+    /// device bridge into is checked as the install will take it: that `tools` beside nothing,
+    /// one copy of the Tools less to find room for.
     fn check_root(&self) {
-        let (generation, text, needed) = {
+        let (generation, text, needed, laid) = {
             let state = self.state.borrow();
-            (state.root_generation, state.root_text.trim().to_owned(), state.space_needed())
+            let laid = state.pre_laid_here().is_some();
+            let tools = state.verified().map_or(0, |set| set.program(Program::Tools).bytes);
+            let needed = if laid { state.space_needed().saturating_sub(tools) } else { state.space_needed() };
+            (state.root_generation, state.root_text.trim().to_owned(), needed, laid)
         };
         let spawned = spawn("acsetup-root-check", move || {
-            let report = root_report(&text, needed);
+            let report = root_report(&text, needed, laid);
             post(move |app| app.root_checked(generation, report));
         });
         if let Err(error) = spawned {
@@ -1062,11 +1252,188 @@ impl App {
     }
 
     fn skip_emulators(&self) {
-        drop_emulators(&mut self.state.borrow_mut());
-        self.go(OPTIONS);
+        let android = {
+            let mut state = self.state.borrow_mut();
+            drop_emulators(&mut state);
+            state.use_android
+        };
+        self.go(if android { PHONES } else { OPTIONS });
     }
 
-    // ---- 7 Accounts ------------------------------------------------------------------------
+    // ---- 7 Phones --------------------------------------------------------------------------
+
+    /// The phone page's work, on a worker ([`phones_worker`]): the device bridge laid into the
+    /// install folder unless the page laid it there already, the Lab asked what it can do, the
+    /// phones listed, each part heard as it ends. A result for a question asked again since is
+    /// not shown, but what a lay wrote is kept whatever: it is on the disk.
+    fn phone_work(&self) {
+        let job = {
+            let mut state = self.state.borrow_mut();
+            let root = state.root();
+            let salt = state.key_salt.clone();
+            let set = state.verified().cloned();
+            let laid = state.pre_laid_here().is_some();
+            state.phone_generation += 1;
+            state.phone_root = Some(root.clone());
+            match (salt, set) {
+                (Err(problem), _) => {
+                    state.phone = PhoneState::NoSalt(problem);
+                    None
+                }
+                // The files page lets no one past a set that is not checked.
+                (Ok(_), None) => {
+                    state.phone = PhoneState::Idle;
+                    None
+                }
+                (Ok(salt), Some(set)) => {
+                    state.phone = if laid { PhoneState::Asking } else { PhoneState::Laying { line: None, done: 0, total: 0 } };
+                    Some((set, root, salt, laid, state.phone_generation))
+                }
+            }
+        };
+        if let Some((set, root, salt, laid, generation)) = job {
+            let spawned = spawn("acsetup-phones", move || phones_worker(set, root, salt, laid, generation));
+            if let Err(error) = spawned {
+                let mut state = self.state.borrow_mut();
+                if state.phone_generation == generation {
+                    state.phone = PhoneState::Failed(Said::new(fill(ZH.worker_failed, &[&error]), fill(EN.worker_failed, &[&error])));
+                }
+            }
+        }
+        self.paint();
+    }
+
+    fn refresh_phones(&self) {
+        let busy = matches!(self.state.borrow().phone, PhoneState::Laying { .. } | PhoneState::Asking | PhoneState::Listing);
+        if !busy {
+            self.phone_work();
+        }
+    }
+
+    fn phones_progress(&self, generation: u64, done: u64, total: u64, line: Option<Said>) {
+        {
+            let mut state = self.state.borrow_mut();
+            if generation != state.phone_generation {
+                return;
+            }
+            if let PhoneState::Laying { line: was_line, done: was_done, total: was_total } = &mut state.phone {
+                *was_done = done;
+                *was_total = total;
+                if line.is_some() {
+                    *was_line = line;
+                }
+            }
+        }
+        self.paint();
+    }
+
+    /// The lay's end: the device bridge laid is kept for its folder, a lay that wrote and failed
+    /// is kept among what stays (`State::stray`), whatever was asked since.
+    fn phones_laid(&self, generation: u64, result: Result<PreLaid, PreLayFailure>) {
+        {
+            let mut state = self.state.borrow_mut();
+            let shown = match result {
+                Ok(laid) => {
+                    state.pre_laid.retain(|other| other.root != laid.root);
+                    state.pre_laid.push(laid);
+                    PhoneState::Asking
+                }
+                Err(failure) => {
+                    if failure.wrote && !state.stray.contains(&failure.dir) {
+                        state.stray.push(failure.dir.clone());
+                    }
+                    PhoneState::LayFailed(failure)
+                }
+            };
+            if generation != state.phone_generation {
+                return;
+            }
+            state.phone = shown;
+        }
+        self.paint();
+    }
+
+    /// What the Lab answered goes into the install log with the device bridge laid into `root`
+    /// ([`PreLaid::note`]), as the install logs an answer: its reading, then its whole stdout on
+    /// a line of its own. The command line names the salt's variable, never the salt.
+    fn note_answer(state: &mut State, root: &Path, said: Said, answer: &Answer) {
+        if let Some(laid) = state.pre_laid.iter_mut().find(|laid| laid.root.as_path() == root) {
+            laid.note(&said.with(format!("{}: {}", answer.command, answer.reason())).to_string());
+            if let Some(stdout) = answer.log_stdout() {
+                laid.note(&format!("  {} stdout: {stdout}", answer.command));
+            }
+        }
+    }
+
+    fn phones_asked(&self, generation: u64, root: PathBuf, asked: Result<Asked, Said>) {
+        {
+            let mut state = self.state.borrow_mut();
+            if let Ok(asked) = &asked {
+                for answer in &asked.answers {
+                    Self::note_answer(&mut state, &root, Said::new("help 答复", "help answered"), answer);
+                }
+            }
+            if generation != state.phone_generation {
+                return;
+            }
+            state.phone = match asked {
+                Ok(asked) if asked.missing.is_empty() => PhoneState::Listing,
+                Ok(asked) => PhoneState::Unable(asked.missing),
+                Err(problem) => PhoneState::Failed(problem),
+            };
+        }
+        self.paint();
+    }
+
+    /// The list: a row ticked before stays ticked by its key while a phone's instance may still
+    /// take it.
+    fn phones_listed(&self, generation: u64, root: PathBuf, listed: Result<Answer, Said>) {
+        {
+            let mut state = self.state.borrow_mut();
+            let listing = listed.and_then(|answer| {
+                Self::note_answer(&mut state, &root, Said::new("devices 答复", "devices answered"), &answer);
+                devices::read_listing(answer.code, answer.line.as_ref())
+            });
+            if generation != state.phone_generation {
+                return;
+            }
+            match listing {
+                Ok(listing) => {
+                    let ticked: Vec<String> = state
+                        .phone_rows
+                        .iter()
+                        .filter(|entry| entry.picked)
+                        .filter_map(|entry| entry.row.device_key.clone())
+                        .collect();
+                    state.phone_rows = listing
+                        .rows
+                        .into_iter()
+                        .map(|row| {
+                            let picked = row_use(&row) == RowUse::Usable
+                                && row.device_key.as_ref().is_some_and(|key| ticked.contains(key));
+                            DeviceEntry { row, picked }
+                        })
+                        .collect();
+                    state.phone = PhoneState::Listed { keys_unmade: listing.keys_unmade };
+                }
+                Err(problem) => state.phone = PhoneState::Failed(problem),
+            }
+        }
+        self.paint();
+    }
+
+    fn phone_toggled(&self, row: i32) {
+        if let Ok(row) = usize::try_from(row) {
+            if let Some(entry) = self.state.borrow_mut().phone_rows.get_mut(row) {
+                if row_use(&entry.row) == RowUse::Usable {
+                    entry.picked = !entry.picked;
+                }
+            }
+        }
+        self.paint();
+    }
+
+    // ---- 8 Accounts ------------------------------------------------------------------------
 
     fn alias_edited(&self, row: i32, text: String) {
         let Ok(row) = usize::try_from(row) else {
@@ -1103,7 +1470,7 @@ impl App {
                 account.game = game.as_ref().map(|game| game.game.clone());
                 account.server = game.as_ref().and_then(only_server);
                 if !account.edited {
-                    account.alias = account_default_alias(account.index, game.as_ref());
+                    account.alias = account_default_alias(account, game.as_ref());
                 }
             }
         }
@@ -1152,7 +1519,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 8 Options -------------------------------------------------------------------------
+    // ---- 9 Options -------------------------------------------------------------------------
 
     fn option_toggled(&self, which: i32) {
         {
@@ -1175,7 +1542,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 9, 10 The install -----------------------------------------------------------------
+    // ---- 10, 11 The install ----------------------------------------------------------------
 
     fn start_install(&self) {
         let request = {
@@ -1183,8 +1550,16 @@ impl App {
             let Some(set_dir) = state.set_dir.clone() else {
                 return;
             };
-            // No page lays anything before the install yet (the phone page is to come).
-            let request = Request { set_dir, root: state.root(), plan: plan_of(&state), pre_laid: None };
+            // The device bridge the phone page laid into this folder, which the install takes as
+            // its own whether or not phones are still chosen; the run's key salt, which the
+            // phones were listed with.
+            let request = Request {
+                set_dir,
+                root: state.root(),
+                plan: plan_of(&state),
+                pre_laid: state.pre_laid_here().cloned(),
+                key_salt: state.key_salt.as_ref().ok().cloned(),
+            };
             state.install = InstallState::Running;
             state.marks = vec![StepMark::Waiting; Step::ALL.len()];
             state.current = None;
@@ -1280,7 +1655,7 @@ impl App {
         self.paint();
     }
 
-    // ---- 11 Finish -------------------------------------------------------------------------
+    // ---- 12 Finish -------------------------------------------------------------------------
 
     fn act(&self, outcome: std::io::Result<()>) {
         {
@@ -1320,6 +1695,8 @@ fn can_next(state: &State) -> bool {
         LOCATION => state.root_usable(),
         GAMES => state.games.iter().any(|(_, picked)| *picked),
         EMULATORS => matches!(state.emu, EmuState::Done { .. }),
+        // Once listed, with any phones ticked or none; never while it works or after it failed.
+        PHONES => matches!(state.phone, PhoneState::Listed { .. }),
         ACCOUNTS => account_problems(state).is_empty(),
         // The options have no rule among themselves (`acui_wizard::plan::plan_problems`).
         OPTIONS => true,
@@ -1372,8 +1749,9 @@ fn paint_welcome(state: &State, wiz: &Wiz<'_>) {
 fn paint_usage(state: &State, wiz: &Wiz<'_>) {
     let l = state.labels();
     wiz.set_usage_mumu(state.use_mumu);
+    wiz.set_usage_android(state.use_android);
     // With nothing ticked, what the install will be and how instances come later.
-    wiz.set_usage_note(if state.use_mumu { "" } else { l.usage_none }.into());
+    wiz.set_usage_note(if state.use_mumu || state.use_android { "" } else { l.usage_none }.into());
 }
 
 fn paint_files(state: &State, wiz: &Wiz<'_>) {
@@ -1449,6 +1827,7 @@ fn root_line(line: &RootLine, l: &Labels) -> (i32, String) {
     match line {
         RootLine::Fresh => (1, l.root_fresh.to_owned()),
         RootLine::Empty => (1, l.root_empty.to_owned()),
+        RootLine::PreLaid => (1, l.root_pre_laid.to_owned()),
         RootLine::Space { free, need } => (1, fill(l.root_space, &[&plain_size(*free), &plain_size(*need)])),
         RootLine::Contains(root) => (2, fill(l.root_contains, &[root])),
         RootLine::Worker(error) => (2, fill(l.worker_failed, &[error])),
@@ -1572,6 +1951,121 @@ fn paint_emulators(state: &State, wiz: &Wiz<'_>) {
     wiz.set_emu_skippable(skippable);
 }
 
+fn paint_phones(state: &State, wiz: &Wiz<'_>) {
+    let l = state.labels();
+    let lang = state.lang;
+    // The word "instance" is explained here when no page before did (without MuMu).
+    wiz.set_phones_body(fill(l.phones_body, &[if state.use_mumu { "" } else { l.instance_explained }]).into());
+    // The one write before the install, said while it is laid and once it is there.
+    let tools = strip_verbatim(&state.root().join(Program::Tools.dir()).to_string_lossy());
+    let noted = state.laying() || state.pre_laid_here().is_some();
+    wiz.set_phones_note(if noted { fill(l.phones_write_note, &[&tools]) } else { String::new() }.into());
+    let mut text = String::new();
+    let mut busy = false;
+    let mut progress = 0.0f32;
+    let mut indeterminate = true;
+    let mut line = String::new();
+    let mut problem = String::new();
+    let mut caution = String::new();
+    let mut refreshable = false;
+    match &state.phone {
+        PhoneState::Idle => {}
+        PhoneState::Laying { line: last, done, total } => {
+            text = l.phones_laying.to_owned();
+            busy = true;
+            if *total > 0 {
+                progress = (*done as f64 / *total as f64) as f32;
+                indeterminate = false;
+            }
+            line = last.as_ref().map_or_else(String::new, |last| last.in_lang(lang).to_owned());
+        }
+        PhoneState::Asking => {
+            text = l.phones_asking.to_owned();
+            busy = true;
+        }
+        PhoneState::Listing => {
+            text = l.phones_listing.to_owned();
+            busy = true;
+        }
+        PhoneState::Listed { keys_unmade } => {
+            text = if state.phone_rows.is_empty() { l.phones_none } else { l.phones_found }.to_owned();
+            refreshable = true;
+            if let Some(why) = keys_unmade {
+                caution = fill(l.phones_keys_unmade, &[why]);
+            }
+        }
+        PhoneState::NoSalt(said_problem) => problem = fill(l.phones_salt_failed, &[&said(said_problem, lang)]),
+        PhoneState::LayFailed(failure) => {
+            problem = fill(l.phones_lay_failed, &[&said(&failure.reason, lang)]);
+            problem.push('\n');
+            problem.push_str(&if failure.wrote {
+                fill(l.phones_lay_left, &[&strip_verbatim(&failure.dir.to_string_lossy())])
+            } else {
+                l.phones_lay_nothing.to_owned()
+            });
+        }
+        PhoneState::Unable(missing) => {
+            problem = l.phones_unable.to_owned();
+            problem.push('\n');
+            problem.push_str(&fill(l.phones_lacks, &[&missing.join(l.list_separator)]));
+        }
+        PhoneState::Failed(said_problem) => {
+            problem = fill(l.phones_list_failed, &[&said(said_problem, lang)]);
+            refreshable = true;
+        }
+    }
+    // The rows of the last list, while it is the one shown.
+    let rows: Vec<PhoneRow> = if matches!(state.phone, PhoneState::Listed { .. }) {
+        state.phone_rows.iter().map(|entry| phone_row(entry, l)).collect()
+    } else {
+        Vec::new()
+    };
+    wiz.set_phones_text(text.into());
+    wiz.set_phones_busy(busy);
+    wiz.set_phones_progress(progress);
+    wiz.set_phones_indeterminate(indeterminate);
+    wiz.set_phones_line(line.into());
+    wiz.set_phones_problem(problem.into());
+    wiz.set_phones_caution(caution.into());
+    wiz.set_phones(model(rows));
+    wiz.set_phones_refreshable(refreshable);
+}
+
+/// One row of the phone page: its model (else "unknown model"), its connection and its state in
+/// a person's words (else as adb says it), and what to do about a row that cannot be ticked.
+fn phone_row(entry: &DeviceEntry, l: &Labels) -> PhoneRow {
+    let row = &entry.row;
+    let transport = match row.transport.as_str() {
+        devices::USB => l.transport_usb,
+        "tcp" => l.transport_tcp,
+        "" => "?",
+        other => other,
+    };
+    let state = match row.state.as_str() {
+        devices::DEVICE => l.state_device,
+        "unauthorized" => l.state_unauthorized,
+        "offline" => l.state_offline,
+        "no" => l.state_no,
+        "" => "?",
+        other => other,
+    };
+    let usable = row_use(row) == RowUse::Usable;
+    let hint = match row_use(row) {
+        RowUse::Usable => String::new(),
+        RowUse::Unauthorized => l.hint_unauthorized.to_owned(),
+        RowUse::NoDriver => l.hint_driver.to_owned(),
+        RowUse::NotHandset => l.hint_tcp.to_owned(),
+        RowUse::NoKey => l.hint_no_key.to_owned(),
+        RowUse::Other => fill(l.hint_other, &[&row.state]),
+    };
+    PhoneRow {
+        text: fill(l.phone_row, &[row.model.as_deref().unwrap_or(l.unknown_model), transport, state]).into(),
+        hint: hint.into(),
+        picked: entry.picked && usable,
+        usable,
+    }
+}
+
 fn only_server(game: &Game) -> Option<String> {
     match game.servers.as_slice() {
         [server] => Some(server.server.clone()),
@@ -1579,25 +2073,46 @@ fn only_server(game: &Game) -> Option<String> {
     }
 }
 
-fn account_default_alias(index: u16, game: Option<&Game>) -> String {
-    match game {
-        Some(game) => default_alias(&game.label, &game.game, index, game.alias_limit),
-        None => default_alias("MuMu", "", index, MAX_ALIAS_BYTES),
+/// The name the instance page offers: an emulator's `<game>-<index>` ("MuMu" before a game is
+/// chosen), a phone's `<game>-phone<number>` (its model before a game is chosen), each within its
+/// game's alias limit and a phone's within the Runtime's limit for a phone too.
+fn account_default_alias(account: &Account, game: Option<&Game>) -> String {
+    match (&account.device_key, game) {
+        (None, Some(game)) => default_alias(&game.label, &game.game, account.index, game.alias_limit),
+        (None, None) => default_alias("MuMu", "", account.index, MAX_ALIAS_BYTES),
+        (Some(_), Some(game)) => default_phone_alias(
+            &game.label,
+            &game.game,
+            usize::from(account.index),
+            game.alias_limit.min(HANDSET_ALIAS_LIMIT),
+        ),
+        (Some(_), None) => default_phone_alias(&account.name, "", usize::from(account.index), HANDSET_ALIAS_LIMIT),
     }
 }
 
-/// No emulator handed over and no instance, as "Skip this step" leaves them; what the search
-/// found stays listed.
+/// No emulator handed over and no emulator's instance, as "Skip this step" leaves them; what the
+/// search found stays listed, and the phones' instances stay.
 fn drop_emulators(state: &mut State) {
     for row in &mut state.emu_rows {
         row.picked = false;
         row.confirmed = false;
     }
-    state.accounts.clear();
+    state.accounts.retain(|account| account.device_key.is_some());
 }
 
-/// The accounts for the emulators ticked, keeping what was set for each already: a game no
-/// longer ticked is let go, a lone game or server is taken, an untouched name follows its game.
+/// No phone ticked and no phone's instance, and the phone page let go of: ticked again, it lists
+/// afresh. The device bridge it laid stays on the disk and in `State::pre_laid`.
+fn drop_phones(state: &mut State) {
+    state.phone_rows.clear();
+    state.accounts.retain(|account| account.device_key.is_none());
+    state.phone = PhoneState::Idle;
+    state.phone_root = None;
+    state.phone_generation += 1;
+}
+
+/// The accounts for the emulators ticked, then for the phones ticked, keeping what was set for
+/// each already (an emulator's by its index, a phone's by its device key): a game no longer
+/// ticked is let go, a lone game or server is taken, an untouched name follows its game.
 fn sync_accounts(state: &mut State) {
     let chosen = state.chosen_games();
     let mut accounts = Vec::new();
@@ -1605,7 +2120,7 @@ fn sync_accounts(state: &mut State) {
         let mut account = state
             .accounts
             .iter()
-            .find(|account| account.index == row.instance.index)
+            .find(|account| account.device_key.is_none() && account.index == row.instance.index)
             .cloned()
             .unwrap_or_else(|| Account {
                 index: row.instance.index,
@@ -1619,9 +2134,43 @@ fn sync_accounts(state: &mut State) {
                 start_emulator: false,
                 confirmed_in_use: false,
                 advanced: false,
+                device_key: None,
             });
         account.name = row.instance.name.clone();
         account.confirmed_in_use = row.confirmed;
+        accounts.push(account);
+    }
+    // Only a row with its key is ever ticked (`App::phone_toggled`).
+    let phones = state
+        .phone_rows
+        .iter()
+        .filter(|entry| entry.picked)
+        .filter_map(|entry| Some((entry, entry.row.device_key.as_ref()?)));
+    for (at, (entry, key)) in phones.enumerate() {
+        let mut account = state
+            .accounts
+            .iter()
+            .find(|account| account.device_key.as_ref() == Some(key))
+            .cloned()
+            .unwrap_or_else(|| Account {
+                index: 0,
+                name: String::new(),
+                alias: String::new(),
+                edited: false,
+                game: None,
+                server: None,
+                touch: HANDSET_TOUCH_DEFAULT.to_owned(),
+                capture: HANDSET_CAPTURE_DEFAULT.to_owned(),
+                start_emulator: false,
+                confirmed_in_use: false,
+                advanced: false,
+                device_key: Some(key.clone()),
+            });
+        account.index = u16::try_from(at + 1).unwrap_or(u16::MAX);
+        account.name = entry.row.model.clone().unwrap_or_default();
+        accounts.push(account);
+    }
+    for account in &mut accounts {
         if let Some(folder) = &account.game {
             if !chosen.iter().any(|game| game.game == *folder) {
                 account.game = None;
@@ -1636,11 +2185,32 @@ fn sync_accounts(state: &mut State) {
         }
         let game = account.game.as_ref().and_then(|folder| chosen.iter().find(|game| game.game == *folder));
         if !account.edited {
-            account.alias = account_default_alias(account.index, game);
+            account.alias = account_default_alias(account, game);
         }
-        accounts.push(account);
     }
     state.accounts = accounts;
+}
+
+/// The head of an account's lines, as the instance and confirm pages name it: the emulator's
+/// index and name, or the phone and its model.
+fn account_label(account: &Account, l: &Labels) -> String {
+    match &account.device_key {
+        None => format!("#{} {}", account.index, account.name),
+        Some(_) => fill(l.account_phone, &[if account.name.is_empty() { l.unknown_model } else { account.name.as_str() }]),
+    }
+}
+
+/// The page's note for each kind of instance it holds, each on its own line.
+fn accounts_note(state: &State) -> String {
+    let l = state.labels();
+    let mut notes = Vec::new();
+    if state.accounts.iter().any(|account| account.device_key.is_none()) {
+        notes.push(l.accounts_emulators_note);
+    }
+    if state.accounts.iter().any(|account| account.device_key.is_some()) {
+        notes.push(l.accounts_phones_note);
+    }
+    notes.join("\n")
 }
 
 fn account_row(account: &Account, chosen: &[Game], l: &Labels) -> AccountRow {
@@ -1657,17 +2227,22 @@ fn account_row(account: &Account, chosen: &[Game], l: &Labels) -> AccountRow {
         (Some(game), Some(server)) => game.servers.iter().position(|entry| entry.server == *server).map_or(0, |at| at + 1),
         _ => 0,
     };
+    // A phone's backends are a phone's own lists (`Strings.phone-touch-options`).
+    let phone = account.device_key.is_some();
+    let touches: &[&str] = if phone { &HANDSET_TOUCH_BACKENDS } else { &TOUCH_BACKENDS };
+    let captures: &[&str] = if phone { &HANDSET_CAPTURE_BACKENDS } else { &CAPTURE_BACKENDS };
     AccountRow {
-        emulator: format!("#{} {}", account.index, account.name).into(),
+        emulator: account_label(account, l).into(),
         alias: account.alias.as_str().into(),
         games: shared(std::iter::once(l.pick).chain(chosen.iter().map(|game| game.label.as_str()))),
         game_index: game_index as i32,
         servers: shared(servers),
         server_index: server_index as i32,
-        touch_index: TOUCH_BACKENDS.iter().position(|backend| *backend == account.touch).unwrap_or(0) as i32,
-        capture_index: CAPTURE_BACKENDS.iter().position(|backend| *backend == account.capture).unwrap_or(0) as i32,
+        touch_index: touches.iter().position(|backend| *backend == account.touch).unwrap_or(0) as i32,
+        capture_index: captures.iter().position(|backend| *backend == account.capture).unwrap_or(0) as i32,
         start_emulator: account.start_emulator,
         advanced: account.advanced,
+        phone,
     }
 }
 
@@ -1689,19 +2264,24 @@ fn account_problems(state: &State) -> Vec<String> {
         push(l.accounts_duplicate.to_owned());
     }
     for account in &state.accounts {
+        let phone = account.device_key.is_some();
         let limit = account
             .game
             .as_deref()
             .and_then(|folder| state.game(folder))
             .map_or(MAX_ALIAS_BYTES, |game| game.alias_limit);
+        // A phone's alias within the Runtime's limit for a phone too (`plan_problems`).
+        let limit = if phone { limit.min(HANDSET_ALIAS_LIMIT) } else { limit };
         if let Some(problem) = alias_problem(&account.alias, limit) {
             push(format!("{}{}", said(&problem, lang), if lang == Lang::Zh { "。" } else { "." }));
         }
-        if let Some(problem) = backend_problem(&account.touch, &account.capture) {
-            push(fill(
-                l.accounts_backend,
-                &[&format!("#{} {}", account.index, account.name), &said(&problem, lang)],
-            ));
+        let backends = if phone {
+            handset_backend_problem(&account.touch, &account.capture)
+        } else {
+            backend_problem(&account.touch, &account.capture)
+        };
+        if let Some(problem) = backends {
+            push(fill(l.accounts_backend, &[&account_label(account, l), &said(&problem, lang)]));
         }
     }
     problems
@@ -1720,6 +2300,7 @@ fn plan_of(state: &State) -> Plan {
     let instances: Vec<PlanInstance> = state
         .accounts
         .iter()
+        .filter(|account| account.device_key.is_none())
         .map(|account| PlanInstance {
             index: account.index,
             alias: account.alias.clone(),
@@ -1731,13 +2312,28 @@ fn plan_of(state: &State) -> Plan {
             confirmed_in_use: account.confirmed_in_use,
         })
         .collect();
+    // Each phone by the key the phone page listed it with, which the install's bind finds it by.
+    let handsets: Vec<PlanHandset> = state
+        .accounts
+        .iter()
+        .filter_map(|account| {
+            Some(PlanHandset {
+                alias: account.alias.clone(),
+                game: account.game.clone().unwrap_or_default(),
+                server: account.server.clone().unwrap_or_default(),
+                touch_backend: account.touch.clone(),
+                capture_backend: account.capture.clone(),
+                device_key: account.device_key.clone()?,
+            })
+        })
+        .collect();
     Plan {
         schema_version: PLAN_SCHEMA.to_owned(),
         language: state.lang.wire().to_owned(),
         games: state.chosen_games().into_iter().map(|game| game.game).collect(),
         mumu_root: if instances.is_empty() { None } else { state.mumu_root() },
         instances,
-        handsets: Vec::new(),
+        handsets,
         options: state.options.clone(),
     }
 }
@@ -1756,10 +2352,33 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
         key: l.key_games.into(),
         value: game_labels(&state.chosen_games(), l.list_separator).into(),
     });
+    let usages: Vec<&str> = [(state.use_mumu, l.usage_mumu), (state.use_android, l.usage_android)]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| *name)
+        .collect();
     summary.push(KeyValue {
         key: l.key_usage.into(),
-        value: if state.use_mumu { l.usage_mumu } else { l.usage_none_short }.into(),
+        value: if usages.is_empty() { l.usage_none_short.to_owned() } else { usages.join(l.list_separator) }.into(),
     });
+    // How many phones, and their instances' names.
+    let phones: Vec<&str> = state
+        .accounts
+        .iter()
+        .filter(|account| account.device_key.is_some())
+        .map(|account| account.alias.as_str())
+        .collect();
+    if state.use_android {
+        summary.push(KeyValue {
+            key: l.key_phones.into(),
+            value: if phones.is_empty() {
+                l.confirm_phones_none.to_owned()
+            } else {
+                fill(l.phones_value, &[&phones.len().to_string(), &phones.join(l.list_separator)])
+            }
+            .into(),
+        });
+    }
     let accounts: Vec<String> = state
         .accounts
         .iter()
@@ -1772,14 +2391,18 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
             let mut line = fill(
                 l.account_value,
                 &[
-                    &format!("#{} {}", account.index, account.name),
+                    &account_label(account, l),
                     &account.alias,
                     game.map_or("?", |game| game.label.as_str()),
                     server,
                 ],
             );
             // What the advanced fold changed from its defaults, so the list is the whole plan.
-            if account.touch != DEFAULT_BACKEND || account.capture != DEFAULT_BACKEND {
+            let (touch, capture) = match account.device_key {
+                None => (DEFAULT_BACKEND, DEFAULT_BACKEND),
+                Some(_) => (HANDSET_TOUCH_DEFAULT, HANDSET_CAPTURE_DEFAULT),
+            };
+            if account.touch != touch || account.capture != capture {
                 line.push_str(&format!(
                     " · {} {} / {} {}",
                     l.touch_label, account.touch, l.capture_label, account.capture
@@ -1836,6 +2459,10 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
     if !state.accounts.is_empty() && options.start_after_install && options.pause_first_start {
         files.push_str(l.list_separator);
         files.push_str(l.file_full_config);
+    }
+    if !phones.is_empty() {
+        files.push_str(l.list_separator);
+        files.push_str(l.file_bindings);
     }
     summary.push(KeyValue { key: l.key_folders.into(), value: folders.into() });
     summary.push(KeyValue { key: l.key_files.into(), value: files.into() });
@@ -1894,13 +2521,21 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             } else {
                 l.finish_installed
             };
-            let next = if !instances {
+            let mut next = if !instances {
                 ""
             } else if done.paused {
                 l.finish_next
             } else {
                 l.finish_next_plain
-            };
+            }
+            .to_owned();
+            // The phones' instances bound, and what they do today.
+            if !done.phones.is_empty() {
+                if !next.is_empty() {
+                    next.push('\n');
+                }
+                next.push_str(&fill(l.finish_phones, &[&done.phones.join(l.list_separator)]));
+            }
             wiz.set_finished_ok(true);
             wiz.set_finish_body(fill(body, &[&root]).into());
             wiz.set_finish_next(next.into());
@@ -1916,6 +2551,13 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             } else {
                 fill(l.uninstall_note, &[&root])
             });
+            // The device bridge laid into the installed folder is its own `tools`; one laid
+            // anywhere else stays there.
+            let tools = done.root.join(Program::Tools.dir());
+            if let Some(elsewhere) = laid_elsewhere(state, Some(tools.as_path())) {
+                note.push('\n');
+                note.push_str(&elsewhere);
+            }
             wiz.set_finish_note(note.into());
             wiz.set_finish_transcript(SharedString::new());
             wiz.set_finish_has_log(true);
@@ -1939,12 +2581,28 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             };
             wiz.set_finish_next(next.into());
             wiz.set_finish_more(SharedString::new());
-            wiz.set_finish_note(SharedString::new());
+            // The device bridge the install took is among what it left (`cleanup`); one laid
+            // into another folder stays there too.
+            let elsewhere = laid_elsewhere(state, failure.left.pre_laid_tools.as_deref());
+            wiz.set_finish_note(elsewhere.unwrap_or_default().into());
             wiz.set_finish_transcript(transcript(state, failure).into());
             wiz.set_finish_has_log(failure.log.is_some());
         }
         _ => {}
     }
+}
+
+/// The sentence for the `tools` folders the phone page wrote into but `taken`, the one the
+/// install took as its own, or `None` when there are none.
+fn laid_elsewhere(state: &State, taken: Option<&Path>) -> Option<String> {
+    let l = state.labels();
+    let dirs: Vec<String> = state
+        .laid_dirs()
+        .iter()
+        .filter(|dir| Some(dir.as_path()) != taken)
+        .map(|dir| strip_verbatim(&dir.to_string_lossy()))
+        .collect();
+    (!dirs.is_empty()).then(|| fill(l.laid_elsewhere, &[&dirs.join(l.list_separator)]))
 }
 
 /// What "Copy error" copies: the failure in both languages, the folder, the log and the set.
@@ -1957,15 +2615,63 @@ fn transcript(state: &State, failure: &Failure) -> String {
     )
 }
 
+// ---- The phone page's work, on a worker -------------------------------------------------------
+
+/// [`App::phone_work`]'s parts, in order, each handed to the window's thread as it ends: unless
+/// `laid`, the device bridge laid into `root` (`acui_wizard::pre_lay_tools`, its bytes and its
+/// words for a person heard as they come), then the root's Lab asked whether it can bind a phone
+/// before the install (`devices::ask`), then, if it can, the phones listed with the run's `salt`
+/// (`devices::list`, the salt in the Lab's environment alone). A part that fails ends the work.
+fn phones_worker(set: VerifiedSet, root: PathBuf, salt: KeySalt, laid: bool, generation: u64) {
+    if !laid {
+        let mut shown = u64::MAX;
+        let result = pre_lay_tools(&set, &root, &mut |event: Event| match event {
+            Event::Bytes { done, total } => {
+                let permille = if total == 0 { 1000 } else { done.saturating_mul(1000) / total };
+                if permille != shown {
+                    shown = permille;
+                    post(move |app| app.phones_progress(generation, done, total, None));
+                }
+            }
+            // Its words for a person; its full lines go into the install log with what it laid.
+            Event::Plain(line) => post(move |app| {
+                let (done, total) = match &app.state.borrow().phone {
+                    PhoneState::Laying { done, total, .. } => (*done, *total),
+                    _ => (0, 0),
+                };
+                app.phones_progress(generation, done, total, Some(line));
+            }),
+            _ => {}
+        });
+        let failed = result.is_err();
+        post(move |app| app.phones_laid(generation, result));
+        if failed {
+            return;
+        }
+    }
+    let asked = devices::ask(&root);
+    let able = matches!(&asked, Ok(asked) if asked.missing.is_empty());
+    let asked_root = root.clone();
+    post(move |app| app.phones_asked(generation, asked_root, asked));
+    if !able {
+        return;
+    }
+    let listed = devices::list(&root, &salt);
+    post(move |app| app.phones_listed(generation, root, listed));
+}
+
 // ---- The folder check, on a worker ------------------------------------------------------------
 
-fn root_report(text: &str, needed: u64) -> RootReport {
+/// The folder `text` checked, with `needed` bytes of room; `laid`: the phone page laid the device
+/// bridge into it, so it may hold that `tools` alone (`check_root_beside_tools`; what `tools`
+/// holds is the install's to check, file by file).
+fn root_report(text: &str, needed: u64, laid: bool) -> RootReport {
     let rules = text_issues(text);
     if !rules.is_empty() {
         return RootReport { lines: rules.into_iter().map(RootLine::Issue).collect(), usable: false };
     }
     let path = Path::new(text.trim());
-    let issues = check_root(path, needed);
+    let issues = if laid { check_root_beside_tools(path, needed) } else { check_root(path, needed) };
     let mut usable = issues.is_empty();
     let mut lines = Vec::new();
     let place: Vec<&RootIssue> = issues
@@ -1973,7 +2679,13 @@ fn root_report(text: &str, needed: u64) -> RootReport {
         .filter(|issue| matches!(issue, RootIssue::NotAFolder | RootIssue::NotEmpty | RootIssue::Unreadable(_)))
         .collect();
     if place.is_empty() {
-        lines.push(if path.exists() { RootLine::Empty } else { RootLine::Fresh });
+        lines.push(if laid && path.exists() {
+            RootLine::PreLaid
+        } else if path.exists() {
+            RootLine::Empty
+        } else {
+            RootLine::Fresh
+        });
     }
     for issue in place {
         if *issue == RootIssue::NotEmpty && is_installation_root(path) {

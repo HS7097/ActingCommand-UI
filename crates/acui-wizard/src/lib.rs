@@ -11,7 +11,9 @@
 //! discovery (`MuMuManager.exe info -v all`, read only), the vision files (each against its
 //! pinned SHA-256) and the first start's pause (a pause the console can lift), set before the
 //! instances are bound (the Runtime is then closed, its `config replace` puts them in place, and
-//! its next start restores the pause before any instance is prepared).
+//! its next start restores the pause before any instance is prepared). A phone is listed and
+//! bound by the root's own Lab (`devices`), which the wizard lays before the install for that
+//! alone (`engine::pre_lay_tools`).
 //!
 //! It never writes the console's global settings file, never touches another installation,
 //! and never deletes anything: a failed step stops the install and leaves what it wrote, and
@@ -23,6 +25,7 @@ pub mod archive;
 pub mod child;
 pub mod config;
 pub mod console;
+pub mod devices;
 pub mod digest;
 pub mod engine;
 pub mod key_salt;
