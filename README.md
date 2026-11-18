@@ -1761,8 +1761,9 @@ but that bridge, which the question then names (closing is held off while it is 
    and `bound_via` (no version is read); a Lab that lacks one gets "the Runtime in this setup package
    cannot bind a phone before the install yet", and Next stays off. Then it lists the devices with
    `actinglab --json devices --root <root> --key-salt-env ACSETUP_DEVICE_KEY_SALT`: the key salt is
-   minted once for this run of the wizard and is only in that variable of the Lab's environment, on no
-   command line and in no log. Each row is the device's model (else "unknown model"), its connection and
+   minted once for this run of the wizard and given only in that variable of the Lab's environment, on no
+   command line and in no log (the adb the Lab runs inherits that environment, and so does an adb server
+   that adb starts, which keeps running after the wizard). Each row is the device's model (else "unknown model"), its connection and
    its state; no serial is shown (the answer carries none). Only a row on USB in the state `device` with
    its device key can be ticked; every other row is listed as it is, with what to do: allow USB debugging
    on the phone (`unauthorized`); the computer lacks the phone's USB driver, which comes from the phone's
@@ -1863,7 +1864,7 @@ and place the files beside each, each against its hash, in `licenses\<game>\`; c
 `actinglab standard-pack check`; write the configuration (as `actingd.config.json.part` first); bind the
 phones, each phone's instance with `actinglab --json devices bind <name> --device-key <key> --key-salt-env
 ACSETUP_DEVICE_KEY_SALT --config <root>\actingd.config.json.part --bound-via ui --root <root>`, by the
-device key page 7 listed it with under the same run's key salt (again only in that variable of the Lab's
+device key page 7 listed it with under the same run's key salt (again given only in that variable of the Lab's
 environment), against the candidate before its check: the Lab finds the phone again by its key and
 writes its serial for the name into `state\private\device-bindings.json` and nothing else of the state
 root; only `device_binding_changed` passes, and a refusal stops the install with its code and what to do
@@ -1881,7 +1882,13 @@ first-start`); connect the instances: stop the Runtime, put the configuration wi
 start it again (below); confirm the Runtime is online with `actinglab status`; install the watchdog
 (`actinglab watchdog install`). Steps not chosen show "Skipped". Every child program runs without a window;
 the window shows each answer's reading, and the setup log has it too, with the answer's whole output on a
-line of its own.
+line of its own. The Lab's answers to the phone list (page 7) and to the binds (step 7) may come while the
+adb server it started still holds the Lab's output open: the Lab runs adb, an adb that finds no adb server
+of its own version running starts one, and that server inherits the Lab's output and keeps it for as long
+as it runs. So once
+the Lab has exited and its answer ends with its whole result line, the wizard takes that answer as any
+other (its exit code and outcome judged as ever) and the setup log says the output was still held; an
+answer that is not whole fails as before, saying why.
 
 Why the instances come last: a global pause stops no run already under way, so a Runtime started with its
 instances could dispatch between the start and the pause. With instances and the first pause, step 8

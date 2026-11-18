@@ -1363,12 +1363,17 @@ impl App {
 
     /// What the Lab answered goes into the install log with the device bridge laid into `root`
     /// ([`PreLaid::note`]), as the install logs an answer: its reading, then its whole stdout on
-    /// a line of its own. The command line names the salt's variable, never the salt.
+    /// a line of its own; then, for an answer taken whole while another process still held the
+    /// Lab's output (`Answer::held`), the line that says so ([`devices::held_said`]). The command
+    /// line names the salt's variable, never the salt.
     fn note_answer(state: &mut State, root: &Path, said: Said, answer: &Answer) {
         if let Some(laid) = state.pre_laid.iter_mut().find(|laid| laid.root.as_path() == root) {
             laid.note(&said.with(format!("{}: {}", answer.command, answer.reason())).to_string());
             if let Some(stdout) = answer.log_stdout() {
                 laid.note(&format!("  {} stdout: {stdout}", answer.command));
+            }
+            if answer.held {
+                laid.note(&devices::held_said().with(&answer.command).to_string());
             }
         }
     }
@@ -2578,22 +2583,25 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
                 .map_or(l.failed_checks_step, |step| l.install_steps.get(step.number().saturating_sub(1)).copied().unwrap_or(""));
             wiz.set_finished_ok(false);
             wiz.set_finish_body(fill(l.failed_at, &[step, &said(&failure.reason, lang)]).into());
+            // The device bridge the install took is among what it left (`cleanup`); one laid
+            // into another folder stays there too, named at the page's foot.
+            let elsewhere = laid_elsewhere(state, failure.left.pre_laid_tools.as_deref());
             // What the install left, in the order a person undoes it, then the folder: only
-            // what it did (`acui_wizard::cleanup`).
+            // what it did (`acui_wizard::cleanup`). An install that wrote nothing says so, and
+            // points to the device bridge the phone page laid when there is one.
             let next = if failure.wrote {
                 let mut text = fill(l.failed_kept, &[&root]);
                 for (at, line) in cleanup(&state.root(), &failure.left).iter().enumerate() {
                     text.push_str(&format!("\n{}. {}", at + 1, line.in_lang(lang)));
                 }
                 text
+            } else if elsewhere.is_some() {
+                l.failed_nothing_laid.to_owned()
             } else {
                 l.failed_nothing.to_owned()
             };
             wiz.set_finish_next(next.into());
             wiz.set_finish_more(SharedString::new());
-            // The device bridge the install took is among what it left (`cleanup`); one laid
-            // into another folder stays there too.
-            let elsewhere = laid_elsewhere(state, failure.left.pre_laid_tools.as_deref());
             wiz.set_finish_note(elsewhere.unwrap_or_default().into());
             wiz.set_finish_transcript(transcript(state, failure).into());
             wiz.set_finish_has_log(failure.log.is_some());

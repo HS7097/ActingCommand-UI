@@ -271,6 +271,9 @@ pub struct Labels {
     pub failed_checks_step: &'static str,
     pub failed_kept: &'static str,
     pub failed_nothing: &'static str,
+    /// An install that wrote nothing, after the phone page laid the device bridge somewhere
+    /// ([`Labels::laid_elsewhere`], at the page's foot, names where).
+    pub failed_nothing_laid: &'static str,
     pub copy_error: &'static str,
     pub open_log: &'static str,
     pub open_failed: &'static str,
@@ -551,6 +554,7 @@ pub const ZH: Labels = Labels {
     failed_checks_step: "写入前的检查",
     failed_kept: "已经写进 {} 的文件都原样留着，向导没有删除任何东西。可以把下面的错误信息和安装记录发给提供安装包的人（安装记录里写着安装位置等文件夹的路径）。要重新安装，请依次：",
     failed_nothing: "还没有写入任何文件。可以把下面的错误信息发给提供安装包的人，或者改好以后重新运行向导。",
+    failed_nothing_laid: "这次安装还没有写入任何文件；之前为找手机铺的设备桥见本页最下面。可以把下面的错误信息发给提供安装包的人，或者改好以后重新运行向导。",
     copy_error: "复制错误信息",
     open_log: "打开安装记录",
     open_failed: "打不开：{}",
@@ -807,6 +811,7 @@ pub const EN: Labels = Labels {
     failed_checks_step: "the checks before writing",
     failed_kept: "Files already written to {} are left as they are; the wizard deleted nothing. You can send the error and the setup log below to whoever gave you the package (the log holds the paths of the install folder and others). To install again:",
     failed_nothing: "Nothing has been written yet. Send the error below to whoever gave you the package, or fix the problem and run the wizard again.",
+    failed_nothing_laid: "This install has not written anything yet; the device bridge laid earlier to find the phones is named at the foot of this page. Send the error below to whoever gave you the package, or fix the problem and run the wizard again.",
     copy_error: "Copy error",
     open_log: "Open setup log",
     open_failed: "Could not open it: {}",

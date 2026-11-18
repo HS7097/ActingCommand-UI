@@ -29,6 +29,16 @@
 //!   `.tmp`, serials and all); check-config, adopt and the first start each accept a state root
 //!   that holds only that file (the same contract, "Against a candidate configuration")
 //!   ([`judge_bind`]).
+//! - **Output held by the adb server** ([`taken`]): the Lab serves the list and the bind in its
+//!   own process, each running `adb devices -l` (Runtime `crates/lab-ops/src/core_ops.rs`;
+//!   `crates/lab-ops/src/devices.rs` `run_adb`), and an adb client starts the adb server when
+//!   none of its version runs. actinglab does not keep its own output handles from its children
+//!   as actingd does (Runtime `apps/actingd/src/standard_handles.rs`, the one caller of
+//!   `clear_own_inheritance`), so that server inherits the Lab's output pipes and holds them for
+//!   its whole life. Both are therefore read without waiting for the pipes' end
+//!   ([`OnHeld::Take`]): once the Lab has exited, an answer whose stdout ends with its whole
+//!   result line ([`whole_line`]) is judged as any other, its exit code and outcome too, and the
+//!   log says the pipes were held ([`held_said`]); one that does not fails, saying so.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -36,7 +46,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::child::{outcome_of, outcome_text, NoOutput, OnTimeout};
+use crate::child::{outcome_of, outcome_text, whole_line, NoOutput, OnHeld, OnTimeout};
 use crate::key_salt::KeySalt;
 use crate::runtime::{self, Answer};
 use crate::text::Said;
@@ -222,25 +232,54 @@ pub fn read_listing(code: Option<i32>, line: Option<&Value>) -> Result<Listing, 
 }
 
 /// `actinglab --json devices --root <root> --key-salt-env <variable>`, the run's salt in that
-/// variable alone (see the module's description); read only.
+/// variable alone (see the module's description); read only. An answer taken with the Lab's
+/// output still held counts only whole ([`taken`]).
 pub fn list(root: &Path, salt: &KeySalt) -> Result<Answer, Said> {
     let mut list = words(&["devices", "--root"]);
     list.push(root.as_os_str().to_os_string());
     list.extend(words(&["--key-salt-env", KEY_SALT_VARIABLE]));
-    runtime::lab_salted(root, &list, salt, KEY_SALT_VARIABLE, LIST_TIMEOUT, OnTimeout::End)
-        .map_err(|failed| failed.reason)
+    let answer = runtime::lab_salted(root, &list, salt, KEY_SALT_VARIABLE, LIST_TIMEOUT, OnTimeout::End, OnHeld::Take)
+        .map_err(|failed| failed.reason)?;
+    taken(answer)
 }
 
 /// `actinglab --json devices bind <alias> --device-key <key> --key-salt-env <variable> --config
 /// <candidate> --bound-via ui --root <root>`, the run's salt in that variable alone (see the
 /// module's description). It writes: a bind past its time is left running, and says so
-/// ([`NoOutput::left_running`]: it may still write in the state root).
+/// ([`NoOutput::left_running`]: it may still write in the state root). An answer taken with the
+/// Lab's output still held counts only whole ([`taken`]); the Lab has exited then, so nothing is
+/// left running.
 pub fn bind(root: &Path, alias: &str, device_key: &str, candidate: &Path, salt: &KeySalt) -> Result<Answer, NoOutput> {
     let mut list = words(&["devices", "bind", alias, "--device-key", device_key, "--key-salt-env", KEY_SALT_VARIABLE, "--config"]);
     list.push(candidate.as_os_str().to_os_string());
     list.extend(words(&["--bound-via", BOUND_VIA, "--root"]));
     list.push(root.as_os_str().to_os_string());
-    runtime::lab_salted(root, &list, salt, KEY_SALT_VARIABLE, BIND_TIMEOUT, OnTimeout::Leave)
+    let answer = runtime::lab_salted(root, &list, salt, KEY_SALT_VARIABLE, BIND_TIMEOUT, OnTimeout::Leave, OnHeld::Take)?;
+    taken(answer).map_err(NoOutput::from)
+}
+
+/// `answer` as [`list`] and [`bind`] take it (see the module's description): one read to its
+/// pipes' end as it is; one whose pipes were still held after the Lab exited ([`Answer::held`])
+/// only when its stdout ends with its whole result line ([`whole_line`]), else why not. Its exit
+/// code and its outcome are judged afterwards, as any answer's ([`read_listing`],
+/// [`judge_bind`]).
+fn taken(answer: Answer) -> Result<Answer, Said> {
+    if !answer.held || whole_line(&answer.stdout).is_some() {
+        return Ok(answer);
+    }
+    Err(Said::new(
+        "Lab 已退出，但它的输出管道仍被别的进程占着（多半是它启动的 adb 服务），到这时读到的答复不完整",
+        "the Lab has exited, but another process, most likely the adb server it started, still holds its output open, and the answer read by then is not whole",
+    )
+    .with(format!("{}: {}", answer.command, answer.reason())))
+}
+
+/// The log's line for an answer [`taken`] whole with the Lab's output still held.
+pub fn held_said() -> Said {
+    Said::new(
+        "Lab 已退出，答复完整；它的输出管道仍被别的进程占着，多半是它启动的 adb 服务",
+        "the Lab has exited and its answer is whole; its output pipes are still held by another process, most likely the adb server it started",
+    )
 }
 
 /// A refusal of the bind in a person's words, by its code (and, for a row that cannot be
@@ -406,6 +445,40 @@ mod tests {
         assert!(read_listing(Some(1), Some(&refused)).unwrap_err().en.contains("device_list_failed"));
         assert!(read_listing(Some(0), Some(&refused)).is_err());
         assert!(read_listing(Some(0), None).is_err());
+    }
+
+    /// An answer as `runtime::lab_salted` hands it over, its stdout `stdout`.
+    fn answer(code: Option<i32>, stdout: &str, held: bool) -> Answer {
+        let line = crate::child::json_line(stdout);
+        Answer {
+            command: "actinglab.exe --json devices bind a --device-key sha256:aa".to_owned(),
+            code,
+            outcome: line.as_ref().map(outcome_of).unwrap_or_default(),
+            line,
+            stdout: stdout.to_owned(),
+            stderr: String::new(),
+            held,
+        }
+    }
+
+    #[test]
+    fn an_answer_taken_with_its_output_held_counts_only_whole_and_is_judged_as_any() {
+        let bound = r#"{"alias":"a","device_key":"sha256:aa","outcome":{"code":"device_binding_changed","category":"success"}}"#;
+        // Whole: taken, then judged by its exit code and outcome as any answer.
+        let whole = taken(answer(Some(0), &format!("{bound}\n"), true)).expect("a whole answer");
+        assert_eq!(judge_bind(whole.code, whole.line.as_ref()), Ok(()));
+        let failed = taken(answer(Some(1), &format!("{bound}\n"), true)).expect("a whole answer");
+        assert!(judge_bind(failed.code, failed.line.as_ref()).is_err());
+        let refused = r#"{"outcome":{"code":"device_key_unknown","category":"error"}}"#;
+        let refused = taken(answer(Some(1), &format!("{refused}\n"), true)).expect("a whole answer");
+        assert!(judge_bind(refused.code, refused.line.as_ref()).unwrap_err().en.contains("device_key_unknown"));
+        // Not whole: no answer, and why; read to its pipes' end, it is judged as it is.
+        let cut = taken(answer(Some(0), &bound[..30], true)).unwrap_err();
+        assert!(cut.en.contains("not whole") && cut.en.contains("devices bind"), "{cut}");
+        assert!(taken(answer(Some(0), bound, true)).is_err());
+        assert!(taken(answer(Some(0), "", true)).is_err());
+        let ended = taken(answer(Some(0), bound, false)).expect("read to its end");
+        assert_eq!(judge_bind(ended.code, ended.line.as_ref()), Ok(()));
     }
 
     #[test]

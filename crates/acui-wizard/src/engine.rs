@@ -1520,7 +1520,9 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
 /// words); the first that fails stops the step. After each bind, whatever it answered, what the
 /// binds left in the state root is read back ([`read_back_bindings`]), and a bind left running
 /// past its time is counted as one that may still write there ([`Left::bind_left_running`]);
-/// each phone bound is counted ([`Left::phones`]).
+/// each phone bound is counted ([`Left::phones`]). An answer taken whole while another process,
+/// most likely the adb server the Lab started, still held its output is judged as any other, the
+/// log saying so ([`devices::held_said`]).
 fn bind_phones(run: &mut Run<'_>, part: &Path, handsets: &[Handset], salt: &KeySalt) -> Result<Said, Said> {
     let root = run.root.clone();
     let private = root.join(STATE_DIR).join(devices::PRIVATE_DIR);
@@ -1538,6 +1540,9 @@ fn bind_phones(run: &mut Run<'_>, part: &Path, handsets: &[Handset], salt: &KeyS
         }
         let answer = answer.map_err(|failed| failed.reason)?;
         run.answered(Said::new("devices bind 答复", "devices bind answered").with(&handset.alias), &answer)?;
+        if answer.held {
+            run.note(&devices::held_said().with(&handset.alias))?;
+        }
         devices::judge_bind(answer.code, answer.line.as_ref()).map_err(|problem| {
             Said::new("手机实例没有绑上", "the phone's instance was not bound")
                 .with(&handset.alias)

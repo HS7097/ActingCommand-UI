@@ -59,7 +59,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::child::{self, json_line, outcome_of, outcome_text, OnTimeout, Spec};
+use crate::child::{self, json_line, outcome_of, outcome_text, OnHeld, OnTimeout, Spec};
 use crate::config::STATE_DIR;
 use crate::key_salt::KeySalt;
 use crate::text::Said;
@@ -120,6 +120,10 @@ pub struct Answer {
     /// [`Answer::log_stdout`] carries one.
     pub stdout: String,
     pub stderr: String,
+    /// The program had exited, but another process still held its output pipes, so both streams
+    /// are what was read by then ([`child::Output::held`]; only for a call made with
+    /// [`OnHeld::Take`], whose caller checks the result line is whole).
+    pub held: bool,
 }
 
 impl Answer {
@@ -165,13 +169,13 @@ impl Answer {
 }
 
 fn answer(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Answer, Said> {
-    answer_or_left(spec, timeout, on_timeout).map_err(|failed| failed.reason)
+    answer_or_left(spec, timeout, on_timeout, OnHeld::Fail).map_err(|failed| failed.reason)
 }
 
-/// [`answer`], telling a program left running past its time from every other failure
-/// ([`child::run_or_left`]).
-fn answer_or_left(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Answer, child::NoOutput> {
-    let output = child::run_or_left(spec, timeout, on_timeout)?;
+/// [`answer`], telling a program left running past its time from every other failure, its
+/// output pipes still held after it exited dealt with as `on_held` says ([`child::run_or_left`]).
+fn answer_or_left(spec: &Spec, timeout: Duration, on_timeout: OnTimeout, on_held: OnHeld) -> Result<Answer, child::NoOutput> {
+    let output = child::run_or_left(spec, timeout, on_timeout, on_held)?;
     let stdout = output.stdout_text();
     let line = json_line(&stdout);
     let outcome = line.as_ref().map(outcome_of).unwrap_or_default();
@@ -182,6 +186,7 @@ fn answer_or_left(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Resu
         outcome,
         stdout,
         stderr: output.stderr_text(),
+        held: output.held,
     })
 }
 
@@ -254,7 +259,8 @@ pub fn lab(root: &Path, words: &[OsString], timeout: Duration, on_timeout: OnTim
 /// [`lab`] with the run's key salt as the Lab's variable `variable` and nowhere else
 /// ([`KeySalt::pass_in_env`]): `words` name the variable (`--key-salt-env <variable>`), so the
 /// command line [`Answer::command`] carries into the log holds no salt. A Lab left running past
-/// its time is told from every other failure ([`child::NoOutput::left_running`]).
+/// its time is told from every other failure ([`child::NoOutput::left_running`]); its output
+/// pipes still held after it exited are dealt with as `on_held` says ([`Answer::held`]).
 pub fn lab_salted(
     root: &Path,
     words: &[OsString],
@@ -262,8 +268,9 @@ pub fn lab_salted(
     variable: &str,
     timeout: Duration,
     on_timeout: OnTimeout,
+    on_held: OnHeld,
 ) -> Result<Answer, child::NoOutput> {
-    answer_or_left(&salt.pass_in_env(lab_spec(root, words), variable), timeout, on_timeout)
+    answer_or_left(&salt.pass_in_env(lab_spec(root, words), variable), timeout, on_timeout, on_held)
 }
 
 fn words(list: &[&str]) -> Vec<OsString> {
