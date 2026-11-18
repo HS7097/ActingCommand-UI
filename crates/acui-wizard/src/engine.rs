@@ -24,7 +24,8 @@
 //! serials, nothing else. No later step asks the state root to be empty (Runtime
 //! `contracts/device-binding.md`, "Against a candidate configuration": check-config, adopt and
 //! the first start each take a state root that holds only that file); a failure names what the
-//! binds left there, read back after each ([`Left::bindings`]).
+//! binds left there, every entry of `private` read back after each whatever it answered, and a
+//! bind left running that may still write there ([`Left::bindings`]).
 //!
 //! The order departs from the design in two places:
 //!
@@ -214,9 +215,18 @@ pub struct Left {
     pub pre_laid_tools: Option<PathBuf>,
     /// The phones' instances step 7 bound, by alias.
     pub phones: Vec<String>,
-    /// What step 7's binds left in the state root, as read back after each bind whatever it
-    /// answered: `<root>\state\private` and its `device-bindings.json`, each when it is there.
+    /// `<root>\state\private` once step 7's binds made it, as read back after each bind whatever
+    /// it answered.
+    pub bindings_dir: Option<PathBuf>,
+    /// Every entry in it as read back then (`read_dir`, no name looked for): the binding file,
+    /// the `device-bindings.json.tmp` a write whose rename failed leaves (`devices`), whatever
+    /// else; each may hold the phones' serials.
     pub bindings: Vec<PathBuf>,
+    /// Why that folder could not be read back, when it could not: it may hold anything.
+    pub bindings_unread: Option<String>,
+    /// A bind past its time was left running ([`crate::child::OnTimeout::Leave`]): it may still
+    /// write there.
+    pub bind_left_running: bool,
 }
 
 /// What a person does about what a failed install left, in order, each with the command or the
@@ -225,8 +235,9 @@ pub struct Left {
 /// stop; remove the watchdog task it registered (`actingctl watchdog uninstall`), delete the
 /// shortcuts it created; where the Tools it laid before the install stay, with what keeps their
 /// folder from being deleted (the adb server the phone page's adb may have left running); what
-/// the phones' binds wrote in the state root, which goes with the folder and holds the phones'
-/// serials; then delete the folder. Only what the install did is named.
+/// the phones' binds left in the state root's `private` folder, each file as read back, which goes
+/// with the folder and may hold the phones' serials, and a bind left running that may still write
+/// there; then delete the folder. Only what the install did is named.
 pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
     let root = strip_verbatim(&root.to_string_lossy()).trim_end_matches(['\\', '/']).to_owned();
     let actingctl = format!("\"{root}\\runtime\\actingctl.exe\"");
@@ -296,28 +307,52 @@ pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
             format!("The Tools the wizard laid for the phone page before the install (adb and the Lab among them) stay in {tools}. Should deleting them say a file is in use, the adb in them still runs in the background: restart the computer, then delete them."),
         ));
     }
-    if !left.bindings.is_empty() {
-        let list: Vec<String> = left.bindings.iter().map(|path| strip_verbatim(&path.to_string_lossy())).collect();
+    if left.bindings_dir.is_some() || left.bind_left_running {
+        let private = left.bindings_dir.as_ref().map_or_else(
+            || format!("{root}\\{STATE_DIR}\\{}", devices::PRIVATE_DIR),
+            |dir| strip_verbatim(&dir.to_string_lossy()),
+        );
         let (zh_bound, en_bound) = if left.phones.is_empty() {
             ("还没有手机绑上".to_owned(), "no phone was bound yet".to_owned())
         } else {
             (format!("已绑上 {}", left.phones.join("、")), format!("bound: {}", left.phones.join(", ")))
         };
-        // Read as Windows path text, so that the rule is the same on every platform.
-        let file = left.bindings.iter().any(|path| {
-            last_segment(&path.to_string_lossy()).is_some_and(|name| name.eq_ignore_ascii_case(devices::BINDINGS_FILE))
-        });
-        steps.push(if file {
-            Said::new(
-                format!("绑定手机时写进了 {}（{zh_bound}）。手机的序列号只记在这个文件里，不要把它发给别人；它在安装文件夹里面，随整个文件夹一起删掉。", list.join("、")),
-                format!("Binding the phones wrote {} ({en_bound}). The phones' serials are kept in this file alone, so do not send it to anyone; it lies inside the install folder and goes when the whole folder is deleted.", list.join(", ")),
-            )
-        } else {
-            Said::new(
-                format!("绑定手机时建了 {}（{zh_bound}，里面没有绑定文件）。它在安装文件夹里面，随整个文件夹一起删掉。", list.join("、")),
-                format!("Binding the phones created {} ({en_bound}; no binding file in it). It lies inside the install folder and goes when the whole folder is deleted.", list.join(", ")),
-            )
-        });
+        // What the folder holds as last read back: every entry, whatever its name (a binding
+        // file, the `.tmp` of a write that failed), or why it could not be read.
+        let list: Vec<String> = left.bindings.iter().map(|path| strip_verbatim(&path.to_string_lossy())).collect();
+        let (mut zh, mut en) = match (&left.bindings_dir, &left.bindings_unread) {
+            (None, _) => (
+                format!("绑定手机还没有在 {private} 写下什么（{zh_bound}）。"),
+                format!("Binding the phones wrote nothing in {private} yet ({en_bound})."),
+            ),
+            (Some(_), Some(why)) => (
+                format!("绑定手机时建了 {private}（{zh_bound}），里面有什么读不出（{why}）。"),
+                format!("Binding the phones created {private} ({en_bound}); what it holds cannot be read ({why})."),
+            ),
+            (Some(_), None) if list.is_empty() => (
+                format!("绑定手机时建了 {private}（{zh_bound}），里面没有文件。"),
+                format!("Binding the phones created {private} ({en_bound}), with no file in it."),
+            ),
+            (Some(_), None) => (
+                format!("绑定手机时写下了 {}（{zh_bound}）。", list.join("、")),
+                format!("Binding the phones left {} ({en_bound}).", list.join(", ")),
+            ),
+        };
+        if left.bind_left_running {
+            zh.push_str(&format!("有一次绑定超时后还留着在跑（向导没有终止它），它之后可能还会往 {private} 里写。"));
+            en.push_str(&format!(
+                " A bind that did not finish in time was left running (the wizard did not end it), and it may write in {private} later."
+            ));
+        }
+        // A file there may hold the phones' serials: one listed, one that could not be read, one
+        // a bind left running may still write.
+        if !list.is_empty() || left.bindings_unread.is_some() || left.bind_left_running {
+            zh.push_str(&format!("{private} 里的文件可能存着手机的序列号，不要发给别人。"));
+            en.push_str(&format!(" The files in {private} may hold the phones' serials, so do not send them to anyone."));
+        }
+        zh.push_str("这些都在安装文件夹里面，随整个文件夹一起删掉。");
+        en.push_str(" All of it lies inside the install folder and goes when the whole folder is deleted.");
+        steps.push(Said::new(zh, en));
     }
     steps.push(if steps.is_empty() {
         Said::new(
@@ -1483,8 +1518,9 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
 /// key the phone page listed it with under the run's `salt`, each answer judged
 /// ([`devices::judge_bind`]: `device_binding_changed`, else the refusal's code in a person's
 /// words); the first that fails stops the step. After each bind, whatever it answered, what the
-/// binds left in the state root is read back ([`Left::bindings`]); each phone bound is counted
-/// ([`Left::phones`]).
+/// binds left in the state root is read back ([`read_back_bindings`]), and a bind left running
+/// past its time is counted as one that may still write there ([`Left::bind_left_running`]);
+/// each phone bound is counted ([`Left::phones`]).
 fn bind_phones(run: &mut Run<'_>, part: &Path, handsets: &[Handset], salt: &KeySalt) -> Result<Said, Said> {
     let root = run.root.clone();
     let private = root.join(STATE_DIR).join(devices::PRIVATE_DIR);
@@ -1495,8 +1531,12 @@ fn bind_phones(run: &mut Run<'_>, part: &Path, handsets: &[Handset], salt: &KeyS
             format!("Binding the phone's instance \"{}\"…", handset.alias),
         ));
         let answer = devices::bind(&root, &handset.alias, &handset.device_key, part, salt);
-        run.left.bindings = [&private, &file].into_iter().filter(|path| path.exists()).cloned().collect();
-        let answer = answer?;
+        run.left.bind_left_running |= matches!(&answer, Err(failed) if failed.left_running);
+        read_back_bindings(&private, &mut run.left);
+        if let Some(why) = run.left.bindings_unread.clone() {
+            run.say(Said::new("读不出绑定手机写下的文件夹", "the folder the phones' binds write cannot be read back").with(why))?;
+        }
+        let answer = answer.map_err(|failed| failed.reason)?;
         run.answered(Said::new("devices bind 答复", "devices bind answered").with(&handset.alias), &answer)?;
         devices::judge_bind(answer.code, answer.line.as_ref()).map_err(|problem| {
             Said::new("手机实例没有绑上", "the phone's instance was not bound")
@@ -1517,6 +1557,28 @@ fn bind_phones(run: &mut Run<'_>, part: &Path, handsets: &[Handset], salt: &KeyS
         .with(file.display()));
     }
     Ok(Said::new("已绑定", "bound").with(format!("{} → {}", run.left.phones.join(", "), file.display())))
+}
+
+/// What step 7's binds left in `private` (`<root>\state\private`), read back into `left`
+/// ([`Left::bindings`]): the folder when it is there, and every entry `read_dir` finds in it,
+/// whatever its name; why it cannot be read, when it cannot. Nothing is opened or deleted.
+fn read_back_bindings(private: &Path, left: &mut Left) {
+    left.bindings_dir = None;
+    left.bindings.clear();
+    left.bindings_unread = None;
+    let read = match fs::read_dir(private) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        read => read,
+    };
+    left.bindings_dir = Some(private.to_path_buf());
+    let entries = read.and_then(|entries| entries.map(|entry| entry.map(|entry| entry.path())).collect::<io::Result<Vec<PathBuf>>>());
+    match entries {
+        Ok(mut entries) => {
+            entries.sort();
+            left.bindings = entries;
+        }
+        Err(error) => left.bindings_unread = Some(format!("{}: {error}", private.display())),
+    }
 }
 
 fn write_new(path: &Path, text: &str) -> Result<(), Said> {
@@ -1862,7 +1924,10 @@ mod tests {
                 shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk"), PathBuf::from(r"X:\Menu\b.lnk")],
                 pre_laid_tools: None,
                 phones: Vec::new(),
+                bindings_dir: None,
                 bindings: Vec::new(),
+                bindings_unread: None,
+                bind_left_running: false,
             },
         );
         assert_eq!(all.len(), 4);
@@ -1877,15 +1942,29 @@ mod tests {
         let running = cleanup(root, &Left { running: true, ..Left::default() });
         assert_eq!(running.len(), 2);
         assert!(running[0].zh.contains("没有暂停") && running[0].en.contains("not paused"));
-        // What step 7's binds wrote is named, before the folder; a folder without the file says
-        // so, and names no serial's file.
-        let bindings = vec![PathBuf::from(r"X:\Root\state\private"), PathBuf::from(r"X:\Root\state\private\device-bindings.json")];
-        let bound = cleanup(root, &Left { phones: vec!["p1".into()], bindings, ..Left::default() });
+        // What step 7's binds left is named, before the folder: every file read back in
+        // `private`, a write's `.tmp` too, with the serials' warning; a folder without a file
+        // says so and warns of none; a folder that could not be read, and a bind left running
+        // that may still write there, warn too, the latter naming the folder before it is made.
+        let private = Some(PathBuf::from(r"X:\Root\state\private"));
+        let files = vec![
+            PathBuf::from(r"X:\Root\state\private\device-bindings.json"),
+            PathBuf::from(r"X:\Root\state\private\device-bindings.json.tmp"),
+        ];
+        let bound = cleanup(root, &Left { phones: vec!["p1".into()], bindings_dir: private.clone(), bindings: files, ..Left::default() });
         assert_eq!(bound.len(), 2);
-        assert!(bound[0].en.contains(r"X:\Root\state\private\device-bindings.json") && bound[0].en.contains("bound: p1"), "{}", bound[0]);
-        assert!(bound[0].zh.contains("不要把它发给别人"));
-        let folder = cleanup(root, &Left { bindings: vec![PathBuf::from(r"X:\Root\state\private")], ..Left::default() });
-        assert!(folder[0].en.contains("no binding file") && !folder[0].en.contains("serials"), "{}", folder[0]);
+        assert!(bound[0].en.contains(r"X:\Root\state\private\device-bindings.json.tmp") && bound[0].en.contains("bound: p1"), "{}", bound[0]);
+        assert!(bound[0].zh.contains("可能存着手机的序列号") && bound[0].zh.contains("不要发给别人"), "{}", bound[0]);
+        assert!(!bound[0].en.contains("left running"), "{}", bound[0]);
+        let folder = cleanup(root, &Left { bindings_dir: private.clone(), ..Left::default() });
+        assert!(folder[0].en.contains("with no file in it") && !folder[0].en.contains("serials"), "{}", folder[0]);
+        let unread = cleanup(root, &Left { bindings_dir: private, bindings_unread: Some("denied".into()), ..Left::default() });
+        assert!(unread[0].en.contains("cannot be read (denied)") && unread[0].en.contains("serials"), "{}", unread[0]);
+        let bind_running = cleanup(root, &Left { bind_left_running: true, ..Left::default() });
+        assert_eq!(bind_running.len(), 2);
+        assert!(bind_running[0].en.contains(r"wrote nothing in X:\Root\state\private yet"), "{}", bind_running[0]);
+        assert!(bind_running[0].en.contains(r"may write in X:\Root\state\private later"), "{}", bind_running[0]);
+        assert!(bind_running[0].en.contains("serials") && bind_running[0].zh.contains("之后可能还会往"), "{}", bind_running[0]);
         // Step 14 closed the Runtime and failed before it started again: nothing to stop, the
         // pause kept; no command to stop it is given.
         let closed = cleanup(root, &Left { closed: true, pause: Pause::Held, ..Left::default() });

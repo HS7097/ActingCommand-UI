@@ -246,8 +246,28 @@ enum Stream {
     Err,
 }
 
+/// Why [`run_or_left`] has no output: the reason [`run`] gives, and whether the child was left
+/// running past its time ([`OnTimeout::Leave`]), when it may still be changing the installation.
+#[derive(Debug, Clone)]
+pub struct NoOutput {
+    pub reason: Said,
+    pub left_running: bool,
+}
+
+impl From<Said> for NoOutput {
+    fn from(reason: Said) -> Self {
+        Self { reason, left_running: false }
+    }
+}
+
 /// Runs `spec` (see the module's description).
 pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Output, Said> {
+    run_or_left(spec, timeout, on_timeout).map_err(|failed| failed.reason)
+}
+
+/// [`run`], telling a child left running past its time ([`NoOutput::left_running`]) from every
+/// other failure.
+pub fn run_or_left(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Output, NoOutput> {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -292,25 +312,31 @@ pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Outp
                             Ok(()) => "ended".to_owned(),
                             Err(error) => format!("could not be ended: {error}"),
                         };
-                        Said::new(
-                            format!("程序 {seconds} 秒内没有结束（{ended}）"),
-                            format!("the program did not finish within {seconds} s ({ended})"),
+                        NoOutput::from(
+                            Said::new(
+                                format!("程序 {seconds} 秒内没有结束（{ended}）"),
+                                format!("the program did not finish within {seconds} s ({ended})"),
+                            )
+                            .with(spec.text()),
                         )
-                        .with(spec.text())
                     }
-                    OnTimeout::Leave => Said::new(
-                        format!("程序 {seconds} 秒内没有结束；它可能还在改动安装，向导没有终止它（进程号 {}），结果未确认", child.id()),
-                        format!(
-                            "the program did not finish within {seconds} s; it may still be changing the installation, so it was left running (pid {}) and its result is unconfirmed",
-                            child.id()
-                        ),
-                    )
-                    .with(spec.text()),
+                    OnTimeout::Leave => NoOutput {
+                        reason: Said::new(
+                            format!("程序 {seconds} 秒内没有结束；它可能还在改动安装，向导没有终止它（进程号 {}），结果未确认", child.id()),
+                            format!(
+                                "the program did not finish within {seconds} s; it may still be changing the installation, so it was left running (pid {}) and its result is unconfirmed",
+                                child.id()
+                            ),
+                        )
+                        .with(spec.text()),
+                        left_running: true,
+                    },
                 });
             }
             Err(error) => {
                 return Err(Said::new("程序的状态读不出", "the program's state cannot be read")
-                    .with(format!("{}: {error}", spec.text())))
+                    .with(format!("{}: {error}", spec.text()))
+                    .into())
             }
         }
     };
@@ -326,14 +352,16 @@ pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Outp
             },
             Ok((_, Err(error))) => {
                 return Err(Said::new("程序的输出读不出", "the program's output cannot be read")
-                    .with(format!("{}: {error}", spec.text())))
+                    .with(format!("{}: {error}", spec.text()))
+                    .into())
             }
             Err(_) => {
                 return Err(Said::new(
                     "程序已结束，但它的输出管道仍被别的进程占着",
                     "the program has ended, but another process still holds its output open",
                 )
-                .with(spec.text()))
+                .with(spec.text())
+                .into())
             }
         }
     }

@@ -160,8 +160,8 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
 /// Every rule of a plan against the games of the install set: the schema and language; each
 /// game in the set and chosen once; each instance once by index and by alias (aliases compared
 /// as the Runtime compares them, byte for byte), its alias valid for its game (`alias`: no
-/// whitespace, within the game's alias limit), its game chosen, its server one of the game's,
-/// its backends a valid pair; each phone's instance by the same rules, its alias within
+/// whitespace, no leading `-`, within the game's alias limit), its game chosen, its server one
+/// of the game's, its backends a valid pair; each phone's instance by the same rules, its alias within
 /// [`HANDSET_ALIAS_LIMIT`] bytes too and once among every instance's, its backends a phone's,
 /// its phone named by a device key and no phone taken twice (one device drives one instance,
 /// Runtime `contracts/device-binding.md`, "The private binding file");
@@ -336,6 +336,8 @@ mod tests {
             GOOD.replace("日服号", ""),
             GOOD.replace("日服号", "日服 号"),
             GOOD.replace("日服号", "日服\u{3000}号"),
+            // A leading `-`, which the Lab could take for an option (`alias`).
+            GOOD.replace("日服号", "-日服号"),
             // 13 bytes, one over the game's limit; 12 is still fine (below).
             GOOD.replace("日服号", "日服号号a"),
             GOOD.replace("\"server\": \"jp\"", "\"server\": \"kr\""),

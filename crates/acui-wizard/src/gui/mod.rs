@@ -796,12 +796,15 @@ impl App {
                     self.search();
                 }
             }
-            // Begun afresh when it has not begun, or was for another install folder; else what
-            // it found stays, and "Refresh" lists again.
+            // Begun afresh when it has not begun, was for another install folder, or failed (the
+            // device bridge not laid, the Lab not asked or the phones not listed), so that a page
+            // come back to tries again what it said to try; else what it found stays, and
+            // "Refresh" lists again.
             PHONES => {
                 let fresh = {
                     let state = self.state.borrow();
-                    matches!(state.phone, PhoneState::Idle) || state.phone_root.as_ref() != Some(&state.root())
+                    matches!(state.phone, PhoneState::Idle | PhoneState::LayFailed(_) | PhoneState::Failed(_))
+                        || state.phone_root.as_ref() != Some(&state.root())
                 };
                 if fresh {
                     self.phone_work();
@@ -1264,8 +1267,11 @@ impl App {
 
     /// The phone page's work, on a worker ([`phones_worker`]): the device bridge laid into the
     /// install folder unless the page laid it there already, the Lab asked what it can do, the
-    /// phones listed, each part heard as it ends. A result for a question asked again since is
-    /// not shown, but what a lay wrote is kept whatever: it is on the disk.
+    /// phones listed, each part heard as it ends. Each run is a question of its own
+    /// (`State::phone_generation`): a result of one asked before is not shown, but what a lay
+    /// wrote is kept whatever: it is on the disk. After a lay that failed, the work is the whole
+    /// of it again; a folder that still holds what that lay left is refused by `pre_lay_tools` as
+    /// any folder that is not new or empty is, and nothing of it is deleted.
     fn phone_work(&self) {
         let job = {
             let mut state = self.state.borrow_mut();
@@ -1303,6 +1309,8 @@ impl App {
         self.paint();
     }
 
+    /// "Refresh": the work again unless it is under way, which after a lay that failed lays,
+    /// asks and lists ([`App::phone_work`]).
     fn refresh_phones(&self) {
         let busy = matches!(self.state.borrow().phone, PhoneState::Laying { .. } | PhoneState::Asking | PhoneState::Listing);
         if !busy {
@@ -2003,6 +2011,8 @@ fn paint_phones(state: &State, wiz: &Wiz<'_>) {
             } else {
                 l.phones_lay_nothing.to_owned()
             });
+            // It lays again, then asks and lists ([`App::refresh_phones`]).
+            refreshable = true;
         }
         PhoneState::Unable(missing) => {
             problem = l.phones_unable.to_owned();

@@ -24,7 +24,9 @@
 //!   not on USB, is refused before anything is written), and its serial written for the alias
 //!   into `<state root>\private\device-bindings.json`, the one file that holds it. The bind
 //!   creates the state root and its `private` folder when they are missing and writes nothing
-//!   else of the state root; check-config, adopt and the first start each accept a state root
+//!   else of the state root but that file, written whole as `device-bindings.json.tmp` beside it
+//!   and renamed (Runtime `crates/lab-ops/src/devices.rs` `write`: a rename that fails leaves the
+//!   `.tmp`, serials and all); check-config, adopt and the first start each accept a state root
 //!   that holds only that file (the same contract, "Against a candidate configuration")
 //!   ([`judge_bind`]).
 
@@ -34,7 +36,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::child::{outcome_of, outcome_text, OnTimeout};
+use crate::child::{outcome_of, outcome_text, NoOutput, OnTimeout};
 use crate::key_salt::KeySalt;
 use crate::runtime::{self, Answer};
 use crate::text::Said;
@@ -226,12 +228,14 @@ pub fn list(root: &Path, salt: &KeySalt) -> Result<Answer, Said> {
     list.push(root.as_os_str().to_os_string());
     list.extend(words(&["--key-salt-env", KEY_SALT_VARIABLE]));
     runtime::lab_salted(root, &list, salt, KEY_SALT_VARIABLE, LIST_TIMEOUT, OnTimeout::End)
+        .map_err(|failed| failed.reason)
 }
 
 /// `actinglab --json devices bind <alias> --device-key <key> --key-salt-env <variable> --config
 /// <candidate> --bound-via ui --root <root>`, the run's salt in that variable alone (see the
-/// module's description). It writes: a bind past its time is left running.
-pub fn bind(root: &Path, alias: &str, device_key: &str, candidate: &Path, salt: &KeySalt) -> Result<Answer, Said> {
+/// module's description). It writes: a bind past its time is left running, and says so
+/// ([`NoOutput::left_running`]: it may still write in the state root).
+pub fn bind(root: &Path, alias: &str, device_key: &str, candidate: &Path, salt: &KeySalt) -> Result<Answer, NoOutput> {
     let mut list = words(&["devices", "bind", alias, "--device-key", device_key, "--key-salt-env", KEY_SALT_VARIABLE, "--config"]);
     list.push(candidate.as_os_str().to_os_string());
     list.extend(words(&["--bound-via", BOUND_VIA, "--root"]));
