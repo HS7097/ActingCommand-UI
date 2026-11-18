@@ -264,7 +264,9 @@ eight `record_…` codes of the Lab's recording), four keys, five vocabularies, 
 `drop_problem`, and `no_effect` in place of `optional_after_problem`'s `no_click`, with no location, no code
 retired or removed and no `console_` or `setup_` name. #398 DB-1 lets `devices bind` bind a handset against
 a candidate configuration before it is put in place (`--config`) and record the channel `ui`
-(`--bound-via ui`), for an installer; this setup wizard does not run it yet. The next start records `ui`
+(`--bound-via ui`), for an installer; the setup wizard binds each phone's instance with it while it
+installs, by the device key a v0.12.72 Lab lists a phone by before an installation (#398 DB-2; see "Setup
+wizard acsetup", step 7). The next start records `ui`
 as `runtime.instance_bound`'s `device.bound_via`, a word the contract crate already had, so the console
 reads such a record as before. The other slices (`recognize` answering a located text's box,
 `standard-pack adopt` taking a recording's regression cases, the case reader's notes) are the Lab's and the
@@ -805,7 +807,7 @@ then the settings page says so in red. While the Runtime does not answer, no old
 `run-once` are never run), and the page says "On", "Off", "May not work" or "Cannot be read" of the
 watchdog's scheduled task as it reports it, the last two with the reason in the technical log. After
 the Runtime started again it is read again the next time the page is opened. The setup wizard's "Run
-ActingCommand automatically after sign-in" (page 8) installs this very watchdog (see "Setup wizard acsetup"). Both pages are always there and only one shows at a
+ActingCommand automatically after sign-in" (page 9) installs this very watchdog (see "Setup wizard acsetup"). Both pages are always there and only one shows at a
 time, so what the boxes hold stays when you switch away and back.
 The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
@@ -1621,7 +1623,8 @@ instance page in a later version.
 
 `acsetup.exe` (`crates/acui-wizard`) is the 0.12 setup wizard: it installs ActingCommand's Runtime, its
 tools and the console into **one new folder** (what the Runtime calls a single-location root) and
-connects the signed-in games in the MuMu emulator. Opened from Explorer it is a window with the console's
+connects the signed-in games in the MuMu emulator, or on Android phones on USB (a phone connects and shows
+its screen; running tasks on it comes in a later version). Opened from Explorer it is a window with the console's
 look and icon. It opens in the language Windows shows its own interface in (Chinese on a Chinese Windows,
 English otherwise) and switches between 中文 and English at the top right at any time; with a command it
 is a command line (see below). It goes on no network, downloads nothing, and does not change any
@@ -1700,8 +1703,10 @@ The vision files and the models' licences:
 }
 ```
 
-**Eleven pages.** Pages 1 to 9 only gather choices and run read-only checks; nothing is written. Cancel or
-closing the window on those pages asks first, and quitting leaves nothing behind.
+**Twelve pages.** Pages 1 to 10 only gather choices and run read-only checks; nothing is written but the
+device bridge page 7 lays into the install folder to find the phones with (with Android phone ticked), which
+the page says. Cancel or closing the window on those pages asks first, and quitting leaves nothing behind
+but that bridge, which the question then names (closing is held off while it is being laid).
 
 1. **Welcome**: what will be installed and what to have ready (64-bit Windows 10 or 11, about how much disk
    space). The games are named as their packs name them: before the
@@ -1709,13 +1714,19 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    name, and shows the folder name when that cannot be read.
 2. **Usage**: what ActingCommand is set up for. **MuMu emulator** is ticked by default, as the wizard was
    before this page, and says what it needs (MuMu installed, at least the version the Runtime takes, with
-   the game installed and signed in). **Android phone** (coming in the next version, which finds and binds the phone here) and **iOS
-   device** (not supported yet) are greyed and cannot be ticked; a screen reader hears each one's reason
-   with its name. Nothing ticked is allowed too: the page then says the wizard installs only the core and
-   sets up no instance, and how to add instances later. Without MuMu, pages 6 and 7 are passed by (Next on
-   Games goes to Options, Back on Options to Games, the step bar shows both as skipped) and MuMu is not
-   looked for; unticking MuMu drops the emulators and instances chosen, as skipping page 6 does, and ticked
-   again, page 6 looks for MuMu afresh. The usage is the window's alone: the plan file has no field for it.
+   the game installed and signed in). **Android phone** can be ticked too, and says what it does today:
+   it connects and shows its screen; running tasks comes in a later version (its policy row is written
+   `available` false, so the Runtime prepares and self-checks the phone but never sends it a task, and its
+   picture is the console's refresh, a read-only capture). **iOS device** (not supported
+   yet) is greyed and cannot be ticked; a screen reader hears its reason with its name. Nothing ticked is
+   allowed too: the page then says the wizard installs only the core and sets up no instance, and how to add
+   instances later. Without MuMu, page 6 is passed by and MuMu is not looked for; without Android phone,
+   page 7; with neither, page 8 too (Next on Games goes to Options, Back on Options to Games, the step bar
+   shows each page passed by as skipped). Unticking MuMu drops the emulators and instances chosen, as
+   skipping page 6 does, and ticked again, page 6 looks for MuMu afresh; unticking Android phone drops the
+   phones and their instances and what page 7 found, and ticked again, page 7 lists afresh (the device
+   bridge it laid stays where it is, and the install takes it). The usage is the window's alone: the plan
+   file has no field for it.
 3. **Files**: the install set is checked with a progress bar and a line in plain words under it (how many
    files are checked, which program or game was just checked); repositories and commits go to the setup
    log only. Then its versions and games are listed.
@@ -1723,7 +1734,7 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    `%USERPROFILE%\ActingCommand`; when that one exists and is not empty, `-2`, `-3`, … are tried. Type a
    folder or pick one with Browse… (the folder picker belongs to the wizard's window, which takes no input
    while it is open); once typing pauses, each rule gets a ✓ or ✗: the folder does not exist
-   or is empty, its last name is not `A` or `B`, the path holds no `'` or `%`, it is not inside another
+   or is empty (or holds only the `tools` page 7 laid into it), its last name is not `A` or `B`, the path holds no `'` or `%`, it is not inside another
    ActingCommand, it is none of ActingCommand's per-user folders `%APPDATA%\ActingCommand` (the global
    console settings `acui.toml` live there) and `%LOCALAPPDATA%\ActingCommand` (the console's and the
    Runtime's logs, which every watchdog reads), lies in none and holds none, and the disk has room. Any ✗
@@ -1733,21 +1744,49 @@ closing the window on those pages asks first, and quitting leaves nothing behind
 6. **Emulator** (with MuMu ticked on page 2): MuMu is found read-only (as the Runtime finds it: a running MuMu, the registry's uninstall
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
    window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
-   person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
+   person ticks the ones to hand over, and Next with none ticked asks first (with Android phone ticked it
+   goes on to page 7 instead, where the phones may bring instances). The page says what the
    wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand; an
    instance is one emulator or one phone, with the games signed in on it. An emulator another ActingCommand on this computer already uses is
    greyed, and ticking it asks first. The other installations are found two ways: a running
    `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
    configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
-   page can be skipped: the set is installed without instances, to be added later.
-7. **Instances** (with MuMu ticked on page 2): per ticked emulator, its name on a line of its own and below it the instance's name (by
-   default "game-index"), game and server, the game's box taking the rest of the line so a game's name in
-   both languages shows whole; under
-   Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
-   ActingCommand starts" (off by default). Names must differ, hold no space and not be too long: with two or
-   more emulators on one game, the Runtime's schedule names each task copy `<id>@<name>`, at most 128 bytes,
-   so a name's limit follows from the longest id in that game's `schedule.json`.
-8. **Options**: desktop and Start menu shortcuts (on by default); run automatically after sign-in (the
+   page can be skipped (on to page 7 with Android phone ticked): the set is installed without emulators'
+   instances, to be added later.
+7. **Phones** (with Android phone ticked on page 2): the phones are found by the install folder's own
+   device bridge, the root's adb and Lab, the very ones the Runtime will use. So on entering, the page
+   first lays the Tools into `<root>\tools` (each file read back against its manifest's size and SHA-256,
+   as step 2 lays them), saying so and that this is the one write before the install: page 4 then takes a
+   folder that holds that `tools` alone, and the install checks it file by file and takes it as its own.
+   Then it asks the Lab, with `actinglab --json help devices` and `help devices bind`, whether `devices`
+   takes `root` and `key_salt_env` and `devices bind` takes `config`, `device_key`, `root`, `key_salt_env`
+   and `bound_via` (no version is read); a Lab that lacks one gets "the Runtime in this setup package
+   cannot bind a phone before the install yet", and Next stays off. Then it lists the devices with
+   `actinglab --json devices --root <root> --key-salt-env ACSETUP_DEVICE_KEY_SALT`: the key salt is
+   minted once for this run of the wizard and given only in that variable of the Lab's environment, on no
+   command line and in no log (the adb the Lab runs inherits that environment, and so does an adb server
+   that adb starts, which keeps running after the wizard). Each row is the device's model (else "unknown model"), its connection and
+   its state; no serial is shown (the answer carries none). Only a row on USB in the state `device` with
+   its device key can be ticked; every other row is listed as it is, with what to do: allow USB debugging
+   on the phone (`unauthorized`); the computer lacks the phone's USB driver, which comes from the phone's
+   maker and is not included, or it is not connected well (`no`, `offline`); an emulator or a wireless
+   connection, which is no phone (`tcp`). "Refresh" lists again; with none found the page says so and how
+   to add one later, and going on with no phone ticked is allowed. A lay that fails says why and what it
+   wrote where, keeps Next off and deletes nothing; "Refresh", or coming back to the page, lays again (a
+   folder that still holds what that lay left is refused as any folder that is not new or empty is), and
+   so does a page whose asking or listing failed.
+8. **Instances** (with an emulator or a phone ticked): per ticked emulator, its name on a line of its own
+   and below it the instance's name (by default "game-index"), game and server, the game's box taking the
+   rest of the line so a game's name in both languages shows whole; under Advanced, the touch and capture
+   methods (both `nemu_ipc` by default) and "Open this emulator when ActingCommand starts" (off by
+   default). Per ticked phone, a phone's instance the same way, named "game-phoneN" by default, with a
+   phone's methods under Advanced (`adb_shell_input` and `adb` by default; capture may be `scrcpy`) and no
+   emulator to open; the page says which instances are the emulators' and which the phones'. Names must
+   differ, hold no space, not begin with `-` (the Lab's command line, which binds a phone by its name,
+   would read such a word as an option) and not be too long: with two or more instances on one game, the
+   Runtime's schedule names each task copy `<id>@<name>`, at most 128 bytes, so a name's limit follows from
+   the longest id in that game's `schedule.json`, and a phone's name is at most 248 bytes too.
+9. **Options**: desktop and Start menu shortcuts (on by default); run automatically after sign-in (the
    Runtime's watchdog scheduled task, **off by default**; leave it off when another ActingCommand on this
    computer already runs automatically); start when setup finishes (on); on the first start, keep every
    instance paused (on: ActingCommand starts playing only after you check each instance in the console and
@@ -1756,23 +1795,28 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    instances then go on duty at the first start (a plan file with instances that asks for the pause without
    the start is refused). The watchdog needs no rule: it never starts a root that never started, so without
    "start when setup finishes" the installation stays down until you start it.
-9. **Confirm**: the location, versions, games, the usage ("MuMu emulator", or with nothing ticked "only the
-   core, no instance"), instances, options, the folders created and the files written,
-   all listed (with `licenses` when a chosen game or the text-recognition models bring licence files, and
-   `install-wizard.config.json` with instances, the start and the pause); with instances and no first
-   pause, a note that they go on duty as soon as ActingCommand starts. Page 4 says the same of the
-   folders. Once Install is pressed there is no going back to the earlier pages.
-10. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
+10. **Confirm**: the location, versions, games, the usage ("MuMu emulator", "Android phone", both, or
+    with nothing ticked "only the core, no instance"), with Android phone ticked the phones (how many and
+    their instances' names, or none chosen, to be added later), instances, options, the folders created
+    and the files written, all listed (with `licenses` when a chosen game or the text-recognition models
+    bring licence files, `install-wizard.config.json` with instances, the start and the pause, and
+    `state\private\device-bindings.json` with a phone, the one file that keeps the phones' serials); with
+    instances and no first pause, a note that they go on duty as soon as ActingCommand starts. Page 4 says
+    the same of the folders. Once Install is pressed there is no going back to the earlier pages.
+11. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
     progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
     failed step stops the install; what was written stays as it is, and the wizard deletes nothing. Closing
     the window while it installs is held off.
-11. **Finish**: where it was installed, where the setup log is and which shortcuts were created. "Open
+12. **Finish**: where it was installed, where the setup log is and which shortcuts were created. "Open
     console" (the new root's `ui\acui.exe`, started apart from the wizard and without any `ACTINGCOMMAND_…`
     or `ACTINGLAB_…` variable the wizard inherited) and "Open folder" are for the person to press; the wizard
     opens nothing by itself. Only with instances does the page speak of them (all paused for now, and
-    checking each in the console). The page also says how to add instances later, since the console cannot add
+    checking each in the console); with phones' instances it says they are bound, and that they connect
+    and show their screen while running tasks comes in a later version. The page also says how to add
+    instances later, since the console cannot add
     them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
-    later version. After a failure the page says which step and why, offers to copy the error and
+    later version. A device bridge page 7 laid into another folder than the one installed stays there, and
+    the page says where. After a failure the page says which step and why, offers to copy the error and
     to open the setup log (which holds the paths of the install folder and others, the profile folder
     written as `%USERPROFILE%`), and lists how to undo what the install actually did, item by item. A
     Runtime it started that may be running without a pause the install confirmed (no pause asked for, the
@@ -1780,17 +1824,22 @@ closing the window on those pages asks first, and quitting leaves nothing behind
     closed formally before the failure is shown, and the list says it is stopped; a Runtime that may still
     run is listed with whether it is under the first pause, or that the pause is not confirmed and it may be
     playing, and how to stop it (open `<root>\ui\acui.exe` and press "Request Shutdown", or run
-    `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state"`); when step 13 failed
+    `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state"`); when step 14 failed
     after its close, the Runtime is already stopped and keeps the first pause for its next start. Then a
     watchdog it installed (`"<root>\runtime\actingctl.exe" watchdog uninstall --root "<root>"`), the
-    shortcuts it created (their paths); deleting the folder comes last.
+    shortcuts it created (their paths), the Tools page 7 laid (an adb they hold may still run in the
+    background and keep a file in use until the computer restarts), and what the phones' binds left in
+    `<root>\state\private`: every file found there after each bind, whatever it answered (the binding
+    file, or the `.tmp` a write that failed leaves), which may hold the phones' serials and is not to be
+    sent to anyone, and a bind that did not finish in time and was left running, which may still write
+    there; it all goes with the folder. Deleting the folder comes last.
 
 **What it lays down:**
 
 ```text
 <root>\
   runtime\              the Runtime
-  tools\                the tools
+  tools\                the tools (with Android phone ticked, laid by page 7 already)
   ui\                   the console (acui.exe)
   packages\<game>\      standard packs, in the installed layout the Runtime reads
   licenses\<game>\      the licence and notice files beside a standard pack (when the set has them)
@@ -1798,21 +1847,33 @@ closing the window on those pages asks first, and quitting leaves nothing behind
   vision\               text recognition: ort\ (with ONNX Runtime's licence files, and DirectML.dll with
                         its own in ort\licenses\directml\ when the set carries it) and models\<model>\
   state\                the records (the state root)
+  state\private\device-bindings.json  the phone bindings (with a phone's instance only): each phone's
+                        serial for its instance, kept in this file alone
   actingd.config.json   the Runtime's configuration
   install-wizard.config.json  the full configuration with the instances (with instances and the first
                         pause only; once in place, the same as the line above)
   actingd.config.json.prev-<ms>  the configuration without the instances, kept by `config replace`
-                        when step 13 puts the full one in place
+                        when step 14 puts the full one in place
   acui.toml             this installation's console settings (the language only)
   install-wizard.log    the setup log
 ```
 
-The fifteen steps of page 10, in order: create the folders and the setup log; lay out the Runtime, the Tools
-and the console, each file checked against its `BUILD-MANIFEST.json`; place the vision files, each against
+The sixteen steps of page 11, in order: create the folders and the setup log; lay out the Runtime, the Tools
+and the console, each file checked against its `BUILD-MANIFEST.json` (the Tools page 7 laid are checked
+file by file once more and laid no more); place the vision files, each against
 its hash, and the models' licences in `licenses\vision\`; lay out the standard packs (each zip's SHA-256 computed once more right before, against the set)
 and place the files beside each, each against its hash, in `licenses\<game>\`; check each game with
-`actinglab standard-pack check`; write the configuration (as `actingd.config.json.part` first); put it in
-place only once `actingd check-config` passes; hand the root to the Runtime's own installer with `actinglab
+`actinglab standard-pack check`; write the configuration (as `actingd.config.json.part` first); bind the
+phones, each phone's instance with `actinglab --json devices bind <name> --device-key <key> --key-salt-env
+ACSETUP_DEVICE_KEY_SALT --config <root>\actingd.config.json.part --bound-via ui --root <root>`, by the
+device key page 7 listed it with under the same run's key salt (again given only in that variable of the Lab's
+environment), against the candidate before its check: the Lab finds the phone again by its key and
+writes its serial for the name into `state\private\device-bindings.json` and nothing else of the state
+root; only `device_binding_changed` passes, and a refusal stops the install with its code and what to do
+(`device_key_unknown`: the phone is not in adb's list now, unplugged or not connected again yet; `device_row_unbindable`: its
+state, debugging not allowed or no driver, for one), the step skipped without a phone's instance; put the
+configuration in place only once `actingd check-config` passes (it refuses a phone's instance without a
+binding, `device_binding_missing`); hand the root to the Runtime's own installer with `actinglab
 adopt`; write the console settings; create the shortcuts (named after the root folder, such as
 "ActingCommand Console (AC2)", with a number when that name is taken: someone else's is never touched);
 start (`actinglab up`: exit 0, and none of the post-start checks its answer lists under
@@ -1823,13 +1884,19 @@ first-start`); connect the instances: stop the Runtime, put the configuration wi
 start it again (below); confirm the Runtime is online with `actinglab status`; install the watchdog
 (`actinglab watchdog install`). Steps not chosen show "Skipped". Every child program runs without a window;
 the window shows each answer's reading, and the setup log has it too, with the answer's whole output on a
-line of its own.
+line of its own. The Lab's answers to the phone list (page 7) and to the binds (step 7) may come while the
+adb server it started still holds the Lab's output open: the Lab runs adb, an adb that finds no adb server
+of its own version running starts one, and that server inherits the Lab's output and keeps it for as long
+as it runs. So once
+the Lab has exited and its answer ends with its whole result line, the wizard takes that answer as any
+other (its exit code and outcome judged as ever) and the setup log says the output was still held; an
+answer that is not whole fails as before, saying why.
 
 Why the instances come last: a global pause stops no run already under way, so a Runtime started with its
-instances could dispatch between the start and the pause. With instances and the first pause, step 7
+instances could dispatch between the start and the pause. With instances and the first pause, step 8
 checks the full configuration, keeps it as `install-wizard.config.json` and puts in place the same
 configuration without the instances (the same salt, state root and MuMu folder, through `check-config`
-too); once the Runtime runs it and the pause is set, step 13 connects the instances in three parts, each
+too); once the Runtime runs it and the pause is set, step 14 connects the instances in three parts, each
 answer checked:
 
 1. the formal close, `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state" --wait 60`,
@@ -1839,7 +1906,7 @@ answer checked:
    checks the file with this build's `check-config` and swaps it, the replaced one kept as
    `actingd.config.json.prev-<ms>`; its answer must say `runtime_running` false, and the file in place is
    read back against the full configuration's SHA-256;
-3. `actinglab up` again, judged as step 11's.
+3. `actinglab up` again, judged as step 12's.
 
 The global pause is a persisted runtime fact that every start that is not installer-held restores before
 any instance is prepared (Runtime `contracts/scheduling-pause.md`, "Persistence, no expiry"), so the start
@@ -1856,6 +1923,17 @@ task waiting on the global pause. The last read is the status once: online, the 
 first-start one, no instance running a task (a run is a failure, never a success), and every configured
 instance present. Until it passes, the pause counts as not confirmed, and a failure there closes the
 Runtime.
+
+Phones' instances come the same way. Step 7 binds them against the full configuration's candidate, so
+step 8's check of it finds each bound; the configuration without the instances names no phone, and a
+configuration without a phone has the binding file read neither by its check nor by its start (Runtime
+`apps/actingd/src/config.rs`: the private binding file is read only when a handset is configured), so the
+first start sees no binding at all, takes a state root that holds only `private\device-bindings.json` as a
+new one (Runtime `contracts/device-binding.md`, "Against a candidate configuration") and has no instance
+for its `bindings` check to look for. Part 3's start registers each phone's instance whether its phone is
+plugged in or not, so its `bindings` check and the last read find it either way; a phone unplugged by then
+is shown unavailable in the console until it is plugged in again. The first-start pause holds a phone's
+instance as it holds an emulator's: the pause gates every instance's dispatch, whatever its device.
 
 The watchdog comes last, after the last read: it never starts a root that never started, one closed
 formally or one the installer is working on, and starts only one whose last start ended in an error
@@ -1887,16 +1965,19 @@ acsetup check-set --set <install set folder>
 acsetup discover [--mumu-root <MuMu folder>]
     lists MuMu's emulators and those another ActingCommand uses (read only)
 acsetup install --set <install set folder> --root <new install folder> --plan <plan.json>
-    installs as the plan says, with the steps of page 10
+    installs as the plan says, with the steps of page 11
 ```
 
 Exit codes: 0 done, 1 failed (stderr says which step and why, and lists how to undo what the install did,
 as the failure page does), 2 usage. The plan file holds what the
-window gathers on pages 1 to 9, the usage aside (`actingcommand.install-wizard-plan.v1`): `language` (`zh` or `en`), `games`
+window gathers on pages 1 to 10, the usage and the phones aside (`actingcommand.install-wizard-plan.v1`): `language` (`zh` or `en`), `games`
 (game folder names), an optional `mumu_root`, `instances` (each with `index`, `alias`, `game`, `server`, and
 optionally `touch_backend`, `capture_backend`, `start_emulator`, `confirmed_in_use`) and `options`
 (`desktop_shortcut`, `start_menu_shortcut`, `watchdog`, `start_after_install`, `pause_first_start`, with the
-window's defaults). Its rules are the window's; a plan that breaks one stops before anything is written.
+window's defaults). Its rules are the window's; a plan that breaks one stops before anything is written. A
+plan file names no phone: one with `handsets` or an instance whose `device` is a phone's is refused, since a
+phone is named by a key made under the window's own run's salt, which no file holds; phones are installed
+from the window, which lists them and binds them in one run. So the command line skips step 7.
 
 **Putting an install set together:** `tools/make_install_set.py` (Python 3, standard library only) writes
 the set the wizard reads, in the same format; the two change together. It only copies files, hashes them

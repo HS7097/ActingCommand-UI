@@ -2,9 +2,12 @@
 //! The install log, `<root>\install-wizard.log`: one line per thing the wizard did or found,
 //! each with its UTC time, a failure with its reason. Lines said before the root exists (the
 //! checks of the install set, the plan and the emulators) are kept and written first once the
-//! log is opened. The salt is never written here. The person's profile folder (`USERPROFILE`,
-//! which holds their user name) is written as `%USERPROFILE%`, so a log sent to whoever helps
-//! names no user ([`masked`]).
+//! log is opened; so are the lines of what the wizard wrote before the install began (the Tools
+//! laid for the phone page, `engine::pre_lay_tools`), each with the time it was said
+//! ([`InstallLog::earlier`]). The salts are never written here, the configuration's nor the
+//! run's key salt (`key_salt`). The person's profile folder (`USERPROFILE`, which holds their
+//! user name) is written as `%USERPROFILE%`, so a log sent to whoever helps names no user
+//! ([`masked`]).
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -57,11 +60,21 @@ impl InstallLog {
     /// One line, stamped and flushed at once: the log is whole whenever a person is told to
     /// read it.
     pub fn line(&mut self, text: &str) -> io::Result<()> {
+        self.stamped(unix_ms(), text)
+    }
+
+    /// A line said before this log's install began, at `unix_ms`: stamped with that time, not
+    /// with now, and otherwise written as [`InstallLog::line`] writes one.
+    pub fn earlier(&mut self, unix_ms: u128, text: &str) -> io::Result<()> {
+        self.stamped(unix_ms, text)
+    }
+
+    fn stamped(&mut self, unix_ms: u128, text: &str) -> io::Result<()> {
         let text = match &self.profile {
             Some(profile) => masked(text, profile),
             None => text.to_owned(),
         };
-        let line = format!("{} {}\n", utc_stamp(unix_ms()), text.replace('\n', " | "));
+        let line = format!("{} {}\n", utc_stamp(unix_ms), text.replace('\n', " | "));
         match &mut self.file {
             Some(file) => {
                 file.write_all(line.as_bytes())?;

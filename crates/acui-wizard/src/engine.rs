@@ -6,12 +6,33 @@
 //! The failure carries what the install left that a person stops or removes first ([`Left`],
 //! [`cleanup`]).
 //!
+//! One thing is written before the install, and only for it: the Tools, laid into `<root>\tools`
+//! for the phone page, whose device bridge (the root's own adb and Lab, the very ones the Runtime
+//! will use) runs before "Install" ([`pre_lay_tools`]). An install whose request says so takes
+//! them as its own ([`Request::pre_laid`]): its checks accept a root that holds that folder alone,
+//! each file of it checked against the set before anything else is written; step 2 checks them
+//! again and writes them no more; the log carries what was said when they were laid, at the time
+//! it was said; and a failure counts them as written and names where they stay
+//! ([`Left::pre_laid_tools`]). Without it, nothing changes: the root must be new or empty.
+//!
+//! A phone's instance is bound to its phone in step 7, between the configuration's candidate
+//! (step 6) and its check (step 8), which refuses a phone without a binding
+//! (`device_binding_missing`): the root's own Lab binds each by the device key the phone page
+//! listed it with, under the same run's key salt ([`Request::key_salt`]), against the candidate
+//! (`devices`). The bind writes in the state root `<root>\state`, which step 1 created empty: its
+//! `private` folder and in it `device-bindings.json`, the one file that holds the phones'
+//! serials, nothing else. No later step asks the state root to be empty (Runtime
+//! `contracts/device-binding.md`, "Against a candidate configuration": check-config, adopt and
+//! the first start each take a state root that holds only that file); a failure names what the
+//! binds left there, every entry of `private` read back after each whatever it answered, and a
+//! bind left running that may still write there ([`Left::bindings`]).
+//!
 //! The order departs from the design in two places:
 //!
 //! - With instances and the first-start pause, the Runtime first starts with the same
 //!   configuration without its instances, and the pause is set: a global pause stops no run
 //!   already under way, so a Runtime started with its instances could dispatch before the pause
-//!   holds. Step 13 then connects the instances in three parts, each answer checked: the formal
+//!   holds. Step 14 then connects the instances in three parts, each answer checked: the formal
 //!   close (`actingctl request-shutdown --wait 60`, `runtime_shutdown_completed`), the full
 //!   configuration put in place by the Runtime's `config replace` while no Runtime runs
 //!   (`runtime_running` false), and the installer's start again (`actinglab up`, exit 0, no
@@ -37,6 +58,7 @@
 //! its whole stdout (up to 64 Ki characters) on a line of its own, so that a refusal's rows are
 //! in the log and not only their count.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -46,19 +68,23 @@ use serde_json::Value;
 
 use crate::archive::Archive;
 use crate::config::{
-    self, ConfigInput, ConfigInstance, CONFIG_FILE, CONFIG_PART, FULL_CONFIG, PACKAGES_DIR, STATE_DIR,
+    self, ConfigInput, ConfigInstance, HandsetInstance, CONFIG_FILE, CONFIG_PART, FULL_CONFIG, PACKAGES_DIR, STATE_DIR,
 };
 use crate::console;
+use crate::devices;
 use crate::digest::sha256_file;
-use crate::log::InstallLog;
-use crate::manifest::{Program, MANIFEST_FILE};
+use crate::key_salt::KeySalt;
+use crate::log::{unix_ms, InstallLog};
+use crate::manifest::{ManifestFile, Program, MANIFEST_FILE};
 use crate::mumu;
 use crate::occupancy;
 use crate::plan::{plan_problems, Plan};
 use crate::platform;
-use crate::root::{check_root, text_issues};
+use crate::root::{check_root, check_root_beside_tools, text_issues, RootIssue};
 use crate::runtime::{self, FIRST_START_REASON};
-use crate::set::{verify_set, PlacedFile, VerifiedSet, DIRECTML_LIBRARY, LICENSES_DIR, VISION_LICENSES_DIR};
+use crate::set::{
+    verify_set, PlacedFile, VerifiedProgram, VerifiedSet, DIRECTML_LIBRARY, LICENSES_DIR, VISION_LICENSES_DIR,
+};
 use crate::text::{Lang, Said};
 use crate::winpath::{last_segment, strip_verbatim};
 
@@ -71,6 +97,8 @@ pub enum Step {
     Packs,
     PackCheck,
     Config,
+    /// The phones' instances bound to their phones (see the module's description).
+    Phones,
     CheckConfig,
     Adopt,
     ConsoleSettings,
@@ -83,13 +111,14 @@ pub enum Step {
 }
 
 impl Step {
-    pub const ALL: [Step; 15] = [
+    pub const ALL: [Step; 16] = [
         Step::Prepare,
         Step::Programs,
         Step::Vision,
         Step::Packs,
         Step::PackCheck,
         Step::Config,
+        Step::Phones,
         Step::CheckConfig,
         Step::Adopt,
         Step::ConsoleSettings,
@@ -101,7 +130,7 @@ impl Step {
         Step::Watchdog,
     ];
 
-    /// 1 to 15.
+    /// 1 to 16.
     pub fn number(self) -> usize {
         Step::ALL.iter().position(|step| *step == self).map_or(0, |at| at + 1)
     }
@@ -114,6 +143,7 @@ impl Step {
             Step::Packs => Said::new("铺标准包和随带的许可文件", "Lay out the standard packages and their licence files"),
             Step::PackCheck => Said::new("检查标准包", "Check the standard packages"),
             Step::Config => Said::new("生成配置", "Write the configuration"),
+            Step::Phones => Said::new("绑定手机", "Bind the phones"),
             Step::CheckConfig => Said::new("用 Runtime 校验配置", "Check the configuration with the Runtime"),
             Step::Adopt => Said::new("交给 Runtime 的安装器接管", "Hand the root to the Runtime's installer"),
             Step::ConsoleSettings => Said::new("写监控台设置", "Write the console's settings"),
@@ -140,7 +170,7 @@ pub enum Event {
     /// A line of what was done or found (also in the log).
     Line(Said),
     /// What the checks before the install just did, or which part of a step of several parts
-    /// runs now (step 13's close, swap and start), in a person's words: no path, repository or
+    /// runs now (step 14's close, swap and start), in a person's words: no path, repository or
     /// commit (the `Line` beside it carries those, for the log and the command line). The
     /// window shows these as they come; nothing writes them down.
     Plain(Said),
@@ -169,7 +199,7 @@ pub struct Left {
     /// A Runtime of the root may be running: the wizard ran its start (a start that did not
     /// answer in time, or failed, may have left it running) and has not seen it closed since.
     pub running: bool,
-    /// The wizard closed the Runtime it had started (`runtime_shutdown_completed`: step 13's
+    /// The wizard closed the Runtime it had started (`runtime_shutdown_completed`: step 14's
     /// formal close, or the close after a failure) and has not started it again.
     pub closed: bool,
     /// The close was the one after a failure ([`Run::stop_after_failure`]).
@@ -180,13 +210,34 @@ pub struct Left {
     pub watchdog: bool,
     /// The shortcuts the wizard created.
     pub shortcuts: Vec<PathBuf>,
+    /// Where the Tools the wizard laid before the install stay (`<root>\tools`,
+    /// [`pre_lay_tools`]), when the install took them.
+    pub pre_laid_tools: Option<PathBuf>,
+    /// The phones' instances step 7 bound, by alias.
+    pub phones: Vec<String>,
+    /// `<root>\state\private` once step 7's binds made it, as read back after each bind whatever
+    /// it answered.
+    pub bindings_dir: Option<PathBuf>,
+    /// Every entry in it as read back then (`read_dir`, no name looked for): the binding file,
+    /// the `device-bindings.json.tmp` a write whose rename failed leaves (`devices`), whatever
+    /// else; each may hold the phones' serials.
+    pub bindings: Vec<PathBuf>,
+    /// Why that folder could not be read back, when it could not: it may hold anything.
+    pub bindings_unread: Option<String>,
+    /// A bind past its time was left running ([`crate::child::OnTimeout::Leave`]): it may still
+    /// write there.
+    pub bind_left_running: bool,
 }
 
 /// What a person does about what a failed install left, in order, each with the command or the
 /// button that does it: stop the Runtime it started (the console's "Request Shutdown", or
 /// `actingctl request-shutdown`), or, when the wizard closed it itself, that there is none to
 /// stop; remove the watchdog task it registered (`actingctl watchdog uninstall`), delete the
-/// shortcuts it created; then delete the folder. Only what the install did is named.
+/// shortcuts it created; where the Tools it laid before the install stay, with what keeps their
+/// folder from being deleted (the adb server the phone page's adb may have left running); what
+/// the phones' binds left in the state root's `private` folder, each file as read back, which goes
+/// with the folder and may hold the phones' serials, and a bind left running that may still write
+/// there; then delete the folder. Only what the install did is named.
 pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
     let root = strip_verbatim(&root.to_string_lossy()).trim_end_matches(['\\', '/']).to_owned();
     let actingctl = format!("\"{root}\\runtime\\actingctl.exe\"");
@@ -249,6 +300,60 @@ pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
             format!("Delete the shortcuts the wizard created: {}.", list.join(", ")),
         ));
     }
+    if let Some(tools) = &left.pre_laid_tools {
+        let tools = strip_verbatim(&tools.to_string_lossy());
+        steps.push(Said::new(
+            format!("向导在开始安装之前为手机页先铺的 Tools 工具（adb 和 Lab 在里面）留在 {tools}。删的时候如果提示文件被占用，是里面的 adb 还在后台开着：重启电脑以后再删。"),
+            format!("The Tools the wizard laid for the phone page before the install (adb and the Lab among them) stay in {tools}. Should deleting them say a file is in use, the adb in them still runs in the background: restart the computer, then delete them."),
+        ));
+    }
+    if left.bindings_dir.is_some() || left.bind_left_running {
+        let private = left.bindings_dir.as_ref().map_or_else(
+            || format!("{root}\\{STATE_DIR}\\{}", devices::PRIVATE_DIR),
+            |dir| strip_verbatim(&dir.to_string_lossy()),
+        );
+        let (zh_bound, en_bound) = if left.phones.is_empty() {
+            ("还没有手机绑上".to_owned(), "no phone was bound yet".to_owned())
+        } else {
+            (format!("已绑上 {}", left.phones.join("、")), format!("bound: {}", left.phones.join(", ")))
+        };
+        // What the folder holds as last read back: every entry, whatever its name (a binding
+        // file, the `.tmp` of a write that failed), or why it could not be read.
+        let list: Vec<String> = left.bindings.iter().map(|path| strip_verbatim(&path.to_string_lossy())).collect();
+        let (mut zh, mut en) = match (&left.bindings_dir, &left.bindings_unread) {
+            (None, _) => (
+                format!("绑定手机还没有在 {private} 写下什么（{zh_bound}）。"),
+                format!("Binding the phones wrote nothing in {private} yet ({en_bound})."),
+            ),
+            (Some(_), Some(why)) => (
+                format!("绑定手机时建了 {private}（{zh_bound}），里面有什么读不出（{why}）。"),
+                format!("Binding the phones created {private} ({en_bound}); what it holds cannot be read ({why})."),
+            ),
+            (Some(_), None) if list.is_empty() => (
+                format!("绑定手机时建了 {private}（{zh_bound}），里面没有文件。"),
+                format!("Binding the phones created {private} ({en_bound}), with no file in it."),
+            ),
+            (Some(_), None) => (
+                format!("绑定手机时写下了 {}（{zh_bound}）。", list.join("、")),
+                format!("Binding the phones left {} ({en_bound}).", list.join(", ")),
+            ),
+        };
+        if left.bind_left_running {
+            zh.push_str(&format!("有一次绑定超时后还留着在跑（向导没有终止它），它之后可能还会往 {private} 里写。"));
+            en.push_str(&format!(
+                " A bind that did not finish in time was left running (the wizard did not end it), and it may write in {private} later."
+            ));
+        }
+        // A file there may hold the phones' serials: one listed, one that could not be read, one
+        // a bind left running may still write.
+        if !list.is_empty() || left.bindings_unread.is_some() || left.bind_left_running {
+            zh.push_str(&format!("{private} 里的文件可能存着手机的序列号，不要发给别人。"));
+            en.push_str(&format!(" The files in {private} may hold the phones' serials, so do not send them to anyone."));
+        }
+        zh.push_str("这些都在安装文件夹里面，随整个文件夹一起删掉。");
+        en.push_str(" All of it lies inside the install folder and goes when the whole folder is deleted.");
+        steps.push(Said::new(zh, en));
+    }
     steps.push(if steps.is_empty() {
         Said::new(
             format!("可以删除整个 {root} 文件夹，再重新运行向导。"),
@@ -307,6 +412,261 @@ pub struct Request {
     pub set_dir: PathBuf,
     pub root: PathBuf,
     pub plan: Plan,
+    /// The Tools [`pre_lay_tools`] laid into `root` before the install, which the install takes
+    /// as its own (see the module's description); `None`: the root must be new or empty.
+    pub pre_laid: Option<PreLaid>,
+    /// The run's key salt the phone page listed the phones with: step 7 hands the Lab the same
+    /// one, so that each phone's device key ([`crate::plan::PlanHandset::device_key`]) finds its
+    /// phone again. Required with phones; `None` without.
+    pub key_salt: Option<KeySalt>,
+}
+
+/// The Tools laid into `<root>\tools` before the install ([`pre_lay_tools`]).
+#[derive(Debug, Clone)]
+pub struct PreLaid {
+    /// The root they were laid into.
+    pub root: PathBuf,
+    /// `<root>\tools`.
+    pub dir: PathBuf,
+    /// The files laid, the manifest not counted (as step 2 counts them).
+    pub files: usize,
+    /// Their bytes.
+    pub bytes: u64,
+    /// The lines the install log is to carry, each with the time it was said (milliseconds
+    /// since the Unix epoch): the log opens with the install, which writes them first.
+    pub lines: Vec<(u128, String)>,
+}
+
+impl PreLaid {
+    /// One more line for the install log, stamped now: what the phone page's device bridge,
+    /// these Tools, answered before the install ([`PreLaid::lines`]).
+    pub fn note(&mut self, line: &str) {
+        self.lines.push((unix_ms(), line.to_owned()));
+    }
+}
+
+/// Why [`pre_lay_tools`] stopped, and what it left; nothing is deleted.
+#[derive(Debug, Clone)]
+pub struct PreLayFailure {
+    pub reason: Said,
+    /// Whether anything was written: the root folder, `<root>\tools`, files in it.
+    pub wrote: bool,
+    /// `<root>\tools`, where whatever was laid stays.
+    pub dir: PathBuf,
+}
+
+/// What [`pre_lay_tools`] says as it goes: each line also kept, stamped, for the install log.
+struct Told<'a> {
+    report: &'a mut dyn FnMut(Event),
+    lines: Vec<(u128, String)>,
+}
+
+impl Told<'_> {
+    fn say(&mut self, said: Said) {
+        self.lines.push((unix_ms(), said.to_string()));
+        (self.report)(Event::Line(said));
+    }
+
+    fn plain(&mut self, said: Said) {
+        (self.report)(Event::Plain(said));
+    }
+
+    fn bytes(&mut self, done: u64, total: u64) {
+        (self.report)(Event::Bytes { done, total });
+    }
+}
+
+/// Lays the Tools of the checked `set` into `<root>\tools` before the install: the one write
+/// before "Install", for the phone page (see the module's description). The root must be one
+/// the install could take, new or empty ([`check_root`], with room for the Tools). The Tools zip
+/// is checked once more against the set (the set's folder is not the wizard's, and its check
+/// was a while ago); then every file the Tools lay ([`Program::lays`]: each of them) is unpacked
+/// as a new file and read back against its manifest's size and SHA-256, as step 2 lays them, and
+/// the manifest after them. `report` hears each line (kept for the log in [`PreLaid::lines`]),
+/// the same news in a person's words ([`Event::Plain`]) and the bytes laid. A failure says what
+/// it left.
+pub fn pre_lay_tools(set: &VerifiedSet, root: &Path, report: &mut dyn FnMut(Event)) -> Result<PreLaid, PreLayFailure> {
+    let dir = root.join(Program::Tools.dir());
+    let mut told = Told { report, lines: Vec::new() };
+    let mut wrote = false;
+    match lay_tools_early(set, root, &dir, &mut told, &mut wrote) {
+        Ok((files, bytes)) => Ok(PreLaid {
+            root: root.to_path_buf(),
+            dir,
+            files,
+            bytes,
+            lines: told.lines,
+        }),
+        Err(reason) => Err(PreLayFailure { reason, wrote, dir }),
+    }
+}
+
+/// [`pre_lay_tools`]'s work: the files and bytes laid; `wrote` set once anything is written.
+fn lay_tools_early(
+    set: &VerifiedSet,
+    root: &Path,
+    dir: &Path,
+    told: &mut Told<'_>,
+    wrote: &mut bool,
+) -> Result<(usize, u64), Said> {
+    let verified = set.program(Program::Tools);
+    told.plain(Said::new("正在把设备桥（adb 和 Lab）铺进安装位置……", "Laying the device bridge (adb and the Lab) into the install folder…"));
+    told.say(Said::new(
+        "开始安装之前先铺 Tools 工具（手机页的设备桥要用）",
+        "the Tools laid before the install (the phone page's device bridge needs them)",
+    )
+    .with(format!("{} → {}", verified.zip.display(), dir.display())));
+    let issues = check_root(root, verified.bytes);
+    if !issues.is_empty() {
+        return Err(joined(issues.iter().map(RootIssue::said).collect()));
+    }
+    let entry = &set.set.runtime.tools_zip;
+    let (sha256, size) = sha256_file(&verified.zip, &mut |_: u64| {})
+        .map_err(|error| io_said("读不出 Tools zip", "the Tools zip cannot be read", &verified.zip, error))?;
+    if size != entry.size || !sha256.eq_ignore_ascii_case(&entry.sha256) {
+        return Err(Said::new(
+            "Tools zip 与安装集不符（核对之后被改过）",
+            "the Tools zip does not match the install set (it changed after the check)",
+        )
+        .with(format!("{}: expected {} bytes {}, found {size} bytes {sha256}", verified.zip.display(), entry.size, entry.sha256)));
+    }
+    told.say(Said::new("Tools zip 铺之前又核了一次 SHA-256", "the Tools zip's SHA-256 checked again before it is laid")
+        .with(format!("{} {sha256}", entry.file)));
+    let existed = root.exists();
+    fs::create_dir_all(root).map_err(|error| io_said("建不了安装文件夹", "the install folder cannot be created", root, error))?;
+    *wrote |= !existed;
+    fs::create_dir(dir).map_err(|error| io_said("建不了文件夹", "the folder cannot be created", dir, error))?;
+    *wrote = true;
+    let mut archive = Archive::open(&verified.zip)?;
+    let mut done = 0u64;
+    let mut count = 0usize;
+    for file in &verified.manifest.files {
+        if !Program::Tools.lays(&file.path) {
+            told.say(Said::new("不放（只在 A/B 安装里用）", "not laid (A/B installations only)").with(&file.path));
+            continue;
+        }
+        done += lay_file(&mut archive, file, &under(dir, &file.path))?;
+        count += 1;
+        told.bytes(done, verified.bytes);
+    }
+    archive.extract(MANIFEST_FILE, &dir.join(MANIFEST_FILE))?;
+    told.say(Said::new("Tools 工具已在开始安装之前铺好并逐个核对", "the Tools laid out before the install and checked").with(format!(
+        "{} ({count} files)",
+        dir.display()
+    )));
+    told.plain(Said::new("已铺好：设备桥（adb 和 Lab）", "Laid out: the device bridge (adb and the Lab)"));
+    Ok((count, done))
+}
+
+/// What one entry below a folder is ([`entries_below`]).
+enum Found {
+    File,
+    Folder,
+    /// A link of any kind (a symbolic link, a junction), or what is neither file nor folder.
+    Other,
+}
+
+/// Every entry below `dir`, each with its path relative to it (`/`-separated) and its own path;
+/// a link is never followed.
+fn entries_below(dir: &Path) -> Result<Vec<(String, PathBuf, Found)>, Said> {
+    let unreadable = |path: &Path, error: io::Error| io_said("读不出文件夹", "the folder cannot be read", path, error);
+    let mut found = Vec::new();
+    let mut pending = vec![(String::new(), dir.to_path_buf())];
+    while let Some((prefix, folder)) = pending.pop() {
+        for entry in fs::read_dir(&folder).map_err(|error| unreadable(&folder, error))? {
+            let entry = entry.map_err(|error| unreadable(&folder, error))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let relative = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|error| unreadable(&path, error))?;
+            if kind.is_dir() {
+                pending.push((relative.clone(), path.clone()));
+                found.push((relative, path, Found::Folder));
+            } else if kind.is_file() {
+                found.push((relative, path, Found::File));
+            } else {
+                found.push((relative, path, Found::Other));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Checks that `dir` holds the Tools of `verified` exactly as step 2 lays them, the ones
+/// [`pre_lay_tools`] laid: each file the Tools lay, of its manifest's size and SHA-256, the
+/// manifest as the zip holds it, and nothing else (no other file, no folder that holds none of
+/// them, no link); names compared as Windows compares them. Returns how many files and bytes,
+/// the manifest not counted; a problem names the file.
+fn laid_tools(dir: &Path, verified: &VerifiedProgram) -> Result<(usize, u64), Said> {
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => {
+            return Err(Said::new("先铺的 tools 不是文件夹", "the tools laid before the install are no folder").with(dir.display()))
+        }
+        Err(error) => {
+            return Err(io_said("先铺的 tools 不在了", "the tools laid before the install are not there", dir, error))
+        }
+    }
+    // Each file expected, by its name as Windows compares it: the manifest's path, and its file
+    // (`None` for the manifest itself).
+    let mut expected: BTreeMap<String, (&str, Option<&ManifestFile>)> = verified
+        .manifest
+        .files
+        .iter()
+        .filter(|file| verified.program.lays(&file.path))
+        .map(|file| (file.path.to_ascii_lowercase(), (file.path.as_str(), Some(file))))
+        .collect();
+    expected.insert(MANIFEST_FILE.to_ascii_lowercase(), (MANIFEST_FILE, None));
+    let folders: BTreeSet<String> = expected
+        .keys()
+        .flat_map(|path| path.match_indices('/').map(|(at, _)| path[..at].to_owned()).collect::<Vec<_>>())
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    for (relative, path, found) in entries_below(dir)? {
+        let key = relative.to_ascii_lowercase();
+        let file = match found {
+            Found::Folder if folders.contains(&key) => continue,
+            Found::File if expected.contains_key(&key) && seen.insert(key.clone()) => expected[&key].1,
+            _ => {
+                return Err(Said::new(
+                    "先铺的 tools 里多出了清单没有的东西",
+                    "the tools laid before the install hold something their manifest does not list",
+                )
+                .with(path.display()))
+            }
+        };
+        let (sha256, size) = sha256_file(&path, &mut |_: u64| {})
+            .map_err(|error| io_said("读不出先铺的文件", "a file laid before the install cannot be read", &path, error))?;
+        let (want_size, want_sha256) = match file {
+            Some(file) => (file.size_bytes, file.sha256.clone()),
+            // The manifest lists no digest of its own: the zip's entry is the one laid.
+            None => {
+                let (zip_sha256, zip_size) = Archive::open(&verified.zip)?.hash(MANIFEST_FILE)?;
+                (zip_size, zip_sha256)
+            }
+        };
+        if size != want_size || !sha256.eq_ignore_ascii_case(&want_sha256) {
+            return Err(Said::new(
+                "先铺的 tools 里的文件与清单不符",
+                "a file of the tools laid before the install does not match the manifest",
+            )
+            .with(format!("{}: expected {want_size} bytes {want_sha256}, found {size} bytes {sha256}", path.display())));
+        }
+        if file.is_some() {
+            count += 1;
+            bytes += size;
+        }
+    }
+    if let Some((_, (missing, _))) = expected.iter().find(|(key, _)| !seen.contains(*key)) {
+        return Err(Said::new(
+            "先铺的 tools 少了清单列出的文件",
+            "the tools laid before the install lack a file their manifest lists",
+        )
+        .with(under(dir, missing).display()));
+    }
+    Ok((count, bytes))
 }
 
 /// A finished install.
@@ -320,8 +680,10 @@ pub struct Done {
     pub started: bool,
     pub paused: bool,
     pub watchdog: bool,
-    /// How many instances the configuration binds.
+    /// How many instances the configuration binds, the phones' among them.
     pub instances: usize,
+    /// The phones' instances step 7 bound, by alias.
+    pub phones: Vec<String>,
     /// What each step did, in order.
     pub summary: Vec<(Step, Said)>,
 }
@@ -338,11 +700,24 @@ struct Bound {
     start_emulator: bool,
 }
 
+/// One phone's instance as the configuration will name it and step 7 bind it.
+struct Handset {
+    alias: String,
+    game: String,
+    server: String,
+    application_id: String,
+    touch_backend: String,
+    capture_backend: String,
+    /// The phone's device key, as the phone page listed it.
+    device_key: String,
+}
+
 /// What the checks found, for the steps.
 struct Checked {
     set: VerifiedSet,
     mumu_root: Option<String>,
     bound: Vec<Bound>,
+    handsets: Vec<Handset>,
 }
 
 struct Run<'a> {
@@ -407,7 +782,7 @@ impl Run<'_> {
     }
 
     /// After a failure, a Runtime of the root that may be running without a pause the install
-    /// confirmed ([`Pause::Held`]) is closed formally (`request-shutdown`, judged as step 13's
+    /// confirmed ([`Pause::Held`]) is closed formally (`request-shutdown`, judged as step 14's
     /// close is): a failed install leaves no Runtime playing the games. A close that is refused
     /// or fails leaves `running` set, so the failure says how to stop it by hand ([`cleanup`]).
     fn stop_after_failure(&mut self) {
@@ -510,6 +885,18 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         left: Left::default(),
         summary: Vec::new(),
     };
+    if let Some(pre_laid) = &request.pre_laid {
+        // Written before the install began: the failure counts it and says where it stays, and
+        // the log, once open, carries first what was said as it was laid.
+        run.wrote = true;
+        run.left.pre_laid_tools = Some(pre_laid.dir.clone());
+        for (at, line) in &pre_laid.lines {
+            if let Err(error) = run.log.earlier(*at, line) {
+                let reason = Said::new("日志写不进去", "the log cannot be written").with(error);
+                return Err(run.fail(None, reason));
+            }
+        }
+    }
     let checked = match check(request, &mut run) {
         Ok(checked) => checked,
         Err(reason) => return Err(run.fail(None, reason)),
@@ -518,12 +905,18 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     let root = request.root.clone();
     let started = plan.options.start_after_install;
     let paused = started && plan.options.pause_first_start;
-    // The Runtime starts without its instances, which come once the pause holds.
-    let staged = paused && !checked.bound.is_empty();
-    let aliases: Vec<String> = checked.bound.iter().map(|bound| bound.alias.clone()).collect();
+    // The Runtime starts without its instances, the phones' among them, which come once the
+    // pause holds.
+    let staged = paused && !(checked.bound.is_empty() && checked.handsets.is_empty());
+    let aliases: Vec<String> = checked
+        .bound
+        .iter()
+        .map(|bound| bound.alias.clone())
+        .chain(checked.handsets.iter().map(|handset| handset.alias.clone()))
+        .collect();
 
     run.step(Step::Prepare, |run| prepare(run))?;
-    run.step(Step::Programs, |run| lay_programs(run, &checked.set))?;
+    run.step(Step::Programs, |run| lay_programs(run, &checked.set, request.pre_laid.is_some()))?;
     run.step(Step::Vision, |run| place_vision(run, &checked.set))?;
     run.step(Step::Packs, |run| lay_packs(run, &checked.set, &plan.games))?;
     run.step(Step::PackCheck, |run| check_packs(run, &plan.games))?;
@@ -533,6 +926,12 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         part = path;
         Ok(summary)
     })?;
+    match (checked.handsets.is_empty(), request.key_salt.as_ref()) {
+        (true, _) => run.skip(Step::Phones, Said::new("没有手机实例", "no phone's instance"))?,
+        (false, Some(salt)) => run.step(Step::Phones, |run| bind_phones(run, &part, &checked.handsets, salt))?,
+        // The checks refuse phones without the salt; should one get here, it fails loud.
+        (false, None) => run.step(Step::Phones, |_| Err(no_key_salt()))?,
+    }
     let config_path = root.join(CONFIG_FILE);
     let full_path = staged.then(|| root.join(FULL_CONFIG));
     run.step(Step::CheckConfig, |run| {
@@ -594,12 +993,22 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         paused,
         watchdog: plan.options.watchdog,
         instances: aliases.len(),
+        phones: run.left.phones.clone(),
         summary: run.summary,
         root,
     })
 }
 
-/// The checks before anything is written.
+/// Why phones cannot be bound without the run's key salt.
+fn no_key_salt() -> Said {
+    Said::new(
+        "这次安装没有列手机时用的那把设备键盐，绑不了手机：手机只能在向导窗口里列出并在同一次运行里装上",
+        "this install has no key salt the phones were listed with, so no phone can be bound: phones are listed and installed in one run of the wizard's window",
+    )
+}
+
+/// The checks before anything is written (but the Tools laid before the install,
+/// [`Request::pre_laid`]).
 fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
     let plan = &request.plan;
     run.say(Said::new("安装开始", "install begins").with(format!(
@@ -610,6 +1019,21 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
     let issues = text_issues(&request.root.to_string_lossy());
     if !issues.is_empty() {
         return Err(joined(issues.iter().map(|issue| issue.said()).collect()));
+    }
+    if let Some(pre_laid) = &request.pre_laid {
+        if pre_laid.root != request.root {
+            return Err(Said::new(
+                "先铺的 Tools 在另一个文件夹里，不是这次要装的位置",
+                "the Tools laid before the install are in another folder than this install's",
+            )
+            .with(format!("{}, {}", pre_laid.dir.display(), request.root.display())));
+        }
+    }
+    // A phone is found again in step 7 by the key the phone page listed it with, under the same
+    // salt: without the salt none can be, which is said before anything is written.
+    if !plan.handsets.is_empty() && request.key_salt.is_none() {
+        let aliases: Vec<&str> = plan.handsets.iter().map(|handset| handset.alias.as_str()).collect();
+        return Err(no_key_salt().with(aliases.join(", ")));
     }
     let set = {
         let report = &mut *run.report;
@@ -632,9 +1056,38 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
     if !problems.is_empty() {
         return Err(joined(problems));
     }
-    let issues = check_root(&request.root, set.space_needed(&plan.games));
+    let needed = set.space_needed(&plan.games);
+    let tools = set.program(Program::Tools);
+    let issues = match &request.pre_laid {
+        None => check_root(&request.root, needed),
+        // The Tools laid before the install are on the disk already: one copy less to find room
+        // for.
+        Some(_) => check_root_beside_tools(&request.root, needed.saturating_sub(tools.bytes)),
+    };
     if !issues.is_empty() {
-        return Err(joined(issues.iter().map(|issue| issue.said()).collect()));
+        let pre_laid = request.pre_laid.is_some();
+        return Err(joined(
+            issues
+                .iter()
+                .map(|issue| match issue {
+                    RootIssue::NotEmpty if pre_laid => Said::new(
+                        "安装位置里除了向导在开始安装之前先铺的 tools，还有别的东西",
+                        "the install folder holds something besides the tools the wizard laid before the install",
+                    ),
+                    issue => issue.said(),
+                })
+                .collect(),
+        ));
+    }
+    if request.pre_laid.is_some() {
+        let dir = request.root.join(Program::Tools.dir());
+        run.plain(Said::new("正在核对开始安装之前先铺的 Tools……", "Checking the Tools laid before the install…"));
+        let (count, _) = laid_tools(&dir, tools)?;
+        run.say(Said::new(
+            "安装位置里只有向导在开始安装之前先铺的 Tools，逐个核过，都与安装集一致",
+            "the install folder holds only the Tools the wizard laid before the install, each file checked against the install set",
+        )
+        .with(format!("{} ({count} files)", dir.display())))?;
     }
     run.say(Said::new("安装位置可用", "the install folder is usable").with(request.root.display()))?;
     run.plain(Said::new("已核对：安装位置可以用", "Checked: the install folder can be used"));
@@ -714,10 +1167,39 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
             start_emulator: wanted.start_emulator,
         });
     }
+    let mut handsets = Vec::new();
+    for wanted in &plan.handsets {
+        let game = set
+            .bundle(&wanted.game)
+            .map(|bundle| &bundle.game)
+            .ok_or_else(|| Said::new("安装集里没有这个游戏", "the install set has no such game").with(&wanted.game))?;
+        let server = game
+            .server(&wanted.server)
+            .ok_or_else(|| Said::new("这个游戏没有这个区服", "the game has no such server").with(&wanted.server))?;
+        handsets.push(Handset {
+            alias: wanted.alias.clone(),
+            game: wanted.game.clone(),
+            server: wanted.server.clone(),
+            application_id: server.application_id.clone(),
+            touch_backend: wanted.touch_backend.clone(),
+            capture_backend: wanted.capture_backend.clone(),
+            device_key: wanted.device_key.clone(),
+        });
+    }
+    if !handsets.is_empty() {
+        run.say(Said::new("手机实例（安装时绑定）", "phones' instances (bound during the install)").with(
+            handsets
+                .iter()
+                .map(|handset| format!("{} {}", handset.alias, handset.device_key))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ))?;
+    }
     Ok(Checked {
         set,
         mumu_root,
         bound,
+        handsets,
     })
 }
 
@@ -742,13 +1224,47 @@ fn prepare(run: &mut Run<'_>) -> Result<Said, Said> {
     Ok(Said::new("已建", "created").with(format!("{}, state, packages; log {}", root.display(), log.display())))
 }
 
-fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
+/// The manifest's `file` of `archive` unpacked to `target`, a new file, then read back against
+/// the manifest's size and SHA-256; returns its size.
+fn lay_file(archive: &mut Archive, file: &ManifestFile, target: &Path) -> Result<u64, Said> {
+    let written = archive.extract(&file.path, target)?;
+    let (sha256, size) = sha256_file(target, &mut |_: u64| {})
+        .map_err(|error| io_said("读不回刚写的文件", "the file just written cannot be read back", target, error))?;
+    if written != file.size_bytes || size != file.size_bytes || !sha256.eq_ignore_ascii_case(&file.sha256) {
+        return Err(Said::new("写出的文件与清单不符", "the file written does not match the manifest").with(format!(
+            "{}: expected {} bytes {}, found {size} bytes {sha256}",
+            target.display(),
+            file.size_bytes,
+            file.sha256
+        )));
+    }
+    Ok(size)
+}
+
+/// Step 2: each program's files laid into its folder and read back. With `pre_laid`, the Tools
+/// are there already ([`pre_lay_tools`]): checked again file by file ([`laid_tools`]) and written
+/// no more; a file that differs, one too many or one missing fails the step, named.
+fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet, pre_laid: bool) -> Result<Said, Said> {
     let total: u64 = Program::ALL.iter().map(|program| set.program(*program).bytes).sum();
     let mut done = 0u64;
     let mut counts = Vec::new();
     for program in Program::ALL {
         let verified = set.program(program);
         let dir = run.root.join(program.dir());
+        if pre_laid && program == Program::Tools {
+            let (count, bytes) = laid_tools(&dir, verified)?;
+            done += bytes;
+            run.bytes(done, total);
+            run.say(
+                Said::new(
+                    "Tools 工具已在开始安装之前先铺，逐个核过，不再写",
+                    "the Tools were laid before the install: each file checked again, none written again",
+                )
+                .with(format!("{} ({count} files)", dir.display())),
+            )?;
+            counts.push(format!("{} {count} (laid before the install, checked)", program.dir()));
+            continue;
+        }
         fs::create_dir(&dir).map_err(|error| io_said("建不了文件夹", "the folder cannot be created", &dir, error))?;
         let mut archive = Archive::open(&verified.zip)?;
         let mut count = 0usize;
@@ -757,19 +1273,7 @@ fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
                 run.say(Said::new("不放（只在 A/B 安装里用）", "not laid (A/B installations only)").with(&file.path))?;
                 continue;
             }
-            let target = under(&dir, &file.path);
-            let written = archive.extract(&file.path, &target)?;
-            let (sha256, size) = sha256_file(&target, &mut |_: u64| {})
-                .map_err(|error| io_said("读不回刚写的文件", "the file just written cannot be read back", &target, error))?;
-            if written != file.size_bytes || size != file.size_bytes || !sha256.eq_ignore_ascii_case(&file.sha256) {
-                return Err(Said::new("写出的文件与清单不符", "the file written does not match the manifest").with(format!(
-                    "{}: expected {} bytes {}, found {size} bytes {sha256}",
-                    target.display(),
-                    file.size_bytes,
-                    file.sha256
-                )));
-            }
-            done += size;
+            done += lay_file(&mut archive, file, &under(&dir, &file.path))?;
             count += 1;
             run.bytes(done, total);
         }
@@ -953,6 +1457,18 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
             start_emulator: bound.start_emulator,
         });
     }
+    let mut handsets = Vec::new();
+    for handset in &checked.handsets {
+        handsets.push(HandsetInstance {
+            alias: handset.alias.clone(),
+            instance_id: config::mint_instance_id()?,
+            application_id: handset.application_id.clone(),
+            game: handset.game.clone(),
+            server: handset.server.clone(),
+            touch_backend: handset.touch_backend.clone(),
+            capture_backend: handset.capture_backend.clone(),
+        });
+    }
     let input = ConfigInput {
         state_root,
         salt: config::mint_salt()?,
@@ -960,7 +1476,7 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
         instances,
     };
     let part = run.root.join(CONFIG_PART);
-    write_new(&part, &config::render(&config::build(&input)))?;
+    write_new(&part, &config::render(&config::build_with_handsets(&input, &handsets)))?;
     for instance in &input.instances {
         run.say(Said::new("实例", "instance").with(format!(
             "{} = MuMu #{} {}/{} {} ({} / {}{})",
@@ -974,14 +1490,100 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
             if instance.start_emulator { ", start_emulator" } else { "" }
         )))?;
     }
+    for handset in &handsets {
+        run.say(Said::new("手机实例", "phone's instance").with(format!(
+            "{} = {} {}/{} {} ({} / {})",
+            handset.alias,
+            config::HANDSET_KIND,
+            handset.game,
+            handset.server,
+            handset.instance_id,
+            handset.touch_backend,
+            handset.capture_backend
+        )))?;
+    }
     Ok((
         part.clone(),
         Said::new("配置候选已写（密钥盐不记日志）", "configuration candidate written (the salt is not logged)").with(format!(
-            "{} ({} instances)",
+            "{} ({} instances, {} of them phones)",
             part.display(),
-            input.instances.len()
+            input.instances.len() + handsets.len(),
+            handsets.len()
         )),
     ))
+}
+
+/// Step 7 (see the module's description): each phone's instance bound to its phone by the
+/// root's own Lab ([`devices::bind`]) against the candidate `part` step 6 wrote, by the device
+/// key the phone page listed it with under the run's `salt`, each answer judged
+/// ([`devices::judge_bind`]: `device_binding_changed`, else the refusal's code in a person's
+/// words); the first that fails stops the step. After each bind, whatever it answered, what the
+/// binds left in the state root is read back ([`read_back_bindings`]), and a bind left running
+/// past its time is counted as one that may still write there ([`Left::bind_left_running`]);
+/// each phone bound is counted ([`Left::phones`]). An answer taken whole while another process,
+/// most likely the adb server the Lab started, still held its output is judged as any other, the
+/// log saying so ([`devices::held_said`]).
+fn bind_phones(run: &mut Run<'_>, part: &Path, handsets: &[Handset], salt: &KeySalt) -> Result<Said, Said> {
+    let root = run.root.clone();
+    let private = root.join(STATE_DIR).join(devices::PRIVATE_DIR);
+    let file = private.join(devices::BINDINGS_FILE);
+    for handset in handsets {
+        run.plain(Said::new(
+            format!("正在绑定手机实例「{}」……", handset.alias),
+            format!("Binding the phone's instance \"{}\"…", handset.alias),
+        ));
+        let answer = devices::bind(&root, &handset.alias, &handset.device_key, part, salt);
+        run.left.bind_left_running |= matches!(&answer, Err(failed) if failed.left_running);
+        read_back_bindings(&private, &mut run.left);
+        if let Some(why) = run.left.bindings_unread.clone() {
+            run.say(Said::new("读不出绑定手机写下的文件夹", "the folder the phones' binds write cannot be read back").with(why))?;
+        }
+        let answer = answer.map_err(|failed| failed.reason)?;
+        run.answered(Said::new("devices bind 答复", "devices bind answered").with(&handset.alias), &answer)?;
+        if answer.held {
+            run.note(&devices::held_said().with(&handset.alias))?;
+        }
+        devices::judge_bind(answer.code, answer.line.as_ref()).map_err(|problem| {
+            Said::new("手机实例没有绑上", "the phone's instance was not bound")
+                .with(&handset.alias)
+                .with_said(&problem)
+        })?;
+        run.left.phones.push(handset.alias.clone());
+        run.say(Said::new("手机实例已绑定", "the phone's instance is bound").with(format!(
+            "{} ← {}",
+            handset.alias, handset.device_key
+        )))?;
+    }
+    if !file.is_file() {
+        return Err(Said::new(
+            "绑定都答复了成功，状态根里却没有绑定文件",
+            "every bind answered success, yet the state root holds no binding file",
+        )
+        .with(file.display()));
+    }
+    Ok(Said::new("已绑定", "bound").with(format!("{} → {}", run.left.phones.join(", "), file.display())))
+}
+
+/// What step 7's binds left in `private` (`<root>\state\private`), read back into `left`
+/// ([`Left::bindings`]): the folder when it is there, and every entry `read_dir` finds in it,
+/// whatever its name; why it cannot be read, when it cannot. Nothing is opened or deleted.
+fn read_back_bindings(private: &Path, left: &mut Left) {
+    left.bindings_dir = None;
+    left.bindings.clear();
+    left.bindings_unread = None;
+    let read = match fs::read_dir(private) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        read => read,
+    };
+    left.bindings_dir = Some(private.to_path_buf());
+    let entries = read.and_then(|entries| entries.map(|entry| entry.map(|entry| entry.path())).collect::<io::Result<Vec<PathBuf>>>());
+    match entries {
+        Ok(mut entries) => {
+            entries.sort();
+            left.bindings = entries;
+        }
+        Err(error) => left.bindings_unread = Some(format!("{}: {error}", private.display())),
+    }
 }
 
 fn write_new(path: &Path, text: &str) -> Result<(), Said> {
@@ -1155,7 +1757,7 @@ fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
     .with(format!("reason {FIRST_START_REASON}")))
 }
 
-/// Step 13 (see the module's description), three parts, each answer judged: the formal close
+/// Step 14 (see the module's description), three parts, each answer judged: the formal close
 /// ([`runtime::judge_shutdown`]); the full configuration at `full` put in place by the Runtime's
 /// `config replace` (bound to its SHA-256) while no Runtime runs ([`runtime::judge_replace`]),
 /// and the file in place read back; the installer's start again ([`runtime::judge_up`]), which
@@ -1293,11 +1895,14 @@ mod tests {
 
     #[test]
     fn the_steps_are_numbered_in_their_order() {
-        assert_eq!(Step::ALL.len(), 15);
+        assert_eq!(Step::ALL.len(), 16);
         for (at, step) in Step::ALL.iter().enumerate() {
             assert_eq!(step.number(), at + 1);
             assert!(!step.title().zh.is_empty() && !step.title().en.is_empty());
         }
+        // The phones are bound against the candidate, before its check.
+        assert_eq!(Step::Config.number() + 1, Step::Phones.number());
+        assert_eq!(Step::Phones.number() + 1, Step::CheckConfig.number());
         // The instances come after the pause, the last read after them, the watchdog last.
         assert!(Step::Pause.number() < Step::Bind.number());
         assert!(Step::Bind.number() < Step::Status.number());
@@ -1322,6 +1927,12 @@ mod tests {
                 pause: Pause::Held,
                 watchdog: true,
                 shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk"), PathBuf::from(r"X:\Menu\b.lnk")],
+                pre_laid_tools: None,
+                phones: Vec::new(),
+                bindings_dir: None,
+                bindings: Vec::new(),
+                bindings_unread: None,
+                bind_left_running: false,
             },
         );
         assert_eq!(all.len(), 4);
@@ -1336,7 +1947,30 @@ mod tests {
         let running = cleanup(root, &Left { running: true, ..Left::default() });
         assert_eq!(running.len(), 2);
         assert!(running[0].zh.contains("没有暂停") && running[0].en.contains("not paused"));
-        // Step 13 closed the Runtime and failed before it started again: nothing to stop, the
+        // What step 7's binds left is named, before the folder: every file read back in
+        // `private`, a write's `.tmp` too, with the serials' warning; a folder without a file
+        // says so and warns of none; a folder that could not be read, and a bind left running
+        // that may still write there, warn too, the latter naming the folder before it is made.
+        let private = Some(PathBuf::from(r"X:\Root\state\private"));
+        let files = vec![
+            PathBuf::from(r"X:\Root\state\private\device-bindings.json"),
+            PathBuf::from(r"X:\Root\state\private\device-bindings.json.tmp"),
+        ];
+        let bound = cleanup(root, &Left { phones: vec!["p1".into()], bindings_dir: private.clone(), bindings: files, ..Left::default() });
+        assert_eq!(bound.len(), 2);
+        assert!(bound[0].en.contains(r"X:\Root\state\private\device-bindings.json.tmp") && bound[0].en.contains("bound: p1"), "{}", bound[0]);
+        assert!(bound[0].zh.contains("可能存着手机的序列号") && bound[0].zh.contains("不要发给别人"), "{}", bound[0]);
+        assert!(!bound[0].en.contains("left running"), "{}", bound[0]);
+        let folder = cleanup(root, &Left { bindings_dir: private.clone(), ..Left::default() });
+        assert!(folder[0].en.contains("with no file in it") && !folder[0].en.contains("serials"), "{}", folder[0]);
+        let unread = cleanup(root, &Left { bindings_dir: private, bindings_unread: Some("denied".into()), ..Left::default() });
+        assert!(unread[0].en.contains("cannot be read (denied)") && unread[0].en.contains("serials"), "{}", unread[0]);
+        let bind_running = cleanup(root, &Left { bind_left_running: true, ..Left::default() });
+        assert_eq!(bind_running.len(), 2);
+        assert!(bind_running[0].en.contains(r"wrote nothing in X:\Root\state\private yet"), "{}", bind_running[0]);
+        assert!(bind_running[0].en.contains(r"may write in X:\Root\state\private later"), "{}", bind_running[0]);
+        assert!(bind_running[0].en.contains("serials") && bind_running[0].zh.contains("之后可能还会往"), "{}", bind_running[0]);
+        // Step 14 closed the Runtime and failed before it started again: nothing to stop, the
         // pause kept; no command to stop it is given.
         let closed = cleanup(root, &Left { closed: true, pause: Pause::Held, ..Left::default() });
         assert_eq!(closed.len(), 2);

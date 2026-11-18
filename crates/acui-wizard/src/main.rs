@@ -284,6 +284,10 @@ fn run_install(set_dir: &Path, root: &Path, plan_path: &Path) -> ExitCode {
         set_dir: set_dir.to_path_buf(),
         root: root.to_path_buf(),
         plan,
+        // The command line lays nothing before the install: it has no phone page.
+        pre_laid: None,
+        // Nor a phone: a plan file holds none (`parse_plan`), so no key salt is needed.
+        key_salt: None,
     };
     let mut print = printer();
     match install(&request, &mut print) {

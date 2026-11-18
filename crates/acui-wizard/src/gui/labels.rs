@@ -26,8 +26,13 @@ pub struct Labels {
     pub close: &'static str,
     pub ok: &'static str,
     pub quit_ask: &'static str,
+    /// The question to quit once the phone page laid the device bridge: where it stays.
+    pub quit_ask_laid: &'static str,
     pub quit_yes: &'static str,
     pub quit_no: &'static str,
+    /// On the finish page: a folder the phone page laid the device bridge into, which this
+    /// installation is not in, and what stays there.
+    pub laid_elsewhere: &'static str,
     pub busy_note: &'static str,
     pub log_line: &'static str,
     pub list_separator: &'static str,
@@ -54,10 +59,12 @@ pub struct Labels {
     pub usage_mumu: &'static str,
     /// What MuMu needs, with the oldest version the Runtime takes.
     pub usage_mumu_note: &'static str,
+    /// Also the confirm page's usage, with Android phones ticked.
     pub usage_android: &'static str,
-    /// Why the phone boxes are greyed: under the box, and said with its words to a screen reader.
+    /// What a phone does today, under its box.
     pub usage_android_note: &'static str,
     pub usage_ios: &'static str,
+    /// Why the iOS box is greyed: under the box, and said with its words to a screen reader.
     pub usage_ios_note: &'static str,
     /// With nothing ticked: what the install will be, and how instances come later.
     pub usage_none: &'static str,
@@ -87,6 +94,8 @@ pub struct Labels {
     pub root_checking: &'static str,
     pub root_fresh: &'static str,
     pub root_empty: &'static str,
+    /// The folder holds only the device bridge the phone page laid into it.
+    pub root_pre_laid: &'static str,
     pub root_space: &'static str,
     pub root_full_path: &'static str,
     pub root_network: &'static str,
@@ -130,8 +139,53 @@ pub struct Labels {
     pub emu_none_yes: &'static str,
     pub emu_none_no: &'static str,
 
-    // 7 Instances.
+    // 7 Phones.
+    /// What the page is for; `{}` takes [`Labels::instance_explained`] when no page before
+    /// explained the word (without MuMu).
+    pub phones_body: &'static str,
+    pub instance_explained: &'static str,
+    /// The one write before the install, said on the page: where the device bridge goes.
+    pub phones_write_note: &'static str,
+    pub phones_laying: &'static str,
+    pub phones_asking: &'static str,
+    pub phones_listing: &'static str,
+    pub phones_found: &'static str,
+    pub phones_none: &'static str,
+    /// The set's Lab lacks what binding a phone before the install takes.
+    pub phones_unable: &'static str,
+    pub phones_lacks: &'static str,
+    pub phones_lay_failed: &'static str,
+    pub phones_lay_left: &'static str,
+    pub phones_lay_nothing: &'static str,
+    pub phones_list_failed: &'static str,
+    /// The run's key salt could not be minted.
+    pub phones_salt_failed: &'static str,
+    pub phones_keys_unmade: &'static str,
+    pub refresh: &'static str,
+    /// A row: its model, its connection, its state.
+    pub phone_row: &'static str,
+    pub unknown_model: &'static str,
+    pub transport_usb: &'static str,
+    pub transport_tcp: &'static str,
+    pub state_device: &'static str,
+    pub state_unauthorized: &'static str,
+    pub state_offline: &'static str,
+    /// adb's `no`: no permissions.
+    pub state_no: &'static str,
+    /// What to do about a row that cannot be ticked (`acui_wizard::devices::RowUse`).
+    pub hint_unauthorized: &'static str,
+    pub hint_driver: &'static str,
+    pub hint_tcp: &'static str,
+    pub hint_no_key: &'static str,
+    pub hint_other: &'static str,
+
+    // 8 Instances.
     pub accounts_body: &'static str,
+    /// The page's note for each kind of instance it holds.
+    pub accounts_emulators_note: &'static str,
+    pub accounts_phones_note: &'static str,
+    /// A phone's instance's head line, with its model.
+    pub account_phone: &'static str,
     pub col_emulator: &'static str,
     pub col_name: &'static str,
     pub col_game: &'static str,
@@ -149,7 +203,7 @@ pub struct Labels {
     pub accounts_choose: &'static str,
     pub accounts_backend: &'static str,
 
-    // 8 Options.
+    // 9 Options.
     pub opt_desktop: &'static str,
     pub opt_start_menu: &'static str,
     pub opt_watchdog: &'static str,
@@ -162,11 +216,15 @@ pub struct Labels {
     pub key_attention: &'static str,
     pub attention_unpaused: &'static str,
 
-    // 9 Confirm.
+    // 10 Confirm.
     pub key_root: &'static str,
     pub key_usage: &'static str,
     /// The usage with nothing ticked.
     pub usage_none_short: &'static str,
+    /// The phones chosen: how many, and their instances' names.
+    pub key_phones: &'static str,
+    pub phones_value: &'static str,
+    pub confirm_phones_none: &'static str,
     pub key_accounts: &'static str,
     pub key_options: &'static str,
     pub key_folders: &'static str,
@@ -181,14 +239,18 @@ pub struct Labels {
     pub files_value: &'static str,
     /// After the files, when the instances come after the first-start pause.
     pub file_full_config: &'static str,
+    /// After the files, with phones: their binding file.
+    pub file_bindings: &'static str,
     pub confirm_note: &'static str,
 
-    // 10 Install, in the order the install runs them (`Step::ALL`).
-    pub install_steps: [&'static str; 15],
+    // 11 Install, in the order the install runs them (`Step::ALL`).
+    pub install_steps: [&'static str; 16],
     pub install_skipped: &'static str,
     pub install_pre: &'static str,
 
-    // 11 Finish.
+    // 12 Finish.
+    /// The phones' instances bound, and what they do today.
+    pub finish_phones: &'static str,
     pub finish_paused: &'static str,
     pub finish_running: &'static str,
     pub finish_installed: &'static str,
@@ -209,6 +271,9 @@ pub struct Labels {
     pub failed_checks_step: &'static str,
     pub failed_kept: &'static str,
     pub failed_nothing: &'static str,
+    /// An install that wrote nothing, after the phone page laid the device bridge somewhere
+    /// ([`Labels::laid_elsewhere`], at the page's foot, names where).
+    pub failed_nothing_laid: &'static str,
     pub copy_error: &'static str,
     pub open_log: &'static str,
     pub open_failed: &'static str,
@@ -245,7 +310,7 @@ pub const ZH: Labels = Labels {
     window_title: "ActingCommand 安装向导",
     side_name: "ActingCommand",
     side_title: "安装向导",
-    steps: ["欢迎", "用途", "安装文件", "安装位置", "游戏", "模拟器", "实例", "选项", "确认", "安装", "完成"],
+    steps: ["欢迎", "用途", "安装文件", "安装位置", "游戏", "模拟器", "手机", "实例", "选项", "确认", "安装", "完成"],
     titles: [
         "欢迎使用 ActingCommand",
         "选择用途",
@@ -253,6 +318,7 @@ pub const ZH: Labels = Labels {
         "选择安装位置",
         "选择游戏",
         "选择模拟器",
+        "选择手机",
         "设置实例",
         "其他选项",
         "确认安装",
@@ -267,8 +333,10 @@ pub const ZH: Labels = Labels {
     close: "关闭",
     ok: "好",
     quit_ask: "还没有写入任何文件，现在退出不会留下东西。确定退出吗？",
+    quit_ask_laid: "向导已经把设备桥（adb 和 Lab）铺进了 {}，退出后它们会留在那里，向导不删除。要删的话，删时如果提示文件被占用，是里面的 adb 还在后台开着：重启电脑以后再删。确定退出吗？",
     quit_yes: "退出",
     quit_no: "不退出",
+    laid_elsewhere: "向导在开始安装之前往 {} 铺过设备桥（adb 和 Lab），这套 ActingCommand 没有装在那里；那些文件原样留着，向导没有删除。不用的话可以删掉：删时如果提示文件被占用，重启电脑以后再删。",
     busy_note: "正在写入文件，请等这一步完成。",
     log_line: "安装记录：{}",
     list_separator: "、",
@@ -291,7 +359,7 @@ pub const ZH: Labels = Labels {
     usage_mumu: "MuMu 模拟器",
     usage_mumu_note: "需要先装好 MuMu 模拟器（{} 或更新），游戏已在里面装好并登录好。",
     usage_android: "安卓真机",
-    usage_android_note: "下一版就能用：在这里发现并绑定手机。",
+    usage_android_note: "能连接、能看画面；跑任务要等后续版本。",
     usage_ios: "iOS 真机",
     usage_ios_note: "还不支持，在做。",
     usage_none: "一个都不选也可以继续：向导只装核心部分，不建实例（实例：一台模拟器或一部手机，上面是登录好的游戏）。以后要加实例：监控台里现在还不能直接添加。可以再运行一次安装向导，装到另一个文件夹（那是另一套 ActingCommand，和这一套分开运行）；也可以等以后的新版支持。",
@@ -318,6 +386,7 @@ pub const ZH: Labels = Labels {
     root_checking: "正在检查……",
     root_fresh: "这个文件夹还不存在，会新建",
     root_empty: "这个文件夹是空的",
+    root_pre_laid: "这里只有向导先铺的设备桥（tools 文件夹），安装会核对后接着用它",
     root_space: "磁盘剩余 {}，够用（需要约 {}）",
     root_full_path: "请填写完整路径，比如 D:\\ActingCommand。",
     root_network: "不能装到网络上的文件夹，请选这台电脑硬盘上的文件夹。",
@@ -358,7 +427,41 @@ pub const ZH: Labels = Labels {
     emu_none_yes: "继续",
     emu_none_no: "返回",
 
+    phones_body: "用 USB 线把手机连到这台电脑，并在手机的开发者选项里打开「USB 调试」。下面是这台电脑现在看到的设备；勾选要交给 ActingCommand 的手机，每部勾选的手机在 ActingCommand 里是一个手机实例{}。手机实例能连接、能看画面；跑任务要等后续版本。向导不显示手机的序列号。",
+    instance_explained: "（实例：一台模拟器或一部手机，上面是登录好的游戏）",
+    phones_write_note: "找手机要用安装位置里自己的设备桥，所以向导在这一页把它（adb 和 Lab）铺进 {}：这是开始安装之前唯一写下的东西，安装时会逐个核对后接着用。不装了的话，它会留在那里，向导不删除。",
+    phones_laying: "正在把设备桥（adb 和 Lab）铺进安装位置……",
+    phones_asking: "正在问设备桥：能不能在安装之前绑定手机……",
+    phones_listing: "正在找连着的手机……",
+    phones_found: "只有用 USB 连着、已经允许调试的手机能勾选；别的设备照实列出，下面写着怎么办。",
+    phones_none: "没有发现手机。插好手机、打开 USB 调试后按「刷新」；也可以不选手机继续，以后再加：监控台里现在还不能直接添加，可以再运行一次安装向导，装到另一个文件夹（那是另一套 ActingCommand，和这一套分开运行），或等以后的新版支持。",
+    phones_unable: "这份安装集里的 Runtime 还不能在安装前绑定手机，请回到用途页取消安卓真机，或换用新的安装集。",
+    phones_lacks: "它的设备桥缺少：{}",
+    phones_lay_failed: "设备桥没能铺进安装位置：{}。",
+    phones_lay_left: "已经写下的留在 {}，向导没有删除。要再试，请回到「安装位置」换一个空文件夹，或者删掉它以后按「刷新」。",
+    phones_lay_nothing: "什么都没有写。可以按「刷新」再试。",
+    phones_list_failed: "找手机时出了问题：{}。可以按「刷新」再试，也可以回到用途页取消安卓真机。",
+    phones_salt_failed: "向导取不到系统的随机数，认不了手机：{}。请回到用途页取消安卓真机。",
+    phones_keys_unmade: "设备桥没能给手机算出设备键（{}），所以没有能勾选的手机。",
+    refresh: "刷新",
+    phone_row: "{} · {} · {}",
+    unknown_model: "未知型号",
+    transport_usb: "USB",
+    transport_tcp: "网络（TCP）",
+    state_device: "已连接",
+    state_unauthorized: "未允许调试",
+    state_offline: "离线",
+    state_no: "没有权限",
+    hint_unauthorized: "请在手机上允许 USB 调试，然后按刷新",
+    hint_driver: "电脑缺这台手机的 USB 驱动，或者没连好；驱动要去手机厂商那里装，我们不带",
+    hint_tcp: "这是模拟器或无线连接，不能当手机绑定",
+    hint_no_key: "设备桥没给这部手机算出设备键，向导认不出它，不能勾选",
+    hint_other: "状态：{}",
+
     accounts_body: "告诉向导每个实例是哪个游戏、哪个区服。",
+    accounts_emulators_note: "模拟器实例：勾选的每台模拟器一个。",
+    accounts_phones_note: "手机实例：勾选的每部手机一个，能连接、能看画面；跑任务要等后续版本。截图和触控方式在「高级设置」里，默认 adb 和 adb_shell_input。",
+    account_phone: "手机 · {}",
     col_emulator: "模拟器",
     col_name: "名字",
     col_game: "游戏",
@@ -389,6 +492,9 @@ pub const ZH: Labels = Labels {
     key_root: "安装位置",
     key_usage: "用途",
     usage_none_short: "只装核心部分，不建实例",
+    key_phones: "手机",
+    phones_value: "{} 部：{}",
+    confirm_phones_none: "没有选手机（以后可以再添加）",
     key_accounts: "实例",
     key_options: "选项",
     key_folders: "会建的文件夹",
@@ -407,6 +513,7 @@ pub const ZH: Labels = Labels {
     folder_licenses: "licenses",
     files_value: "actingd.config.json（设置）、acui.toml（监控台设置）、install-wizard.log（安装记录）",
     file_full_config: "install-wizard.config.json（带实例的设置：暂停之后先停下 ActingCommand，再换上）",
+    file_bindings: "state\\private\\device-bindings.json（手机绑定：手机的序列号只记在这里）",
     confirm_note: "按「开始安装」后，向导会把文件写进 {}。安装时请不要关窗口。开始以后就不能再回到前面几页了。",
 
     install_steps: [
@@ -416,6 +523,7 @@ pub const ZH: Labels = Labels {
         "复制游戏资源",
         "检查游戏资源",
         "写入设置",
+        "绑定手机",
         "检查设置",
         "登记这次安装",
         "写入监控台设置",
@@ -429,6 +537,7 @@ pub const ZH: Labels = Labels {
     install_skipped: "跳过",
     install_pre: "正在做写入前的最后检查：再核一遍安装文件、模拟器和安装位置……",
 
+    finish_phones: "手机实例已绑定：{}。它们能连接、能看画面；跑任务要等后续版本。",
     finish_paused: "ActingCommand 已装到 {}，正在运行，所有实例都先暂停着。",
     finish_running: "ActingCommand 已装到 {}，正在运行。",
     finish_installed: "ActingCommand 已装到 {}。打开监控台后按「启动」即可运行。",
@@ -445,6 +554,7 @@ pub const ZH: Labels = Labels {
     failed_checks_step: "写入前的检查",
     failed_kept: "已经写进 {} 的文件都原样留着，向导没有删除任何东西。可以把下面的错误信息和安装记录发给提供安装包的人（安装记录里写着安装位置等文件夹的路径）。要重新安装，请依次：",
     failed_nothing: "还没有写入任何文件。可以把下面的错误信息发给提供安装包的人，或者改好以后重新运行向导。",
+    failed_nothing_laid: "这次安装还没有写入任何文件；之前为找手机铺的设备桥见本页最下面。可以把下面的错误信息发给提供安装包的人，或者改好以后重新运行向导。",
     copy_error: "复制错误信息",
     open_log: "打开安装记录",
     open_failed: "打不开：{}",
@@ -455,8 +565,8 @@ pub const EN: Labels = Labels {
     side_name: "ActingCommand",
     side_title: "Setup",
     steps: [
-        "Welcome", "Usage", "Files", "Location", "Games", "Emulator", "Instances", "Options", "Confirm", "Install",
-        "Finish",
+        "Welcome", "Usage", "Files", "Location", "Games", "Emulator", "Phones", "Instances", "Options", "Confirm",
+        "Install", "Finish",
     ],
     titles: [
         "Welcome to ActingCommand",
@@ -465,6 +575,7 @@ pub const EN: Labels = Labels {
         "Choose where to install",
         "Choose games",
         "Choose emulators",
+        "Choose phones",
         "Set up instances",
         "Other options",
         "Ready to install",
@@ -479,8 +590,10 @@ pub const EN: Labels = Labels {
     close: "Close",
     ok: "OK",
     quit_ask: "Nothing has been written yet; quitting now leaves nothing behind. Quit?",
+    quit_ask_laid: "The wizard has laid the device bridge (adb and the Lab) into {}; after quitting it stays there, the wizard deletes nothing. To delete it: should deleting say a file is in use, the adb in it still runs in the background, so restart the computer first. Quit?",
     quit_yes: "Quit",
     quit_no: "Stay",
+    laid_elsewhere: "Before the install the wizard laid the device bridge (adb and the Lab) into {}, where this ActingCommand is not installed; those files stay as they are, the wizard deleted nothing. Delete them if you do not need them: should deleting say a file is in use, restart the computer first.",
     busy_note: "Files are being written. Please wait for this step to finish.",
     log_line: "Setup log: {}",
     list_separator: ", ",
@@ -503,7 +616,7 @@ pub const EN: Labels = Labels {
     usage_mumu: "MuMu emulator",
     usage_mumu_note: "Needs MuMu emulator {} or later installed first, with the game installed and signed in.",
     usage_android: "Android phone",
-    usage_android_note: "Coming in the next version: finding and binding your phone here.",
+    usage_android_note: "Connects and shows its screen; running tasks comes in a later version.",
     usage_ios: "iOS device",
     usage_ios_note: "Not supported yet; in the works.",
     usage_none: "You can go on with none ticked: the wizard installs only the core and sets up no instance (an instance is one emulator or one phone, with the games signed in on it). To add instances later: the console cannot add them yet. Run this wizard again and install into another folder (that is a second ActingCommand, running apart from this one), or wait for a later version that can.",
@@ -530,6 +643,7 @@ pub const EN: Labels = Labels {
     root_checking: "Checking…",
     root_fresh: "The folder does not exist yet and will be created",
     root_empty: "The folder is empty",
+    root_pre_laid: "It holds only the device bridge the wizard laid (the tools folder), which the install checks and goes on with",
     root_space: "{} free on this disk; about {} is needed",
     root_full_path: "Enter a full path, such as D:\\ActingCommand.",
     root_network: "A folder on the network cannot be used; choose a folder on this computer's own disk.",
@@ -570,7 +684,41 @@ pub const EN: Labels = Labels {
     emu_none_yes: "Continue",
     emu_none_no: "Go back",
 
+    phones_body: "Connect the phone to this computer with a USB cable and turn on \"USB debugging\" in its developer options. Below are the devices this computer sees now; tick the phones to hand over to ActingCommand: each phone ticked is one phone instance in ActingCommand{}. A phone instance connects and shows its screen; running tasks comes in a later version. The wizard does not show the phones' serial numbers.",
+    instance_explained: " (an instance is one emulator or one phone, with the games signed in on it)",
+    phones_write_note: "Phones are found with the install folder's own device bridge, so on this page the wizard lays it (adb and the Lab) into {}: the one thing written before the install, which the install checks file by file and goes on with. Should you not install, it stays there; the wizard deletes nothing.",
+    phones_laying: "Laying the device bridge (adb and the Lab) into the install folder…",
+    phones_asking: "Asking the device bridge whether it can bind a phone before the install…",
+    phones_listing: "Looking for connected phones…",
+    phones_found: "Only a phone on USB that allows debugging can be ticked; the other devices are listed as they are, each with what to do.",
+    phones_none: "No phone was found. Plug the phone in, turn on USB debugging and press Refresh; or go on without a phone and add one later: the console cannot add one yet, so run this wizard again and install into another folder (that is a second ActingCommand, running apart from this one), or wait for a later version that can.",
+    phones_unable: "The Runtime in this setup package cannot bind a phone before the install yet. Go back to the usage page and untick Android phone, or use a newer setup package.",
+    phones_lacks: "Its device bridge lacks: {}",
+    phones_lay_failed: "The device bridge could not be laid into the install folder: {}.",
+    phones_lay_left: "What was written stays in {}; the wizard deleted nothing. To try again, go back to the location and choose an empty folder, or delete it and press Refresh.",
+    phones_lay_nothing: "Nothing was written. Press Refresh to try again.",
+    phones_list_failed: "Something went wrong looking for phones: {}. Press Refresh to try again, or go back to the usage page and untick Android phone.",
+    phones_salt_failed: "The wizard cannot get the system's random numbers, so it cannot tell phones apart: {}. Go back to the usage page and untick Android phone.",
+    phones_keys_unmade: "The device bridge made no device keys for the phones ({}), so none can be ticked.",
+    refresh: "Refresh",
+    phone_row: "{} · {} · {}",
+    unknown_model: "Unknown model",
+    transport_usb: "USB",
+    transport_tcp: "Network (TCP)",
+    state_device: "Connected",
+    state_unauthorized: "Debugging not allowed",
+    state_offline: "Offline",
+    state_no: "No permission",
+    hint_unauthorized: "Allow USB debugging on the phone, then press Refresh",
+    hint_driver: "This computer lacks the phone's USB driver, or it is not connected well; the driver comes from the phone's maker and is not included here",
+    hint_tcp: "This is an emulator or a wireless connection; it cannot be bound as a phone",
+    hint_no_key: "The device bridge made no device key for this phone, so the wizard cannot tell it again; it cannot be ticked",
+    hint_other: "State: {}",
+
     accounts_body: "For each instance, tell the wizard its game and server.",
+    accounts_emulators_note: "Emulator instances: one for each emulator ticked.",
+    accounts_phones_note: "Phone instances: one for each phone ticked; they connect and show their screens, and running tasks comes in a later version. Their capture and touch methods are under Advanced: adb and adb_shell_input by default.",
+    account_phone: "Phone · {}",
     col_emulator: "Emulator",
     col_name: "Name",
     col_game: "Game",
@@ -601,6 +749,9 @@ pub const EN: Labels = Labels {
     key_root: "Location",
     key_usage: "Usage",
     usage_none_short: "Only the core, no instance",
+    key_phones: "Phones",
+    phones_value: "{} chosen: {}",
+    confirm_phones_none: "None chosen (you can add them later)",
     key_accounts: "Instances",
     key_options: "Options",
     key_folders: "Folders created",
@@ -619,6 +770,7 @@ pub const EN: Labels = Labels {
     folder_licenses: "licenses",
     files_value: "actingd.config.json (settings), acui.toml (console settings), install-wizard.log (setup log)",
     file_full_config: "install-wizard.config.json (the settings with the instances: after the pause, ActingCommand is stopped and they are put in place)",
+    file_bindings: "state\\private\\device-bindings.json (the phone bindings: the only place the phones' serial numbers are kept)",
     confirm_note: "When you press Install, the wizard writes files into {}. Keep this window open while it installs. Once it starts you cannot go back to the earlier pages.",
 
     install_steps: [
@@ -628,6 +780,7 @@ pub const EN: Labels = Labels {
         "Copy game resources",
         "Check game resources",
         "Write settings",
+        "Bind the phones",
         "Check settings",
         "Register this installation",
         "Write console settings",
@@ -641,6 +794,7 @@ pub const EN: Labels = Labels {
     install_skipped: "Skipped",
     install_pre: "Running the last checks before anything is written: the setup files, the emulators and the folder…",
 
+    finish_phones: "The phone instances are bound: {}. They connect and show their screens; running tasks comes in a later version.",
     finish_paused: "ActingCommand is installed in {} and running, with every instance paused for now.",
     finish_running: "ActingCommand is installed in {} and running.",
     finish_installed: "ActingCommand is installed in {}. Open the console and press Start to run it.",
@@ -657,6 +811,7 @@ pub const EN: Labels = Labels {
     failed_checks_step: "the checks before writing",
     failed_kept: "Files already written to {} are left as they are; the wizard deleted nothing. You can send the error and the setup log below to whoever gave you the package (the log holds the paths of the install folder and others). To install again:",
     failed_nothing: "Nothing has been written yet. Send the error below to whoever gave you the package, or fix the problem and run the wizard again.",
+    failed_nothing_laid: "This install has not written anything yet; the device bridge laid earlier to find the phones is named at the foot of this page. Send the error below to whoever gave you the package, or fix the problem and run the wizard again.",
     copy_error: "Copy error",
     open_log: "Open setup log",
     open_failed: "Could not open it: {}",

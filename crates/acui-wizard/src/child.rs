@@ -1,16 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The programs the wizard runs: always without a window, with no input, both output streams
-//! read whole on threads of their own, within a time limit. A read-only child past its time is
+//! read on threads of their own (whole, or as far as the last paragraph says), within a time
+//! limit. A read-only child past its time is
 //! ended; a child that changes the installation is never ended (it is left running and the
 //! install stops, saying so). Every variable of the Runtime's and the Lab's own
 //! (`ACTINGCOMMAND_…`, `ACTINGLAB_…`) is removed from every child's environment, whatever the
 //! wizard was started with ([`cleared_variables`]); a child gets only those its [`Spec`] sets.
+//!
+//! An argument may be a secret ([`Spec::secret_arg`]): the child gets it as it is, and the wizard
+//! writes [`REDACTED`] for it wherever it shows the command line — the line every answer carries
+//! into the log ([`Spec::text`]), each reason [`run`] gives, the spec's `Debug` — and wherever the
+//! child's own output repeats it ([`Output`]). So may a variable of the child's environment
+//! ([`Spec::secret_env`], the run's key salt, which the Lab reads from a variable it is named on
+//! the command line): the value is on no command line at all, the spec's `Debug` writes
+//! [`REDACTED`] for it, and so does the child's output wherever it repeats it. The command line
+//! a child is visible by to the user's other processes then names the variable, never its value.
+//!
+//! A stream is read to its end, which comes once every process that holds the pipe has closed
+//! it. A process the child started may have inherited the pipes and hold them long after the
+//! child exited: Windows hands a child every inheritable handle of its parent, and the adb server
+//! an adb client starts keeps them for its whole life (Runtime
+//! `crates/host-metrics/src/standard_handles.rs`, on actingd's own output). So the wizard waits
+//! for that end only so long after the exit: [`PIPE_GRACE`], then fails ([`OnHeld::Fail`]); or,
+//! for a child that may start the adb server and whose answer is its last line, [`HELD_GRACE`],
+//! then takes both streams as read by then, marked [`Output::held`], and leaves the threads still
+//! reading to the pipes' end ([`OnHeld::Take`]; the caller checks the line is whole:
+//! [`whole_line`]).
 
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -25,6 +47,14 @@ const OUTPUT_LIMIT: usize = 8 << 20;
 /// How long the output pipes may stay open after the child exited (a grandchild that inherited
 /// them would hold them).
 const PIPE_GRACE: Duration = Duration::from_secs(30);
+/// The same, for a child whose answer is taken without its pipes' end ([`OnHeld::Take`]). Once
+/// the child has exited, every byte it wrote is in the pipe already: a write to a pipe returns
+/// only once the pipe holds its bytes, and the Lab writes its line and flushes it before it
+/// returns its exit code (Runtime `apps/actinglab/src/cli_module.rs` `print_text`). The reader
+/// threads read all along, so what is left after the exit is at most what one pipe buffers,
+/// which they read in milliseconds; 5 s is that with room for a busy machine to run them late.
+/// The process that holds the pipes writes nothing into them: it knows nothing of them.
+const HELD_GRACE: Duration = Duration::from_secs(5);
 
 /// The prefixes of the variables the Runtime's programs and the Lab read. Among them: the state
 /// root a Lab core command takes over its own root's whenever it is set
@@ -76,13 +106,30 @@ pub enum OnTimeout {
     Leave,
 }
 
+/// What to do when the output pipes are still open after the child exited, held by a process it
+/// started (see the module's description).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnHeld {
+    /// Wait [`PIPE_GRACE`] for their end, else fail: what was read may not be whole.
+    Fail,
+    /// Wait [`HELD_GRACE`], then take both streams as read by then, marked [`Output::held`]: for
+    /// a child whose answer is its last line, which the caller checks is whole ([`whole_line`]).
+    Take,
+}
+
+/// What the wizard writes for a secret argument (see the module's description).
+pub const REDACTED: &str = "<redacted>";
+
 /// One program to run.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Spec {
     pub program: PathBuf,
     pub args: Vec<OsString>,
     pub env: Vec<(String, String)>,
     pub cwd: Option<PathBuf>,
+    /// The values of the secret arguments among `args` ([`Spec::secret_arg`]) and of the secret
+    /// variables among `env` ([`Spec::secret_env`]).
+    secrets: Vec<String>,
 }
 
 impl Spec {
@@ -92,6 +139,7 @@ impl Spec {
             args: Vec::new(),
             env: Vec::new(),
             cwd: None,
+            secrets: Vec::new(),
         }
     }
 
@@ -100,8 +148,42 @@ impl Spec {
         self
     }
 
+    /// `value` as the next argument, a secret one (see the module's description).
+    pub fn secret_arg(mut self, value: &str) -> Self {
+        self.args.push(OsString::from(value));
+        if !value.is_empty() {
+            self.secrets.push(value.to_owned());
+        }
+        self
+    }
+
+    /// `text` with each secret in it written [`REDACTED`].
+    fn shown(&self, text: &str) -> String {
+        self.secrets
+            .iter()
+            .fold(text.to_owned(), |text, secret| text.replace(secret.as_str(), REDACTED))
+    }
+
+    /// `bytes`, a child's output, with each secret in it written [`REDACTED`].
+    fn scrubbed(&self, bytes: Vec<u8>) -> Vec<u8> {
+        self.secrets
+            .iter()
+            .fold(bytes, |bytes, secret| replaced(&bytes, secret.as_bytes(), REDACTED.as_bytes()))
+    }
+
     pub fn env(mut self, name: &str, value: &str) -> Self {
         self.env.push((name.to_owned(), value.to_owned()));
+        self
+    }
+
+    /// The variable `name` of the child's environment set to `value`, a secret one (see the
+    /// module's description): never on the command line, written [`REDACTED`] in the spec's
+    /// `Debug` and in the child's output.
+    pub fn secret_env(mut self, name: &str, value: &str) -> Self {
+        self.env.push((name.to_owned(), value.to_owned()));
+        if !value.is_empty() {
+            self.secrets.push(value.to_owned());
+        }
         self
     }
 
@@ -110,15 +192,50 @@ impl Spec {
         self
     }
 
-    /// The command line as the log shows it.
+    /// The command line as the log shows it, each secret argument written [`REDACTED`].
     pub fn text(&self) -> String {
-        let mut text = quoted(&self.program.to_string_lossy());
+        let mut text = quoted(&self.shown(&self.program.to_string_lossy()));
         for arg in &self.args {
             text.push(' ');
-            text.push_str(&quoted(&arg.to_string_lossy()));
+            text.push_str(&quoted(&self.shown(&arg.to_string_lossy())));
         }
         text
     }
+}
+
+/// The spec with its secret arguments written [`REDACTED`], as [`Spec::text`] writes them, and
+/// the values of its secret variables too.
+impl fmt::Debug for Spec {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let args: Vec<String> = self.args.iter().map(|arg| self.shown(&arg.to_string_lossy())).collect();
+        let env: Vec<(&str, String)> = self.env.iter().map(|(name, value)| (name.as_str(), self.shown(value))).collect();
+        formatter
+            .debug_struct("Spec")
+            .field("program", &self.program)
+            .field("args", &args)
+            .field("env", &env)
+            .field("cwd", &self.cwd)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `bytes` with each `needle` in it replaced by `with`.
+fn replaced(bytes: &[u8], needle: &[u8], with: &[u8]) -> Vec<u8> {
+    if needle.is_empty() {
+        return bytes.to_vec();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at..].starts_with(needle) {
+            out.extend_from_slice(with);
+            at += needle.len();
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    out
 }
 
 fn quoted(word: &str) -> String {
@@ -129,13 +246,17 @@ fn quoted(word: &str) -> String {
     }
 }
 
-/// A finished child: its exit code (`None` when it had none), both streams, its time.
+/// A finished child: its exit code (`None` when it had none), both streams (each secret argument
+/// or variable of its spec written [`REDACTED`] wherever the child repeated it), its time.
 #[derive(Debug, Clone)]
 pub struct Output {
     pub code: Option<i32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub elapsed: Duration,
+    /// The pipes were still open [`HELD_GRACE`] after the child exited, held by another process,
+    /// and both streams are what was read by then ([`OnHeld::Take`]).
+    pub held: bool,
 }
 
 impl Output {
@@ -154,13 +275,28 @@ impl Output {
     }
 }
 
-enum Stream {
-    Out,
-    Err,
+/// Why [`run_or_left`] has no output: the reason [`run`] gives, and whether the child was left
+/// running past its time ([`OnTimeout::Leave`]), when it may still be changing the installation.
+#[derive(Debug, Clone)]
+pub struct NoOutput {
+    pub reason: Said,
+    pub left_running: bool,
+}
+
+impl From<Said> for NoOutput {
+    fn from(reason: Said) -> Self {
+        Self { reason, left_running: false }
+    }
 }
 
 /// Runs `spec` (see the module's description).
 pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Output, Said> {
+    run_or_left(spec, timeout, on_timeout, OnHeld::Fail).map_err(|failed| failed.reason)
+}
+
+/// [`run`], telling a child left running past its time ([`NoOutput::left_running`]) from every
+/// other failure, its pipes still held after it exited dealt with as `on_held` says.
+pub fn run_or_left(spec: &Spec, timeout: Duration, on_timeout: OnTimeout, on_held: OnHeld) -> Result<Output, NoOutput> {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -183,13 +319,15 @@ pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Outp
     let mut child = command.spawn().map_err(|error| {
         Said::new("程序运行不起来", "the program cannot be run").with(format!("{}: {error}", spec.text()))
     })?;
-    let (sender, receiver) = mpsc::channel::<(Stream, std::io::Result<Vec<u8>>)>();
+    let (sender, receiver) = mpsc::channel::<std::io::Result<()>>();
+    let out_kept = Arc::new(Mutex::new(Vec::new()));
+    let err_kept = Arc::new(Mutex::new(Vec::new()));
     let mut readers = 0;
     if let Some(pipe) = child.stdout.take() {
-        readers += reader(pipe, Stream::Out, sender.clone());
+        readers += reader(pipe, Arc::clone(&out_kept), sender.clone());
     }
     if let Some(pipe) = child.stderr.take() {
-        readers += reader(pipe, Stream::Err, sender.clone());
+        readers += reader(pipe, Arc::clone(&err_kept), sender.clone());
     }
     drop(sender);
     let deadline = started + timeout;
@@ -205,83 +343,104 @@ pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Outp
                             Ok(()) => "ended".to_owned(),
                             Err(error) => format!("could not be ended: {error}"),
                         };
-                        Said::new(
-                            format!("程序 {seconds} 秒内没有结束（{ended}）"),
-                            format!("the program did not finish within {seconds} s ({ended})"),
+                        NoOutput::from(
+                            Said::new(
+                                format!("程序 {seconds} 秒内没有结束（{ended}）"),
+                                format!("the program did not finish within {seconds} s ({ended})"),
+                            )
+                            .with(spec.text()),
                         )
-                        .with(spec.text())
                     }
-                    OnTimeout::Leave => Said::new(
-                        format!("程序 {seconds} 秒内没有结束；它可能还在改动安装，向导没有终止它（进程号 {}），结果未确认", child.id()),
-                        format!(
-                            "the program did not finish within {seconds} s; it may still be changing the installation, so it was left running (pid {}) and its result is unconfirmed",
-                            child.id()
-                        ),
-                    )
-                    .with(spec.text()),
+                    OnTimeout::Leave => NoOutput {
+                        reason: Said::new(
+                            format!("程序 {seconds} 秒内没有结束；它可能还在改动安装，向导没有终止它（进程号 {}），结果未确认", child.id()),
+                            format!(
+                                "the program did not finish within {seconds} s; it may still be changing the installation, so it was left running (pid {}) and its result is unconfirmed",
+                                child.id()
+                            ),
+                        )
+                        .with(spec.text()),
+                        left_running: true,
+                    },
                 });
             }
             Err(error) => {
                 return Err(Said::new("程序的状态读不出", "the program's state cannot be read")
-                    .with(format!("{}: {error}", spec.text())))
+                    .with(format!("{}: {error}", spec.text()))
+                    .into())
             }
         }
     };
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let grace = Instant::now() + PIPE_GRACE;
+    let grace = Instant::now()
+        + match on_held {
+            OnHeld::Fail => PIPE_GRACE,
+            OnHeld::Take => HELD_GRACE,
+        };
+    let mut held = false;
     for _ in 0..readers {
         let left = grace.saturating_duration_since(Instant::now());
         match receiver.recv_timeout(left) {
-            Ok((stream, Ok(bytes))) => match stream {
-                Stream::Out => stdout = bytes,
-                Stream::Err => stderr = bytes,
-            },
-            Ok((_, Err(error))) => {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
                 return Err(Said::new("程序的输出读不出", "the program's output cannot be read")
-                    .with(format!("{}: {error}", spec.text())))
+                    .with(format!("{}: {error}", spec.text()))
+                    .into())
+            }
+            // What was read by now is taken; a thread still reading is not waited for: it ends
+            // when the pipe does, whenever the process that holds it closes it.
+            Err(mpsc::RecvTimeoutError::Timeout) if on_held == OnHeld::Take => {
+                held = true;
+                break;
             }
             Err(_) => {
                 return Err(Said::new(
                     "程序已结束，但它的输出管道仍被别的进程占着",
                     "the program has ended, but another process still holds its output open",
                 )
-                .with(spec.text()))
+                .with(spec.text())
+                .into())
             }
         }
     }
     Ok(Output {
         code: status.code(),
-        stdout,
-        stderr,
+        stdout: spec.scrubbed(read_so_far(&out_kept)),
+        stderr: spec.scrubbed(read_so_far(&err_kept)),
         elapsed: started.elapsed(),
+        held,
     })
 }
 
-/// A thread reading `pipe` whole; 1 when it started, 0 when the system refused the thread (its
-/// output is then lost, and the failure shows as the missing stream).
+/// What a reader thread kept of its stream by now.
+fn read_so_far(kept: &Mutex<Vec<u8>>) -> Vec<u8> {
+    kept.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// A thread reading `pipe` to its end into `kept` (its first [`OUTPUT_LIMIT`] bytes), which tells
+/// `sender` once the pipe ended or failed; 1 when it started, 0 when the system refused the
+/// thread (its output is then lost, and the failure shows as the missing stream).
 fn reader(
     mut pipe: impl Read + Send + 'static,
-    stream: Stream,
-    sender: mpsc::Sender<(Stream, std::io::Result<Vec<u8>>)>,
+    kept: Arc<Mutex<Vec<u8>>>,
+    sender: mpsc::Sender<std::io::Result<()>>,
 ) -> usize {
     let spawned = std::thread::Builder::new()
         .name("acsetup-child-output".into())
         .spawn(move || {
-            let mut kept = Vec::new();
             let mut buffer = [0u8; 8192];
             let read = loop {
                 match pipe.read(&mut buffer) {
-                    Ok(0) => break Ok(kept),
+                    Ok(0) => break Ok(()),
                     Ok(count) => {
-                        let room = OUTPUT_LIMIT.saturating_sub(kept.len());
-                        kept.extend_from_slice(&buffer[..count.min(room)]);
+                        let mut so_far = kept.lock().unwrap_or_else(PoisonError::into_inner);
+                        let room = OUTPUT_LIMIT.saturating_sub(so_far.len());
+                        so_far.extend_from_slice(&buffer[..count.min(room)]);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(error) => break Err(error),
                 }
             };
-            let _ = sender.send((stream, read));
+            let _ = sender.send(read);
         });
     usize::from(spawned.is_ok())
 }
@@ -295,6 +454,21 @@ pub fn json_line(stdout: &str) -> Option<Value> {
         .map(|line| line.trim().trim_start_matches('\u{feff}'))
         .filter(|line| line.starts_with('{'))
         .find_map(|line| serde_json::from_str::<Value>(line).ok().filter(Value::is_object))
+}
+
+/// `stdout`'s last line when it is a whole result line: ended by its newline, and a JSON object
+/// (a byte-order mark allowed) with an `outcome` object; else `None`. What a Lab whose pipes
+/// were held ([`Output::held`]) answered counts only then: it writes nothing on stdout but that
+/// one line, its newline last (Runtime `apps/actinglab/src/cli_module.rs` `print_text`), so a line
+/// cut short, by the pipe or at [`OUTPUT_LIMIT`], has no newline after it.
+pub fn whole_line(stdout: &str) -> Option<Value> {
+    let lines = stdout.strip_suffix('\n')?;
+    let lines = lines.strip_suffix('\r').unwrap_or(lines);
+    let last = lines.rsplit('\n').next().unwrap_or(lines);
+    let last = last.trim().trim_start_matches('\u{feff}');
+    serde_json::from_str::<Value>(last)
+        .ok()
+        .filter(|line| line["outcome"].is_object())
 }
 
 /// The top outcome of a result line, `{code, category}` of its `outcome` member (an
@@ -378,6 +552,28 @@ mod tests {
         assert_eq!(json_line("no json here\n[1,2]\n"), None);
         assert_eq!(json_line("\u{feff}{\"a\":1}"), Some(json!({"a": 1})));
         assert_eq!(outcome_of(&json!({"a": 1})), Outcome::default());
+    }
+
+    #[test]
+    fn a_held_answer_is_whole_only_with_its_result_line_last_and_ended() {
+        // As Runtime crates/lab-ops/src/gate_398_db2.rs answers a list, the rows left out.
+        let line = r#"{"devices":[],"outcome":{"code":"device_list_reported","category":"success"}}"#;
+        let whole = whole_line(&format!("{line}\n")).expect("a whole line");
+        assert_eq!(outcome_of(&whole).code.as_deref(), Some("device_list_reported"));
+        assert!(whole_line(&format!("INFO before\n{line}\r\n")).is_some());
+        assert!(whole_line(&format!("\u{feff}{line}\n")).is_some());
+        // Without its newline, cut short, not written yet, or not the last line.
+        assert_eq!(whole_line(line), None);
+        assert_eq!(whole_line(&format!("{}\n", &line[..40])), None);
+        assert_eq!(whole_line(&line[..40]), None);
+        assert_eq!(whole_line(""), None);
+        assert_eq!(whole_line("\n"), None);
+        assert_eq!(whole_line(&format!("{line}\nINFO after\n")), None);
+        assert_eq!(whole_line(&format!("{line}\n\n")), None);
+        // An object without an outcome, an outcome that is no object, and no object at all.
+        assert_eq!(whole_line("{\"devices\":[]}\n"), None);
+        assert_eq!(whole_line("{\"outcome\":\"device_list_reported\"}\n"), None);
+        assert_eq!(whole_line("[{\"outcome\":{}}]\n"), None);
     }
 
     #[test]

@@ -12,6 +12,16 @@
 //! the game's longest id in its `schedule.json` leaves room for: 128 bytes less that id and the
 //! `@`. The rule holds whether or not a second instance is bound today, so adding one later
 //! does not make an existing alias unusable.
+//!
+//! An alias does not begin with `-` either. The install hands a phone's alias to the Lab's
+//! `devices bind` as a bare word of its command line, and the Lab takes a word that begins with
+//! `--` for an option (Runtime `apps/actinglab/src/cli_module/words.rs`, the parser of a row's
+//! words: an undeclared one is refused `actingctl_usage_invalid`), as `devices bind` itself does
+//! for its alias (`crates/lab-ops/src/devices.rs` `parse`) and as `--instance` does for its value:
+//! such a name would pass every check before the install and fail it half-way. The wizard keeps
+//! any leading `-` out, a rule a person reads at once, for every instance alike, an emulator's
+//! and a phone's, the window's and a plan file's, so that a name never stops being usable for a
+//! phone.
 
 use serde_json::Value;
 
@@ -30,6 +40,9 @@ pub enum AliasIssue {
     Empty,
     Whitespace,
     Control,
+    /// Begins with `-`, which the Lab's command line could take for an option (see the module's
+    /// description).
+    LeadingDash,
     /// Longer than `limit` bytes.
     TooLong { limit: usize },
 }
@@ -44,6 +57,7 @@ impl AliasIssue {
                 "名字里有看不见的控制字符，请重新输入",
                 "it contains an invisible control character; type it again",
             ),
+            Self::LeadingDash => Said::new("名字不能以 - 开头", "it cannot start with -"),
             Self::TooLong { limit } => Said::new(
                 format!("太长了，最多 {limit} 个英文字母或数字，或者 {} 个汉字", limit / 3),
                 format!("it is too long: at most {limit} letters or digits, or {} Chinese characters", limit / 3),
@@ -74,6 +88,9 @@ pub fn alias_issue(alias: &str, limit: usize) -> Option<AliasIssue> {
     }
     if alias.chars().any(char::is_control) {
         return Some(AliasIssue::Control);
+    }
+    if alias.starts_with('-') {
+        return Some(AliasIssue::LeadingDash);
     }
     let limit = limit.min(MAX_ALIAS_BYTES);
     if alias.len() > limit {
@@ -133,13 +150,27 @@ pub fn longest_item_id(bytes: &[u8]) -> Result<usize, Said> {
 
 /// The alias the window offers for MuMu instance `index` playing a game: `<name>-<index>`, the
 /// name being the game's display name `label`, else its folder name `folder`, without
-/// whitespace or control characters, and cut at a character so the whole stays within `limit`
-/// bytes.
+/// whitespace, control characters or a leading `-` (the rules of [`alias_issue`]), and cut at a
+/// character so the whole stays within `limit` bytes.
 pub fn default_alias(label: &str, folder: &str, index: u16, limit: usize) -> String {
+    suffixed(label, folder, &index.to_string(), limit)
+}
+
+/// The alias the window offers for the phone it lists as number `number` (1 on) playing a game:
+/// `<name>-phone<number>`, cut as [`default_alias`] cuts: an emulator's default `<name>-<index>`
+/// is never one.
+pub fn default_phone_alias(label: &str, folder: &str, number: usize, limit: usize) -> String {
+    suffixed(label, folder, &format!("phone{number}"), limit)
+}
+
+/// `<name>-<tail>` as [`default_alias`] describes it; `tail` alone when the name has no room.
+fn suffixed(label: &str, folder: &str, tail: &str, limit: usize) -> String {
     let clean = |text: &str| -> String {
-        text.chars()
+        let kept: String = text
+            .chars()
             .filter(|character| !character.is_whitespace() && !character.is_control())
-            .collect()
+            .collect();
+        kept.trim_start_matches('-').to_owned()
     };
     let mut name = clean(label);
     if name.is_empty() {
@@ -148,10 +179,10 @@ pub fn default_alias(label: &str, folder: &str, index: u16, limit: usize) -> Str
     if name.is_empty() {
         name = "instance".to_owned();
     }
-    let suffix = format!("-{index}");
+    let suffix = format!("-{tail}");
     let room = limit.min(MAX_ALIAS_BYTES).saturating_sub(suffix.len());
     if room == 0 {
-        return index.to_string();
+        return tail.to_owned();
     }
     let mut end = 0;
     for (at, character) in name.char_indices() {
@@ -162,7 +193,7 @@ pub fn default_alias(label: &str, folder: &str, index: u16, limit: usize) -> Str
         end = next;
     }
     if end == 0 {
-        return index.to_string();
+        return tail.to_owned();
     }
     format!("{}{suffix}", &name[..end])
 }
@@ -194,6 +225,12 @@ mod tests {
         );
         // An alias with `@` still leaves the id's first `@` between the id and the alias.
         assert_eq!(alias_issue("main@cn", 97), None);
+        // No leading `-`, which the Lab could take for an option; one further in is fine.
+        for dashed in ["-", "-a", "--phone", "-主号"] {
+            assert_eq!(alias_issue(dashed, 97), Some(AliasIssue::LeadingDash), "{dashed:?}");
+        }
+        assert_eq!(alias_issue("a-b-", 97), None);
+        assert_eq!(alias_issue("碧蓝航线-phone1", 97), None);
     }
 
     #[test]
@@ -221,6 +258,9 @@ mod tests {
         assert!(long.zh.contains("最多 9 个") && long.en.contains("at most 9 "), "{long}");
         let control = alias_problem("a\u{7}", 97).expect("control");
         assert!(control.en.contains("a\\u{7}"), "{control}");
+        let dashed = alias_problem("--phone", 97).expect("dashed");
+        assert!(dashed.zh.starts_with("名字 --phone 用不了：") && dashed.zh.contains("- 开头"), "{dashed}");
+        assert!(dashed.en.contains("cannot start with -"), "{dashed}");
     }
 
     #[test]
@@ -260,12 +300,32 @@ mod tests {
         assert_eq!(default_alias("碧蓝航线", "azurlane", 5, 8), "碧蓝-5");
         assert_eq!(default_alias("碧蓝航线", "azurlane", 5, 7), "碧-5");
         assert_eq!(default_alias("碧蓝航线", "azurlane", 5, 4), "5");
-        for (label, limit) in [("碧蓝航线", 97), ("Azur Lane", 5), ("明日方舟", 10), ("x", 256)] {
+        // A name that begins with `-` loses it: no alias offered begins with one.
+        assert_eq!(default_alias("-碧蓝", "azurlane", 5, 97), "碧蓝-5");
+        assert_eq!(default_alias("--", "-azurlane", 5, 97), "azurlane-5");
+        assert_eq!(default_alias("-", "--", 5, 97), "instance-5");
+        for (label, limit) in [("碧蓝航线", 97), ("Azur Lane", 5), ("明日方舟", 10), ("x", 256), ("--明日方舟", 20), ("-", 97)] {
             for index in [0u16, 7, 65535] {
                 let alias = default_alias(label, "folder", index, limit);
                 if limit >= 2 + index.to_string().len() {
                     assert_eq!(alias_issue(&alias, limit), None, "{alias} within {limit}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_phone_alias_is_the_game_and_the_number_within_the_limit() {
+        assert_eq!(default_phone_alias("碧蓝航线", "azurlane", 1, 97), "碧蓝航线-phone1");
+        assert_eq!(default_phone_alias("-Pixel", "", 2, 97), "Pixel-phone2");
+        assert_eq!(default_phone_alias("--", "-x", 2, 97), "x-phone2");
+        // No room for the name: the tail alone, which never begins with `-`.
+        assert_eq!(default_phone_alias("Azur Lane", "azurlane", 12, 8), "phone12");
+        for (label, limit) in [("-x", 97), ("Azur Lane", 8), ("--", 20), ("明日方舟", 248)] {
+            for number in [1usize, 12] {
+                let alias = default_phone_alias(label, "-folder", number, limit);
+                assert!(!alias.starts_with('-'), "{alias}");
+                assert_eq!(alias_issue(&alias, limit), None, "{alias} within {limit}");
             }
         }
     }

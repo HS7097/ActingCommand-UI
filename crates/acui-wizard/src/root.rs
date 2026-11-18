@@ -10,7 +10,9 @@
 //!   whose root's folder is named so as an A/B slot);
 //! - no `'` (the console's settings file holds paths as TOML literal strings) and no `%`
 //!   (`cmd.exe` expands it);
-//! - absent, or an empty folder;
+//! - absent, or an empty folder; for an install that takes the Tools the wizard laid before it
+//!   (`engine::pre_lay_tools`), a folder holding that one folder `tools` and nothing else
+//!   ([`check_root_beside_tools`]; whether it holds the set's Tools is the install's to check);
 //! - inside no other root, holding no other root: no ancestor with `runtime\BUILD-MANIFEST.json`
 //!   or `install\active.json` (an empty folder holds nothing, so it holds no root);
 //! - not one of ActingCommand's per-user folders, `%APPDATA%\ActingCommand` (the console's global
@@ -23,6 +25,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::manifest::Program;
 use crate::platform;
 use crate::text::Said;
 use crate::winpath::{drive_absolute, last_segment, network_or_device, within};
@@ -193,6 +196,41 @@ pub fn per_user_issue(root: &str, folders: &[String]) -> Option<RootIssue> {
 /// Every rule `root` breaks, with `needed` bytes of free space required; an empty list is a
 /// usable root.
 pub fn check_root(root: &Path, needed: u64) -> Vec<RootIssue> {
+    checked(root, needed, None)
+}
+
+/// [`check_root`] for an install that takes the Tools the wizard laid before it
+/// (`engine::pre_lay_tools`): the root may hold the one folder `tools` (a folder, not a link; its
+/// name in any case, as Windows compares names) and nothing else beside it; anything else is
+/// [`RootIssue::NotEmpty`], as for any root. What that folder holds is checked by the install,
+/// file by file against the set.
+pub fn check_root_beside_tools(root: &Path, needed: u64) -> Vec<RootIssue> {
+    checked(root, needed, Some(Program::Tools.dir()))
+}
+
+/// Whether `entries`, a folder's, hold anything but `kept`: with `kept`, a folder of that name
+/// alone. An entry that cannot be read counts as one more.
+fn holds_more(mut entries: fs::ReadDir, kept: Option<&str>) -> bool {
+    let Some(kept) = kept else {
+        return entries.next().is_some();
+    };
+    let mut seen = false;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return true;
+        };
+        let alone = !seen
+            && entry.file_name().to_str().is_some_and(|name| name.eq_ignore_ascii_case(kept))
+            && entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if !alone {
+            return true;
+        }
+        seen = true;
+    }
+    false
+}
+
+fn checked(root: &Path, needed: u64, kept: Option<&str>) -> Vec<RootIssue> {
     let text = root.to_string_lossy().into_owned();
     let mut issues = text_issues(&text);
     if !issues.is_empty() {
@@ -206,8 +244,8 @@ pub fn check_root(root: &Path, needed: u64) -> Vec<RootIssue> {
         Err(error) => issues.push(RootIssue::Unreadable(format!("{}: {error}", root.display()))),
         Ok(meta) if !meta.is_dir() => issues.push(RootIssue::NotAFolder),
         Ok(_) => match fs::read_dir(root) {
-            Ok(mut entries) => {
-                if entries.next().is_some() {
+            Ok(entries) => {
+                if holds_more(entries, kept) {
                     issues.push(RootIssue::NotEmpty);
                 }
             }
