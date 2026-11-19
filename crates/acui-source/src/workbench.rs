@@ -561,9 +561,11 @@ pub enum PauseOutcome {
 }
 
 /// What was in the way of an instance pause's stages when its caller's time ended, as its
-/// `scheduling_pause_standing` named it: the contract's closed list `pause_obstacle`, ten words
-/// (`PauseObstacle`; contract `runtime.rs` 2314-2375 at 1067dfaf), each in the list once, in that
-/// order (runtime-host `host/policy_dispatch.rs` 1403-1427).
+/// `scheduling_pause_standing` named it, and, since Runtime 0.12.75 (#480 PG-2e), what the latest
+/// check of anyone's instance pause read in its way, as the status answers it
+/// ([`PauseFact::in_the_way`]): the contract's closed list `pause_obstacle`, ten words
+/// (`PauseObstacle`; contract `runtime.rs` 2323-2376 at 945727d4), each in the list once, in that
+/// order (runtime-host `host/policy_dispatch.rs` 1429-1452 at 945727d4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Obstacle {
     /// A run of the instance still in flight; past the drain it was asked to stop at its next
@@ -585,14 +587,16 @@ pub enum Obstacle {
     /// The lease of the device session's close was refused; the close is tried again.
     CloseRefused,
     /// The session's close could not be confirmed and fenced the instance; it is not tried again,
-    /// and only a person's resume connects the instance again (`policy_dispatch.rs` 1309-1320).
+    /// and only a person's resume connects the instance again. Only a person's pause (`stand`)
+    /// stands on it; a tool's hold fails there (`policy_dispatch.rs` 1335-1339, 4899-4921).
     CloseUnconfirmed,
     /// The last check of the stages failed, not fatally; it is tried again.
     CheckFailed,
 }
 
 impl Obstacle {
-    const fn of(word: PauseObstacle) -> Self {
+    /// The contract's word as this crate's: a receipt's, a record's and the status's alike.
+    pub(crate) const fn of(word: PauseObstacle) -> Self {
         match word {
             PauseObstacle::ContainedRun => Self::ContainedRun,
             PauseObstacle::PolicyRun => Self::PolicyRun,

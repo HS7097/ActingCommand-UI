@@ -937,10 +937,12 @@ fn pause_life_lines(labels: &Labels, moment: &PauseMoment) -> Vec<FieldLine> {
         let (value, raw) = match in_the_way {
             None => (labels.pause_life_unread.to_owned(), String::new()),
             Some([]) => (labels.pause_life_nothing_in_the_way.to_owned(), String::new()),
+            // The record does not say whose pause it was, so an unconfirmed close's words name no
+            // card's button.
             Some(words) => (
                 words
                     .iter()
-                    .map(|word| obstacle_text(labels, *word))
+                    .map(|word| obstacle_text(labels, *word, false))
                     .collect::<Vec<_>>()
                     .join(labels.name_list),
                 words.iter().map(|word| word.as_str()).collect::<Vec<_>>().join(", "),
