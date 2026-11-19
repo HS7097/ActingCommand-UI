@@ -4236,7 +4236,9 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
 /// with nothing in it, what it was still doing; one lifted by a resume or kept at a shutdown
 /// during its stages says so; none of these is a failure. A lift that found the account held
 /// again by its first-start pause, or its device held by a player, says so, a failure only by its
-/// code's category. A lift while a global pause holds (`global_holds`) says that the account is
+/// code's category; one whose receipt says why nothing connected, its pause not finished up or an
+/// iOS phone this Runtime has no backend for, says that, no failure. A lift while a global pause
+/// holds (`global_holds`) says that the account is
 /// still not scheduled, as the top bar's says the pauses that still hold. A pause whose answer said
 /// nothing says it is watched, and then what the reads after it came to: only one that did not
 /// hold is a failure, and one still on its way at the watch's end is neither confirmed nor failed.
@@ -4274,11 +4276,19 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
         AccountSaid::PauseKept => (labels.account_pause_kept_at_shutdown.to_owned(), false),
         AccountSaid::PauseFailed { code } => (coded(labels.pause_failed, code.as_str()), true),
         AccountSaid::AlreadyPaused => (labels.account_pause_already.to_owned(), false),
-        AccountSaid::Resumed { device_failure } => {
+        AccountSaid::Resumed { cause, device_failure } => {
             // In red only by its code's category: an informing one is no failure.
             let informs = device_failure.as_deref().is_some_and(outcome_informs);
-            let (mut text, failed) = match resumed_device(device_failure.as_deref()) {
+            let device = resumed_device(cause.as_ref(), device_failure.as_deref());
+            let (mut text, failed) = match device {
                 ResumedDevice::Fine => (labels.account_resumed.to_owned(), false),
+                // The receipt's cause says why nothing connected (#480 PG-2d): no failure.
+                ResumedDevice::WithoutReconnect => {
+                    (labels.account_resumed_without_reconnect.to_owned(), false)
+                }
+                ResumedDevice::WithoutBackend => {
+                    (labels.account_resumed_without_backend.to_owned(), false)
+                }
                 ResumedDevice::HeldAgain => (labels.account_resumed_held_again.to_owned(), !informs),
                 ResumedDevice::PlayerHolds => {
                     (labels.account_resumed_player_hold.to_owned(), !informs)
@@ -4317,8 +4327,9 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
     }
 }
 
-/// One thing in the way of a pause's stages, in a person's words (vocabulary `pause_obstacle`).
-fn obstacle_text(labels: &Labels, word: Obstacle) -> &'static str {
+/// One thing in the way of a pause's stages, in a person's words (vocabulary `pause_obstacle`):
+/// on a card, and in the ledger window's detail of a record of a pause's life.
+pub(crate) fn obstacle_text(labels: &Labels, word: Obstacle) -> &'static str {
     match word {
         Obstacle::ContainedRun => labels.obstacle_contained_run,
         Obstacle::PolicyRun => labels.obstacle_policy_run,

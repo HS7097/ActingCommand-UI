@@ -59,7 +59,7 @@ use acui_rows::format_full;
 use acui_source::workbench::{lab_record_started, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
 use acui_source::{
     resume_paused, resumed_device, ClientFailure, PauseFact, PauseStage, PauseTarget,
-    ResumeOutcome, ResumedDevice,
+    ResumeCause, ResumeOutcome, ResumedDevice,
 };
 
 use crate::ledger::paint::{age_text, code_short, models};
@@ -335,11 +335,12 @@ fn unread(labels: &Labels, failure: &ClientFailure) -> (String, &'static str) {
 /// this console's own of an instance in any stage. Since Runtime 0.12.73 (#480 PG-2c) a person's
 /// pause (`stand`) is resumed in every stage and a tool's hold (`quiet_or_lift`) only once
 /// released: the Runtime refuses the resume of one still draining or handing its device back
-/// (runtime-host `host/policy_dispatch.rs` 1153-1191, `check_resumable`, at a8d0aa43). Its
+/// (runtime-host `host/policy_dispatch.rs` 1216-1254, `check_resumable`, at 1067dfaf). Its
 /// `Status` does not say which mode a pause has (contract `runtime.rs` 2398-2405), so the reason
 /// does: this console's own are a person's; a Lab recording's hold is a tool's
-/// (Runtime `crates/lab-ops/src/scheduling.rs` 135-146); any other is offered only released, as
-/// before. An instance's line still on its way says what it is doing.
+/// (Runtime `crates/lab-ops/src/scheduling.rs` 158-169); any other is offered only released, as
+/// before. An instance's line still on its way says what it is doing. The ledger's records of a
+/// pause's life (Runtime 0.12.74) do not move this: they say what happened, not what holds now.
 fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
     let scope = scope_text(labels, &fact.target);
     let (revision, since) = (fact.revision.to_string(), format_full(fact.since_unix_ms));
@@ -362,10 +363,12 @@ fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
     let resumable = match fact.stage {
         None | Some(PauseStage::Released) => true,
         Some(PauseStage::Draining) => {
+            text.push_str(" · ");
             text.push_str(labels.pause_draining);
             any_stage
         }
         Some(PauseStage::Paused) => {
+            text.push_str(" · ");
             text.push_str(labels.pause_releasing);
             any_stage
         }
@@ -435,11 +438,24 @@ fn reread_text(labels: &Labels, reread: &Reread, state: &LedgerState) -> (String
 /// What a press came back with, and whether it says a failure: a lift whose
 /// device did not connect says so too; one that found the instance's first-start
 /// pause not applied yet, which holds it again, or its device held by a player,
-/// says that, a failure only by its code's category (`resumed_device`).
+/// says that, a failure only by its code's category; and one whose receipt says
+/// why it connected nothing, its pause not quiet yet or an iOS handset this
+/// Runtime has no backend for, says that, no failure (`resumed_device`).
 fn outcome_text(labels: &Labels, scope: &str, outcome: &ResumeOutcome) -> (String, bool) {
     match outcome {
-        ResumeOutcome::Resumed { revision, device_failure } => {
+        ResumeOutcome::Resumed { revision, cause, device_failure } => {
             let mut text = fill(labels.resume_done, &[scope, &revision.to_string()]);
+            let device = resumed_device(cause.as_ref(), device_failure.as_deref());
+            // The receipt's cause decides, whatever the self-check's shape (#480 PG-2d).
+            let why = match device {
+                ResumedDevice::WithoutReconnect => Some(labels.resume_without_reconnect),
+                ResumedDevice::WithoutBackend => Some(labels.resume_without_backend),
+                _ => None,
+            };
+            if let Some(why) = why {
+                text.push_str(why);
+                return (text, false);
+            }
             let Some(code) = device_failure else {
                 return (text, false);
             };
@@ -447,12 +463,13 @@ fn outcome_text(labels: &Labels, scope: &str, outcome: &ResumeOutcome) -> (Strin
                 Some(short) => format!("{code} · {short}"),
                 None => code.clone(),
             };
-            let (template, failed) = match resumed_device(Some(code.as_str())) {
+            let (template, failed) = match device {
                 ResumedDevice::HeldAgain => (labels.resume_held_again, !outcome_informs(code)),
                 ResumedDevice::PlayerHolds => (labels.resume_player_hold, !outcome_informs(code)),
-                ResumedDevice::Fine | ResumedDevice::ReconnectFailed(_) => {
-                    (labels.resume_device_failed, true)
-                }
+                ResumedDevice::Fine
+                | ResumedDevice::WithoutReconnect
+                | ResumedDevice::WithoutBackend
+                | ResumedDevice::ReconnectFailed(_) => (labels.resume_device_failed, true),
             };
             text.push_str(&fill(template, &[&words]));
             (text, failed)
@@ -549,6 +566,10 @@ fn settled(id: u64, target: PauseTarget, outcome: ResumeOutcome) {
         report::log("acui-resume", &log_text(id, &target, &outcome));
         return;
     }
+    // A cause this console does not read shows on no line: the log keeps it, quietly.
+    if let ResumeOutcome::Resumed { cause: Some(ResumeCause::Other(_)), .. } = &outcome {
+        report::log_quiet("acui-resume", &log_text(id, &target, &outcome));
+    }
     let open = matches!(ledger.lock().phase, Phase::Opening { .. } | Phase::Open(_));
     let ask = open && !matches!(outcome, ResumeOutcome::NotSent(_));
     let reread = if ask { Reread::Asked } else { Reread::NotAsked };
@@ -567,9 +588,19 @@ fn log_text(id: u64, target: &PauseTarget, outcome: &ResumeOutcome) -> String {
         None => "global scheduling".to_owned(),
     };
     let said = match outcome {
-        ResumeOutcome::Resumed { revision, device_failure } => {
-            let device = match resumed_device(device_failure.as_deref()) {
+        ResumeOutcome::Resumed { revision, cause, device_failure } => {
+            let mut device = match resumed_device(cause.as_ref(), device_failure.as_deref()) {
                 ResumedDevice::Fine => "device failure none".to_owned(),
+                ResumedDevice::WithoutReconnect => {
+                    "nothing reconnected, its pause not quiet yet, \
+                     scheduling_resume_without_reconnect"
+                        .to_owned()
+                }
+                ResumedDevice::WithoutBackend => {
+                    "nothing connected, an iOS handset this Runtime has no backend for, \
+                     scheduling_resume_without_backend"
+                        .to_owned()
+                }
                 ResumedDevice::HeldAgain => {
                     "held again by its first-start pause, dispatch_paused_instance".to_owned()
                 }
@@ -579,6 +610,9 @@ fn log_text(id: u64, target: &PauseTarget, outcome: &ResumeOutcome) -> String {
                 }
                 ResumedDevice::ReconnectFailed(code) => format!("device failure {code}"),
             };
+            if let Some(ResumeCause::Other(code)) = cause {
+                device.push_str(&format!(", with a cause this console does not read: {code}"));
+            }
             format!("resumed at revision {revision}, {device}")
         }
         ResumeOutcome::Refused(failure) => format!(

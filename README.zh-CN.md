@@ -24,14 +24,16 @@
   `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
   `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
   里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
-  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime v0.12.73
-  （`a8d0aa43`），是发布版本。
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime v0.12.74
+  （`1067dfaf`），是发布版本。
 - **可与 v0.12.73 起的 0.12 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 9]、`runtime-client`
-  [12, 12] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.73：这一版的 `ledger` 上限在 [3, 9] 里，
-  `actingd-config`、`runtime-client` 的区间都和监控台的有交集。它不适配 v0.12.72 及更早：这些版本的 `runtime-client`
+  [12, 12] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.73 和 v0.12.74：这两版的 `ledger` 上限都在 [3, 9] 里，
+  `actingd-config`、`runtime-client` 的区间都和监控台的有交集（v0.12.74 的 `actingd-config` [5, 34] 也是，见「数据来源」一节）。
+  它不适配 v0.12.72 及更早：这些版本的 `runtime-client`
   最多到 11，而这个监控台发出的每一次暂停（「全部暂停」和单个实例的暂停都一样）都带修订 12 新加的成员 `pause_mode`，
   这样的 Runtime 解不开，会直接断开连接、不给回答，也不设任何暂停（见「数据来源」一节）。所以要先把 Runtime 升到
-  v0.12.73，再换这个监控台；在这之前，钉在 v0.12.71 的监控台照样能配 v0.12.73。游戏根从 v0.12.68 起用 `pack-catalog.json`
+  v0.12.73 或更新，再换这个监控台；在这之前，钉在 v0.12.71 的监控台照样能配 v0.12.73，钉在 v0.12.73 的监控台也照样能配
+  v0.12.74，它发来的东西都解得开。游戏根从 v0.12.68 起用 `pack-catalog.json`
   取代 `ui.json`（见「数据来源」一节）：安装向导铺 `pack-catalog.json`，拒收带 `ui.json` 的旧包。例外是以前的安装向导
   或 v0.12.68 以前的 Runtime 铺好、根里还留着 `ui.json` 的游戏根：`actingctl packs` 见到它就发警告，
   于是日常任务退回到包编号和任务编号，也没有「不可撤回」「有风险」徽章，「目标」页的包变量也全部并进「其他设置」。
@@ -177,14 +179,33 @@
 「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
 这样就不用游标往下读。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.73（`a8d0aa43`），是发布版本，以预发布发出。
-相对上一个钉点 v0.12.71（`f0c64ae8`），v0.12.72、v0.12.73 把 `runtime-client` 升到 12、`package` 升到 19；`ledger` [3, 9]，
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.74（`1067dfaf`），是发布版本，以预发布发出。
+相对上一个钉点 v0.12.73（`a8d0aa43`），v0.12.74 把 `package` 升到 20、Runtime 的 `actingd-config` 升到 [5, 34]；`ledger` [3, 9]、
+`runtime-client` [3, 12]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变，控制台的区间也都不变。`actingd-config`
+修订 34（#479 F-2）给实例的 `device` 加了一个可选成员 `system`：`android`（不写就是它）或 `ios`，只能写在手机条目上；Runtime
+只给写了它的条目报清单行 `instance.<实例编号>.device_system`，它在 `ui_tier` 里是隐藏的，组装时才读，不能设置。控制台的
+`actingd-config` 仍是 [5, 32]，和修订 33 时一样（见下面 v0.12.63 那段）：控制台不改任何条目的 `device`，也不显示这一行；安装向导
+不写 `system`，所以它写的手机条目照旧是安卓；而修订 34 自己的门槛是：改条目 `device` 的控制台和安装器，写 `system` 之前要先到 34。
+等安装向导开始写 `system: "ios"` 的那一片，再在同一处改成 [5, 34]。不是这一片：向导里 iOS 的框还是灰的，这一版的 iOS 实例在
+给它取帧后端的那一片之前什么都不做，Runtime 的发版也不带 `acib`。`package` 20（#463 SEL-2L）是 `repeated_anchor` 布局的
+`shared_ocr`，只归包和安装器。两把锁里的 crate 都没改依赖（Runtime 自己的锁只给 `acib` 加了 `sha2`，两把锁都不列它），所以两把锁都只换提交号。
+控制台链接的 Runtime crate 里，ledger-forensics 源码没变，ledger 只改了测试；runtime-client 给出了控制台现在要读的恢复回执：
+`resume_scheduling_expected_as`，在 `SchedulingResumed` 结果旁边交回回执的结果码（`SchedulingResumeAnswer`，和 `SchedulingPauseAnswer`
+同一个形状），请求、等待时间、连接中途断开后的读法都和只交回结果的 `resume_scheduling_expected` 一样。契约库的改动（`DeviceBinding::serial`
+改成返回 `Option`、`DeviceBindingProblem` 加了 `device_key_invalid` 和 `system_mismatch`、`DeviceSystem` 和绑定文件的 schema v2）、
+runtime-config 的清单行 `device_system` 和执行内核的 `HandsetEndpoint::Ios`，都碰不到控制台构造、匹配或实现的东西。契约库嵌入的结果码目录里，
+v0.12.74 加了 19 个码、1 个位置，没有退役的码，也没有 `console_`、`setup_` 名字，其中有 `scheduling_pause_settled`、
+`scheduling_pause_lifted_not_quiet`、`scheduling_resume_without_backend`。控制台要变的是单个实例的恢复和账本窗口（都在「启动器」一节）：
+恢复照回执的因说明没有连接设备的原因，一是人按的暂停还没收尾完就被恢复（`scheduling_resume_without_reconnect`，v0.12.73 的 Runtime
+就已经答它），二是 Runtime 没有它后端的 iOS 手机，恢复不连接任何东西，被隔离的隔离照留（`scheduling_resume_without_backend`）；
+账本窗口给暂停一生的六种记录（#480 PG-2d）配了控制台自己的话。上一个钉点 v0.12.73 相对再上一个钉点 v0.12.71（`f0c64ae8`），
+v0.12.72、v0.12.73 把 `runtime-client` 升到 12、`package` 升到 19；`ledger` [3, 9]，
 以及 Runtime 的 `actingd-config` [5, 33]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变。控制台的 `runtime-client`
 区间改成 [12, 12]，下限也一起抬到 12。修订 12（#480 PG-2c）给请求加了成员 `PauseScheduling.pause_mode`（`stand` 或
 `quiet_or_lift`，不写就是 `stand`），钉住的客户端每一次暂停都写它，全局暂停也一样；修订 11 及更低的 Runtime（v0.12.72 及更早）
 解不开这样的请求，直接断开连接、不给回执，所以这个控制台的暂停一个都到不了它：控制台收不到回答，接着看状态，最后说这次暂停没有立住。
 区间照实写出这一点，安装向导也会拒收把这个控制台和这样的 Runtime 配在一起的安装集；控制台自己的握手不带修订号，所以指向旧 Runtime
-时照样能连、能读，只是暂停不成。修订 12 还声明了状态成员 `InstancePauseState.pause_mode` 和 `in_the_way`，0.12.73 的 Runtime
+时照样能连、能读，只是暂停不成。修订 12 还声明了状态成员 `InstancePauseState.pause_mode` 和 `in_the_way`，0.12.73、0.12.74 的 Runtime
 都不发（第一次发这两个成员的那一版会把 Runtime 自己的下限也抬到 12）。`package` 19（#463 INT-1）是 `then: end_run` 的中断条目可以不写
 handlers、`result` 新加词 `environment_reset`，只归包和安装器。两把锁里的 crate 都没改依赖，所以两把锁都只换提交号。控制台链接的 Runtime
 crate 里，ledger、ledger-forensics、runtime-config 源码没变；契约库和 runtime-client 给出了控制台现在要读的暂停回执：`pause_scheduling_as`
@@ -196,10 +217,10 @@ crate 里，ledger、ledger-forensics、runtime-config 源码没变；契约库�
 `scheduling_resume_without_reconnect`，以及账本里运行结束时可能带的 `contained_task_environment_reset`）、1 个位置、4 个键、4 个词表，
 `emulator_autostart_skip_reason` 加了词 `global_paused`，`standard_pack_problem` 加了 `interrupt_limit_cause_invalid`；没有退役或删掉的码，
 也没有 `console_`、`setup_` 名字；两个钉点之间没有码改类别（`scheduling_pause_kept_at_shutdown` 在 v0.12.72 是错误，v0.12.73 起是提示），
-Runtime 的码照旧取它类别的通用句。控制台要变的是单个实例的暂停和恢复（#480 PG-2c，见「运行」一节）：人按的暂停一直立着，直到有人恢复它；
+Runtime 的码照旧取它类别的通用句。控制台要变的是单个实例的暂停和恢复（#480 PG-2c，见「启动器」一节）：人按的暂停一直立着，直到有人恢复它；
 在排空时限加 30 秒检查点宽限之内答复，答复时可能还在收尾，并说出挡着什么；Runtime 自己出错也不撤回它；任何阶段都能恢复，设备还没交还时恢复不重连（实例被隔离、或者交还已经开始关设备会话的，照样重连）。
 v0.12.72（#480 PG-1）还让 Runtime 在全局暂停期间不自己启动模拟器。#398 DB-3：actinglab 一启动就把自己的标准句柄设成不可继承，
-它起的 adb server 不会再占着安装向导的管道；为了更早的 Lab，安装向导照旧不等管道结束就取 Lab 的回答。上一个钉点 v0.12.71 合入了
+它起的 adb server 不会再占着安装向导的管道；为了更早的 Lab，安装向导照旧不等管道结束就取 Lab 的回答。再上一个钉点 v0.12.71 合入了
 Runtime PR #1800，再往前控制台钉的就是这个 PR 的头（`7b4705ff`，在 v0.12.69 之上 3 个提交）；它也是第一个声明 `ledger`
 修订 9 的发布版本（v0.12.70，`240cdb1a`，声明的仍是 [3, 8]）。相对那个头，v0.12.70 把 `package` 升到 18；`ledger` [3, 9]、
 `runtime-client` [3, 11]，以及 Runtime 的 `actingd-config` [5, 33]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变，
@@ -363,7 +384,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 12、账本修订 9）：
 
 ```
-rev = "a8d0aa438e7fbfae1b776c9f686f246dc103e576"
+rev = "1067dfaf6e548913efcca8106d79f6a731b69c4c"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -555,9 +576,10 @@ acui --help
 结果不明时先重读现状再说，绝不自动重发。这些行之后，Runtime 驱动的每个实例（模拟器或真机条目，夹具不算）各有一组
 「设备后端」：触控后端和截图后端各一个下拉框，只列这种设备有的后端（触控：ADB 输入、MaaTouch、minitouch，模拟器还有
 MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
-或在线设置及其时间、入口）和这个实例最近一次自检的结果。按「应用」后，这个实例空闲时立刻切换（最多等 3 秒，即契约的
+或在线设置及其时间、入口）和这个实例最近一次自检的结果。iOS 手机条目（Runtime v0.12.74 起，`device.system: "ios"`）
+不写后端，所以没有这一组。按「应用」后，这个实例空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-钉住的 v0.12.73 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+钉住的 v0.12.74 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带实例；拒绝照原因写人话：这个实例正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这个实例没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
@@ -1008,7 +1030,12 @@ Runtime 自己出错都不会撤回它。和全局暂停不同，实例暂停要
 暂停已有变动时 Runtime 就拒绝，什么也不恢复。按一下就发，不像「全部开始执勤」碰到别的工具加的暂停那样要先
 确认，因为这份暂停是监控台自己加的；人按的暂停 Runtime 在任何阶段都接受恢复。设备已经交还的，恢复会重新连接设备，
 最多要半分钟左右；重连失败会用红字带码写出来，但恢复照样算数。还在排空或交还设备的，马上解除，不重新连接（还在用这个实例的
-东西照旧进行），卡片说已恢复；但实例被隔离（关闭设备会话没能确认）、或者交还已经开始关设备会话的，和已交还的一样，要重新连接。恢复自检里有两个码不是重连失败，卡片照它们的意思说，码的类别不是提示时才标红：
+东西照旧进行）；但实例被隔离（关闭设备会话没能确认）、或者交还已经开始关设备会话的，和已交还的一样，要重新连接。有没有重新连接，
+看 Runtime 回答里带的因，不看自检的形状（这时自检两边都是 `ok: false`、没有码）；监控台钉到 v0.12.74 起读这个因
+（`resume_scheduling_expected_as`）：因是 `scheduling_resume_without_reconnect`（v0.12.73 的 Runtime 就已经答它）时，卡片说这个实例的调度已恢复，
+暂停还没收尾完，所以没有重新连接设备。iOS 手机（Runtime v0.12.74 起）是所有重连的例外：Runtime 这一版没有它的后端，恢复在任何阶段都只解除暂停、
+不连接任何东西，被隔离的也一样，隔离照留（在 Runtime 有它的后端之前，没有东西能重新证明它）；因是 `scheduling_resume_without_backend`，
+卡片说这个实例的调度已恢复，它是 iOS 手机，这一版 Runtime 还没有它的后端，所以没有连接设备。这两种都不标红。恢复自检里有两个码不是重连失败，卡片照它们的意思说，码的类别不是提示时才标红：
 `dispatch_paused_instance`，这是 Runtime 停着时加进来的实例，它的首次启动暂停还没套用，Runtime 改用这份暂停
 （`instance.added`）把它又暂停了，卡片说已恢复、但又被首次启动暂停按住了；`player_hold_active`，设备正被人占用，所以没有重新连接。按下去的
 结果写在卡片上：已生效（恢复时全局暂停还在的，会补一句全局暂停还在、这个实例仍不会被安排任务）；已经有
@@ -1083,7 +1110,7 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   （`instance add`，Runtime INST-5）后给刚加进来的实例挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
   挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
-  暂停，0.12.52 起才有，钉住的 0.12.73 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
+  暂停，0.12.52 起才有，钉住的 0.12.74 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
   `instance.added`（#453 S2）。
   Lab 录制按住的暂停（Runtime 0.12.64 起）另成一类：实例暂停，理由恰好是 `lab-record-<毫秒时间戳>`，前缀后面只有数字
   （Lab 的 `record start` 只暂停它录的那一个实例；别的范围上同样理由的暂停、别的 `lab-` 理由照旧）。这一行写「被 Lab 的录制按住」、
@@ -1096,10 +1123,25 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   一样发一次带条件的 `ResumeScheduling`。这样恢复以后，录制结束时找不到自己的暂停，回答 `already_gone`，不算失败。
   `resume_elsewhere_reasons` 列了这个理由，或者这一行用不了的时候，它按第一类处理，只写说明、不给按钮。
   别的还在排空或交还设备的实例暂停也不给按钮，那一行只说它现在在做什么：Lab 录制按住的是工具的按住（`quiet_or_lift`），
-  交还设备之前 Runtime 会拒绝恢复；0.12.73 的状态也不说别的工具加的暂停是哪种模式。监控台自己加的实例暂停是人按的，
-  Runtime 在任何阶段都接受恢复（v0.12.73 起）；还在排空或交还设备时恢复，不重新连接，除非实例被隔离、或者交还已经开始关设备会话，那时会重新连接。恢复自检写的是 `dispatch_paused_instance` 时，
+  交还设备之前 Runtime 会拒绝恢复；0.12.74 的状态也不说别的工具加的暂停是哪种模式（下面说的账本里暂停一生的记录也不说，
+  它们说的是发生过什么，不是现在怎样）。监控台自己加的实例暂停是人按的，
+  Runtime 在任何阶段都接受恢复（v0.12.73 起）；还在排空或交还设备时恢复，不重新连接，除非实例被隔离、或者交还已经开始关设备会话，那时会重新连接。
+  iOS 手机的恢复（Runtime v0.12.74 起）从不重新连接：只解除暂停、不连接任何东西，被隔离的隔离照留。结果行照 Runtime 回答里带的因说这两种：
+  「暂停还没收尾完，所以没有重新连接设备」（`scheduling_resume_without_reconnect`），「它是 iOS 手机，这一版 Runtime 还没有它的后端，
+  所以没有连接设备」（`scheduling_resume_without_backend`），都不标红。恢复自检写的是 `dispatch_paused_instance` 时，
   结果行说这个实例是 Runtime 停着时加进来的、又被首次启动暂停按住了；写的是 `player_hold_active` 时，说设备正被人占用、所以没有重新连接；
   都带码和码的简短说明，码的类别不是提示时才标红。每一行都照原样显示暂停的理由，不管操作方写的是什么。
+- **暂停的一生（账本窗口）**：Runtime v0.12.74 起（#480 PG-2d），实例暂停一生里回答和阶段说不出的每个时刻，各记一条
+  `runtime.lifecycle_observed`，阶段 `device_state_observed`，记在实例名下、带暂停自己那个请求的链接（没有请求设下的 iOS 手机暂停用它自己新铸的链接），
+  所以把那个请求编号（详情里的「请求编号」）填进编号框，就能把一份暂停的几条记录筛到一起；级别是码的类别。窗口和读别的行一样，在线、离线都读公开投影，
+  里面有码和 `pause_stage`、`in_the_way` 两个值，没有 `pause_reason`。六个码配了控制台自己的话，行上事件名后面接一句短的，详情里加「结果」「阶段」
+  「挡着的事」「原因码」几行：`scheduling_pause_standing`「暂停还在收尾」，写出当时在哪个阶段、挡着什么，收尾检查出错时写出下一层的原因码；
+  `scheduling_pause_settled`「暂停已收尾」：任务都停了、设备已交还，暂停仍然有效；`scheduling_resume_without_reconnect`：暂停还没收尾完就被恢复了，
+  没有重新连接设备，这条记在暂停请求名下，不在恢复请求名下；`scheduling_pause_kept_at_shutdown`，写出阶段：Runtime 在收尾完之前关闭，暂停保留到下次启动；
+  `scheduling_pause_lifted_not_quiet` 是警告级，所以也在「错误」页签里：某个工具的暂停没等到这个实例空闲就撤了，它没有把实例暂停住，写出挡着的事
+  和结束它的那次失败的原因码；公开投影里没有理由，所以不写是哪个工具；`scheduling_resume_without_backend`：iOS 手机的暂停已解除，这一版没有后端，没有连接。
+  别的 `device_state_observed` 记录（模拟器看护的、空闲检查的）照旧显示。这些记录说的是发生过什么，实例卡片和暂停行都不读它们：暂停现在在做什么看状态的阶段
+  （「已收尾」那条要等阶段到了 `released` 之后才写，一次恢复的记录还可能排在它前面）；在调用方时限内就静下来的、先被恢复的、启动时还原的暂停，都根本不写「已收尾」这一条。
 
 ## 实例配置
 
@@ -1193,7 +1235,8 @@ PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至
 2. **用途**：这一套给什么用。**MuMu 模拟器**默认勾上，和没有这一页时一样，并写明要先准备什么（装好 MuMu，版本
    不低于 Runtime 要求的，游戏已在里面装好并登录好）。**安卓真机**也能勾，并写明现在能做什么：能连接、能看画面；
    跑任务要等后续版本（它的策略行写 `available` false：Runtime 照常准备、自检这部手机，但从不派任务给它；画面靠监控台的
-   「刷新」，那是只读的截一帧）。**iOS 真机**（还不支持）灰着、不能勾；读屏软件念名字时连原因一起念。一项都不勾也可以：这时
+   「刷新」，那是只读的截一帧）。**iOS 真机**（还不支持）灰着、不能勾；读屏软件念名字时连原因一起念。Runtime v0.12.74 已经认识
+   iOS 实例（`device.system: "ios"`），但在给它取帧后端的那一片之前它什么都不做，发版也不带 `acib`，所以这个框还是灰的。一项都不勾也可以：这时
    页面上写明向导只装核心部分、不建实例，以及以后怎么加实例。没勾 MuMu 时不进第 6 页，也不去找 MuMu；没勾安卓真机
    时不进第 7 页；两样都没勾时第 8 页也不进（「游戏」页的下一步直接到「选项」，「选项」页的上一步回到「游戏」，步骤栏里
    不进的页都显示成跳过）。把 MuMu 从勾上改成不勾，之前选好的模拟器和实例都清掉，和在第 6 页跳过一样；再勾回来，

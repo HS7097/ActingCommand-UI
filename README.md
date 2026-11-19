@@ -30,15 +30,17 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now Runtime v0.12.73 (`a8d0aa43`), a release.
+  of Runtime v0.12.47; the pin is now Runtime v0.12.74 (`1067dfaf`), a release.
 - **Works with the 0.12 Runtime from v0.12.73 on**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
-  `runtime-client` [12, 12] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73: it declares a `ledger`
-  maximum within [3, 9] and an `actingd-config` and a `runtime-client` range that meet the console's. It does
+  `runtime-client` [12, 12] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73 and v0.12.74: each
+  declares a `ledger` maximum within [3, 9] and an `actingd-config` and a `runtime-client` range that meet
+  the console's (v0.12.74's `actingd-config` [5, 34] included, see "Data source"). It does
   not fit v0.12.72 or earlier, which declare `runtime-client` at most 11: every pause this console sends, Pause
   All and an instance's alike, carries the member `pause_mode` of revision 12, which such a Runtime cannot
   decode, so it ends the connection without an answer and sets no pause (see "Data source"). So move the
-  Runtime to v0.12.73 first, then switch to this console; a console pinned to v0.12.71 keeps working with
-  v0.12.73 meanwhile. From v0.12.68 a game root carries
+  Runtime to v0.12.73 or later first, then switch to this console; a console pinned to v0.12.71 keeps working
+  with v0.12.73 meanwhile, and one pinned to v0.12.73 with v0.12.74, which sends it nothing it cannot
+  decode. From v0.12.68 a game root carries
   `pack-catalog.json` in place of `ui.json` (see "Data source"): the setup wizard lays `pack-catalog.json` and
   refuses an older bundle that carries `ui.json`. The exception is a game root laid before, by an earlier
   setup wizard or a Runtime before v0.12.68, that still holds `ui.json`: `actingctl packs` warns on it, so the
@@ -245,9 +247,39 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.73 (`a8d0aa43`), a
-release, published as a pre-release. Against v0.12.71 (`f0c64ae8`), the pin before, v0.12.72 and v0.12.73
-raise `runtime-client` to 12 and `package` to 19; `ledger` [3, 9] and the Runtime's `actingd-config`
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.74 (`1067dfaf`), a
+release, published as a pre-release. Against v0.12.73 (`a8d0aa43`), the pin before, v0.12.74 raises
+`package` to 20 and the Runtime's `actingd-config` to [5, 34]; `ledger` [3, 9], `runtime-client` [3, 12],
+`install-control` [0, 0] and `runtime-outcomes` [1, 1] stay, and so do the console's ranges. Revision 34
+of `actingd-config` (#479 F-2) adds one optional member of an instance's `device`, `system`: `android`
+(also what an absent member means) or `ios`, a handset's only, which the Runtime reports as the manifest
+row `instance.<instance id>.device_system` only for an entry that names it, hidden in `ui_tier`, read at
+assembly and not settable. The console's `actingd-config` stays at [5, 32], as it did for revision 33
+(v0.12.63 below): the console changes no entry's `device` and does not show that row, and the setup
+wizard writes no `system`, so its phone entries stay Android's, while the revision's own condition is
+that a console or an installer that edits a `device` reach 34 before it writes `system`. It moves to
+[5, 34] in the slice whose setup wizard first writes `system: "ios"`. That is not this slice: the
+wizard's iOS box stays greyed, an iOS instance of this Runtime does nothing before the slice that gives it
+a capture backend, and the Runtime's release ships no `acib`. `package` 20 (#463 SEL-2L), a
+`repeated_anchor` layout's `shared_ocr`, is the packs' and the installer's. No crate the locks list
+changed its dependencies (the Runtime's own lock adds only `sha2`, to `acib`, which neither lock lists),
+so both locks change only in the rev. Of the Runtime crates the console links, ledger-forensics has the
+same source and the ledger crate changed only in its tests; runtime-client gives what the console now
+reads of a resume: `resume_scheduling_expected_as`, which hands back the receipt's outcome beside the
+`SchedulingResumed` result (`SchedulingResumeAnswer`, the shape of `SchedulingPauseAnswer`), with the same
+request, the same wait and the same reading after a dropped connection as `resume_scheduling_expected`,
+which lets that outcome go. The contract crate's changes (`DeviceBinding::serial` giving an `Option`, the
+problems `device_key_invalid` and `system_mismatch` of `DeviceBindingProblem`, `DeviceSystem` and the
+bindings file's schema v2), runtime-config's row `device_system` and the execution kernel's
+`HandsetEndpoint::Ios` touch nothing the console builds, matches or implements. In the outcome-code catalog it embeds, v0.12.74 adds nineteen codes and one
+location, none retired and no `console_` or `setup_` name, among them `scheduling_pause_settled`,
+`scheduling_pause_lifted_not_quiet` and `scheduling_resume_without_backend`. What the console does
+differently is the resume of an instance and the ledger window (both in "Launcher"): a resume says, by its receipt's cause, when nothing connected, a person's pause lifted
+before it finished up (`scheduling_resume_without_reconnect`, which a v0.12.73 Runtime already answers)
+or an iOS handset this Runtime has no backend for, whose resume connects nothing and leaves a fence as it
+is (`scheduling_resume_without_backend`); and the ledger window gives the six records of a pause's life
+(#480 PG-2d) words of its own. The pin before, v0.12.73, against v0.12.71 (`f0c64ae8`), the pin before
+it: v0.12.72 and v0.12.73 raise `runtime-client` to 12 and `package` to 19; `ledger` [3, 9] and the Runtime's `actingd-config`
 [5, 33], `install-control` [0, 0] and `runtime-outcomes` [1, 1] stay. The console's `runtime-client` range
 moves to [12, 12], its lower end with it. Revision 12 (#480 PG-2c) adds the request member
 `PauseScheduling.pause_mode` (`stand` or `quiet_or_lift`, `stand` when absent), and the pinned client writes
@@ -257,7 +289,7 @@ it: the console sees no answer, watches the status, and says the pause did not t
 so, and the setup wizard refuses an install set that pairs this console with such a Runtime; the console's
 own handshake carries no revision, so a console pointed at an older Runtime still connects and reads, and
 only its pauses fail. Revision 12 also declares the status members `InstancePauseState.pause_mode` and
-`in_the_way`, which no 0.12.73 Runtime answers (the release that first answers them raises the Runtime's
+`in_the_way`, which no 0.12.73 or 0.12.74 Runtime answers (the release that first answers them raises the Runtime's
 own minimum to 12). `package` 19 (#463 INT-1), an interrupt entry with `then: end_run` and no handlers and
 the `result` word `environment_reset`, is the packs' and the installer's. No crate the locks list changed its
 dependencies, so both locks change only in the rev. Of the Runtime crates the console links, ledger,
@@ -277,14 +309,14 @@ four vocabularies, and the tokens `global_paused` of `emulator_autostart_skip_re
 or `setup_` name; no code changed its category between the two pins (`scheduling_pause_kept_at_shutdown` was
 an error in v0.12.72 and is informing since v0.12.73), and a Runtime code still gets its category's general
 sentence. What the console does differently is the pause and the resume of an instance (#480 PG-2c; see
-"Running"): a person's pause stands until a person lifts it, answers within the drain timeout and the 30 s
+"Launcher"): a person's pause stands until a person lifts it, answers within the drain timeout and the 30 s
 checkpoint grace, perhaps still on its way and with what is in its way, is not lifted by a failure of the
 Runtime's own, and is resumed in every stage, without a reconnect while its device is not handed back yet
 (a fenced instance, or one whose hand-back has begun closing its device session, still reconnects).
 v0.12.72 (#480 PG-1) also keeps the Runtime from starting an emulator by itself under a global pause. #398
 DB-3: actinglab makes its own standard handles not inheritable as it starts, so an adb server it starts no
 longer holds the setup wizard's pipes; the wizard still reads the Lab's answer without the pipes' end, for a
-Lab before it. The pin before, v0.12.71, merges Runtime PR #1800, whose head (`7b4705ff`, three commits on
+Lab before it. The pin before that, v0.12.71, merges Runtime PR #1800, whose head (`7b4705ff`, three commits on
 top of v0.12.69) the console was pinned to before that, and it is the first release that declares `ledger`
 revision 9 (v0.12.70, `240cdb1a`, still declares [3, 8]). Against that head, v0.12.70 raises `package` to
 18; `ledger` [3, 9], `runtime-client` [3, 11] and the Runtime's `actingd-config` [5, 33], `install-control`
@@ -546,7 +578,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 12, ledger revision 9):
 
 ```
-rev = "a8d0aa438e7fbfae1b776c9f686f246dc103e576"
+rev = "1067dfaf6e548913efcca8106d79f6a731b69c4c"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -825,10 +857,11 @@ entry, not a fixture) has a "Device Backends" group with its touch backend and i
 in a drop-down of the backends that kind of device has (ADB input, MaaTouch, minitouch and, on an
 emulator, MuMu native (Nemu IPC) for touch; ADB screenshot and, on an emulator, DroidCast and MuMu native,
 or on a handset scrcpy, for capture), with where the value comes from (the configuration file, or set
-online, when and through which way) and the instance's latest self-check. Apply switches that instance at
+online, when and through which way) and the instance's latest self-check. An iOS handset entry (Runtime
+v0.12.74 on, `device.system: "ios"`) names no backend, so it has no such group. Apply switches that instance at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.73, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.74, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1539,9 +1572,19 @@ confirmation Put All on Duty asks of another tool's pause, since the console set
 Runtime resumes a person's pause in every stage. A pause whose device is handed back is resumed by
 connecting the device again, which can take about half a minute; a reconnect that fails is said in red with
 its code, and the resume stands. One still draining or handing its device back is lifted at once and
-connects nothing (what still used the instance goes on), and the card says it is resumed; but a fenced
+connects nothing (what still used the instance goes on); but a fenced
 instance (a close of its device session that could not be confirmed) and one whose hand-back has already
-begun closing its device session are resumed by the reconnect, as a handed-back one is. Two codes of the
+begun closing its device session are resumed by the reconnect, as a handed-back one is. Whether a
+reconnect ran is said by the cause the Runtime's answer carries, which the console reads since its pin to
+v0.12.74 (`resume_scheduling_expected_as`), not by the shape of the self-check, both of whose
+sides are then `ok: false` with no code: with `scheduling_resume_without_reconnect` (which a v0.12.73
+Runtime already answers) the card says that the instance's scheduling is resumed and that, the pause not
+having finished up, the device was not connected again. An iOS handset (Runtime v0.12.74 on), whose device
+system this Runtime has no backend for, is the exception to every reconnect: its resume lifts the pause in
+any stage and connects nothing, a fenced one's too, whose fence stays (nothing can certify it again until
+the Runtime has a backend for it), and with `scheduling_resume_without_backend` the card says that the
+instance's scheduling is resumed and that, an iOS phone this Runtime has no backend for yet, no device was
+connected. Neither is red. Two codes of the
 resume's self-check name no failed reconnect, and the card says what they mean, in red only when the code's
 category is not informing: `dispatch_paused_instance`, an instance added while the Runtime was stopped whose
 first-start pause was not applied yet, so the Runtime holds it again with that pause (`instance.added`) and
@@ -1658,7 +1701,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.73
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.74
   has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). A Lab recording's hold (Runtime 0.12.64 on) is a kind of its own: an
   instance's pause whose reason is exactly `lab-record-<unix ms>`, digits only after the prefix (the
@@ -1682,14 +1725,43 @@ through or was stopped.
   why, no button. Any other instance
   pause still draining or handing its device back gets none either, and its line says what it is still
   doing: a Lab recording's hold is a tool's (`quiet_or_lift`), whose resume the Runtime refuses until its
-  device is handed back, and the 0.12.73 status does not say which mode another tool's pause has. The
+  device is handed back, and the 0.12.74 status does not say which mode another tool's pause has (nor do
+  the ledger's records of a pause's life, below, which say what happened, not what holds). The
   console's own instance pause is a person's, which the Runtime resumes in every stage (v0.12.73 on); one
   still draining or handing its device back is lifted without a reconnect, unless the instance is fenced or
-  its hand-back has begun closing its device session, when the resume reconnects it. A resume whose self-check names
+  its hand-back has begun closing its device session, when the resume reconnects it. An iOS handset's
+  resume (Runtime v0.12.74 on) never reconnects: it lifts the pause and connects nothing, and a fenced
+  one stays fenced. The result line says either by the cause the Runtime's answer carries: "the pause
+  had not finished up, so the device was not connected again" (`scheduling_resume_without_reconnect`),
+  or "it is an iOS phone, which this Runtime version has no backend for yet, so no device was connected"
+  (`scheduling_resume_without_backend`), neither in red. A resume whose self-check names
   `dispatch_paused_instance` says that the instance, added while the Runtime was stopped, is held again by its
   first-start pause, and one naming `player_hold_active` that a player holds the device, so it was not
   connected again; each with the code and its words, in red only when the code's category is not
   informing. Each line shows its pause's reason verbatim, whatever the operator wrote.
+- **A pause's life (ledger window)**: from Runtime v0.12.74 (#480 PG-2d) each moment of an instance
+  pause's life that its answer and its stage do not tell is one `runtime.lifecycle_observed` record of
+  phase `device_state_observed`, under the instance and the links of the pause's own request (an iOS
+  phone's pause no request set has fresh links of its own), so typing that request id (the detail's
+  Request ID) into the id box gathers one pause's records; its level is its code's category. The window
+  reads them as it reads every row, online and offline, in the public projection, which keeps their codes
+  and the values `pause_stage` and `in_the_way` but not `pause_reason`. Six codes get the console's own
+  words: a few after the event name on the row, and lines of the detail (Outcome, Stage, In the Way, Cause
+  Code): `scheduling_pause_standing`, "Pause Still Finishing Up", with where it stood, what was
+  in its way and, for a check that failed, the code under it; `scheduling_pause_settled`, "Pause Finished
+  Up": the tasks stopped and the device was handed back, and the pause still holds;
+  `scheduling_resume_without_reconnect`, resumed before it finished up and not reconnected, a record filed
+  under the pause's request, not the resume's; `scheduling_pause_kept_at_shutdown`, with its stage: the
+  Runtime closed before the pause finished up, and the pause stays until the next start;
+  `scheduling_pause_lifted_not_quiet`, a warning and so in the Errors tab too: a tool's pause lifted before
+  the instance was quiet, so it paused nothing, with what was in its way and the code of the failure that
+  ended it, but not which tool's it was, which the projection leaves out; and
+  `scheduling_resume_without_backend`, an iOS phone's pause lifted with nothing connected. Any other
+  `device_state_observed` record (the emulator watch's, the idle check's) shows as before. These records
+  say what happened, and neither the instance cards nor the pause lines read them: what a pause is doing
+  now is the status's stage (a settled record comes only after the stage is `released`, and a resume
+  may be recorded before it), and a pause quiet within its caller's time, resumed first or restored at a
+  start writes no settled record at all.
 
 ## Instance configuration
 
@@ -1801,7 +1873,9 @@ but that bridge, which the question then names (closing is held off while it is 
    it connects and shows its screen; running tasks comes in a later version (its policy row is written
    `available` false, so the Runtime prepares and self-checks the phone but never sends it a task, and its
    picture is the console's refresh, a read-only capture). **iOS device** (not supported
-   yet) is greyed and cannot be ticked; a screen reader hears its reason with its name. Nothing ticked is
+   yet) is greyed and cannot be ticked; a screen reader hears its reason with its name. Runtime v0.12.74
+   knows an iOS instance (`device.system: "ios"`), but it does nothing before the slice that gives it a
+   capture backend and its release ships no `acib`, so the box stays greyed. Nothing ticked is
    allowed too: the page then says the wizard installs only the core and sets up no instance, and how to add
    instances later. Without MuMu, page 6 is passed by and MuMu is not looked for; without Android phone,
    page 7; with neither, page 8 too (Next on Games goes to Options, Back on Options to Games, the step bar

@@ -19,9 +19,10 @@ use acui_rows::{
     seconds_since, short_id, ArtifactEvictionObservation, EventSeverity, LedgerCount,
     OriginModule, ProjectedEvent, Sensitivity, WriterFacts,
 };
+use acui_source::workbench::{pause_moment, PauseMoment};
 use acui_source::{
-    MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, SourceMode, MAX_FRAME_BYTES,
-    UNANSWERED_PAGE_CODES, WRITER_RESPONSE_TIMEOUT,
+    MaterialOutcome, OfflineFacts, OfflineReason, PauseStage, RuntimeInstance, SourceMode,
+    MAX_FRAME_BYTES, UNANSWERED_PAGE_CODES, WRITER_RESPONSE_TIMEOUT,
 };
 use slint::{
     ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
@@ -37,6 +38,7 @@ use crate::ledger::LedgerHandle;
 use crate::phrase::{phrase, Phrase};
 use crate::strings::{fill, outcome_sentence, outcome_short, Labels, Language};
 use crate::ui::Ui;
+use crate::workbench::paint::obstacle_text;
 use crate::{ArtifactItem, FieldLine, LedgerWindow, OverlayItem, RowItem, Strings, TargetItem};
 
 /// How long a request runs before the busy line shows.
@@ -362,6 +364,15 @@ pub fn refresh(
                 // A run a person stopped (UI-3e3): no failure, so not in a failure's red, its
                 // level the Runtime's still.
                 let stopped = stop_marked(event);
+                // A record of a pause's life (#480 PG-2d) says which moment after its name.
+                let event_name = match pause_moment(event) {
+                    Some(moment) => format!(
+                        "{} · {}",
+                        event_text(labels, &raw_type),
+                        pause_life_short(labels, &moment)
+                    ),
+                    None => event_text(labels, &raw_type),
+                };
                 RowItem {
                     recovery: false,
                     folded: *folded,
@@ -370,7 +381,7 @@ pub fn refresh(
                     level: labels.levels[severity_index(event.severity)].into(),
                     level_tone: if stopped { STOPPED_TONE } else { severity_tone(event.severity) },
                     module: module_text(labels, event.origin.module()).into(),
-                    event_name: event_text(labels, &raw_type).into(),
+                    event_name: event_name.into(),
                     event_raw: raw_type.into(),
                     // The port the map gives the linked instance; the id itself
                     // when the map gives none — never a port the ledger did not state.
@@ -856,11 +867,91 @@ fn detail_lines(labels: &Labels, event: &ProjectedEvent) -> Vec<FieldLine> {
         field(labels, "views", views_text(labels, event), ""),
         field(labels, "payload_schema", event.payload_schema.clone(), ""),
     ];
+    if let Some(moment) = pause_moment(event) {
+        lines.extend(pause_life_lines(labels, &moment));
+    }
     lines.extend(
         links_named(&event.links)
             .into_iter()
             .map(|(key, value)| field(labels, key, value, "")),
     );
+    lines
+}
+
+/// A record of a pause's life (`pause_moment`; Runtime 0.12.74, #480 PG-2d), in a few words after
+/// its row's event name. Its level is the record's own, its outcome's category, as every row's:
+/// a tool's pause lifted before its instance was quiet is a warning, and so in the Errors tab.
+fn pause_life_short(labels: &Labels, moment: &PauseMoment) -> &'static str {
+    match moment {
+        PauseMoment::Standing { .. } => labels.pause_life_standing,
+        PauseMoment::Settled => labels.pause_life_settled,
+        PauseMoment::ResumedWithoutReconnect => labels.pause_life_resumed_without_reconnect,
+        PauseMoment::KeptAtShutdown { .. } => labels.pause_life_kept_at_shutdown,
+        PauseMoment::LiftedNotQuiet { .. } => labels.pause_life_lifted_not_quiet,
+        PauseMoment::ResumedWithoutBackend => labels.pause_life_resumed_without_backend,
+    }
+}
+
+/// The detail's lines of a record of a pause's life, the console's own words for what the
+/// Runtime recorded: its outcome in a sentence, with its code; where the pause stood and what was
+/// in its way, of the codes that carry them; and the code of the failure under it, when there is
+/// one (a failed check under a pause still finishing up, what ended a tool's pause), with its
+/// short words. Which tool's pause a lifted one was, the record's public projection does not say.
+fn pause_life_lines(labels: &Labels, moment: &PauseMoment) -> Vec<FieldLine> {
+    let (detail, stage, in_the_way, cause) = match moment {
+        PauseMoment::Standing { stage, in_the_way, cause } => (
+            labels.pause_life_standing_detail,
+            Some(*stage),
+            Some(in_the_way.as_deref()),
+            cause.as_deref(),
+        ),
+        PauseMoment::Settled => (labels.pause_life_settled_detail, None, None, None),
+        PauseMoment::ResumedWithoutReconnect => {
+            (labels.pause_life_resumed_without_reconnect_detail, None, None, None)
+        }
+        PauseMoment::KeptAtShutdown { stage } => {
+            (labels.pause_life_kept_at_shutdown_detail, Some(*stage), None, None)
+        }
+        PauseMoment::LiftedNotQuiet { in_the_way, cause } => (
+            labels.pause_life_lifted_not_quiet_detail,
+            None,
+            Some(in_the_way.as_deref()),
+            cause.as_deref(),
+        ),
+        PauseMoment::ResumedWithoutBackend => {
+            (labels.pause_life_resumed_without_backend_detail, None, None, None)
+        }
+    };
+    let mut lines = vec![field(labels, "pause_outcome", detail.to_owned(), moment.code())];
+    if let Some(stage) = stage {
+        let (value, raw) = match stage {
+            Some(PauseStage::Draining) => (labels.pause_draining, "draining"),
+            Some(PauseStage::Paused) => (labels.pause_releasing, "paused"),
+            // No such record names it: handed back is a pause that finished up.
+            Some(PauseStage::Released) => (labels.pause_life_settled, "released"),
+            None => (labels.pause_life_unread, ""),
+        };
+        lines.push(field(labels, "pause_stage", value.to_owned(), raw));
+    }
+    if let Some(in_the_way) = in_the_way {
+        let (value, raw) = match in_the_way {
+            None => (labels.pause_life_unread.to_owned(), String::new()),
+            Some([]) => (labels.pause_life_nothing_in_the_way.to_owned(), String::new()),
+            Some(words) => (
+                words
+                    .iter()
+                    .map(|word| obstacle_text(labels, *word))
+                    .collect::<Vec<_>>()
+                    .join(labels.name_list),
+                words.iter().map(|word| word.as_str()).collect::<Vec<_>>().join(", "),
+            ),
+        };
+        lines.push(field(labels, "in_the_way", value, raw));
+    }
+    if let Some(code) = cause {
+        let words = outcome_short(labels, code).unwrap_or_else(|| code.to_owned());
+        lines.push(field(labels, "cause_code", words, code.to_owned()));
+    }
     lines
 }
 
