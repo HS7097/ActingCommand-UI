@@ -284,6 +284,7 @@ dependencies = [
 name = "acui-model"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-display-adapter",
  "acui-rows",
  "serde",
  "serde_json",

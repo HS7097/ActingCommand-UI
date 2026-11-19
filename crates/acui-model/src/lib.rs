@@ -11,13 +11,16 @@
 //! `MAX_WIDTH`; a wider one may take more than one page, read by following the
 //! cursor, as the reply's byte limit may split any window.
 
+mod effect_points;
 mod frame_group;
 mod overlay;
 mod tabs;
 
+pub use effect_points::{drawn_input, DrawnInput, InEffect, RunMaps};
 pub use frame_group::frame_group;
-pub use frame_group::{BasisVia, FrameGroup, Mark, TargetBox};
+pub use frame_group::{BasisVia, FrameGroup, Mark, MarkConversion, TargetBox};
 pub use overlay::{extract_frame_size, extract_overlays, Overlay};
+use overlay::extract_overlays_outside;
 pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
 use acui_rows::outcome::CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN;
@@ -671,14 +674,24 @@ impl ViewModel {
         self.rows.iter().find(|event| event.sequence == sequence)
     }
 
+    /// The selected event's detail. An effect intent's `action` is in base
+    /// pixels and its frame is the device's (Runtime 945727d4
+    /// `contracts/display-adapter.md:458-464`): no geometry of it is drawn as it
+    /// is, only its mark, put on the device frame (UI-PT1); the payload's JSON
+    /// keeps it as recorded.
     pub fn detail(&self) -> Option<DetailView<'_>> {
         let event = self.selected()?;
         let payload = payload_value(event);
+        let overlays = if frame_group::is_effect_intent(event) {
+            extract_overlays_outside(&payload, "action")
+        } else {
+            extract_overlays(&payload)
+        };
         Some(DetailView {
             event,
             pretty_payload_json: serde_json::to_string_pretty(&payload)
                 .unwrap_or_else(|_| payload.to_string()),
-            overlays: extract_overlays(&payload),
+            overlays,
             frame_size: frame_extent(event).or_else(|| extract_frame_size(&payload)),
         })
     }
@@ -690,9 +703,39 @@ impl ViewModel {
     }
 
     /// What the loaded rows and `extra`, events read for it, say about frame
-    /// `frame` (its id as `code` writes it).
-    pub fn frame_group(&self, frame: &str, extra: &[ProjectedEvent]) -> FrameGroup {
-        frame_group::frame_group(frame, self.rows.iter().chain(extra))
+    /// `frame` (its id as `code` writes it), its effect intents' marks put on
+    /// the frame by their runs' maps as `runs` know them.
+    pub fn frame_group(
+        &self,
+        frame: &str,
+        extra: &[ProjectedEvent],
+        runs: &RunMaps,
+    ) -> FrameGroup {
+        frame_group::frame_group(frame, self.rows.iter().chain(extra), runs)
+    }
+
+    /// The selected event's own mark, when it is an effect intent: its input
+    /// put on its device frame by its run's map as `runs` know it.
+    pub fn selected_mark(&self, runs: &RunMaps) -> Option<Mark> {
+        frame_group::effect_mark(self.selected()?, runs)
+    }
+
+    /// The effect intents whose marks the frame pane draws for the selected
+    /// event: those on frame `frame` (its id as `code` writes it) among the
+    /// loaded rows and `extra`, events read for it; with no frame, the selected
+    /// event itself when it is one.
+    pub fn drawn_effects<'a>(
+        &'a self,
+        frame: Option<&str>,
+        extra: &'a [ProjectedEvent],
+    ) -> Vec<&'a ProjectedEvent> {
+        match frame {
+            Some(frame) => frame_group::frame_effects(frame, self.rows.iter().chain(extra)),
+            None => {
+                let own = self.selected().filter(|event| frame_group::is_effect_intent(event));
+                own.into_iter().collect()
+            }
+        }
     }
 
     pub fn frame_target(&self) -> Option<FrameTarget> {

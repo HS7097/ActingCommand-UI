@@ -233,6 +233,14 @@ pub struct Labels {
     /// A frame's lookup read its window and found no capture there: from, to.
     pub frame_capture_not_in_range: &'static str,
     pub frame_events_failed: &'static str,
+    /// UI-PT1, an effect intent's points on its device frame, after the input's name: the
+    /// product refuses the input under its run's display map, so none is drawn (the live view
+    /// says it under the frame too); its run's map is being read (also the busy line); it could
+    /// not be read (the read's words, then how to read again); it was not read whole.
+    pub effect_points_unconverted: &'static str,
+    pub effect_points_reading: &'static str,
+    pub effect_points_failed: &'static str,
+    pub effect_points_incomplete: &'static str,
     /// Input kinds as the ledger writes them, by prefix, and their names.
     pub action_kinds: &'static [(&'static str, &'static str)],
     pub frame_unavailable: &'static str,
@@ -1511,6 +1519,10 @@ pub struct Labels {
     pub picture_overlays: &'static str,
     pub picture_marks_none: &'static str,
     pub picture_marks_mismatch: &'static str,
+    /// UI-PT1, under the frame: an input's run's display map was not read, or not whole, so its
+    /// points are not drawn; why is in the technical log. One that was not converted says
+    /// `effect_points_unconverted`.
+    pub picture_points_unread: &'static str,
     pub picture_aspect_undeclared: &'static str,
     /// Under the live view, its refresh: the button, and in grey what a refresh costs. Beside
     /// the button why it cannot be pressed now: no Runtime online; the device is being handed
@@ -2086,6 +2098,10 @@ pub const ZH: Labels = Labels {
     frame_capture_missing: "账本里没有这一帧的截图产物",
     frame_capture_not_in_range: "在序号 {}–{} 内没找到这一帧的截图产物",
     frame_events_failed: "读取这一帧的事件失败：{}",
+    effect_points_unconverted: "这一步的输入没有换算",
+    effect_points_reading: "正在读这次运行的显示换算…",
+    effect_points_failed: "读不到这次运行的显示换算：{}；这一步的点没画",
+    effect_points_incomplete: "这次运行的显示换算没读全；这一步的点没画",
     action_kinds: &[
         ("tap", "点击"),
         ("long_tap", "长按"),
@@ -2948,6 +2964,7 @@ pub const ZH: Labels = Labels {
     picture_overlays: "识别框和点击点",
     picture_marks_none: "这张画面没有识别记录",
     picture_marks_mismatch: "识别记录的尺寸与画面不符，没有画识别框",
+    picture_points_unread: "读不到这次运行的显示换算（详情见技术日志），这一步的点没画",
     picture_aspect_undeclared: "这个标准包没有声明支持 {} 的画面，任务可能跑不准",
     refresh_frame: "刷新一帧",
     refresh_cost: "每次刷新会截一张图存进账本（约 1–3 MB），按留存规则自动清理；截图时会短暂占用设备",
@@ -3401,6 +3418,10 @@ pub const EN: Labels = Labels {
     frame_capture_missing: "The ledger holds no capture of this frame",
     frame_capture_not_in_range: "No capture of this frame between positions {} and {}",
     frame_events_failed: "Reading this frame's events failed: {}",
+    effect_points_unconverted: "This step's input was not converted",
+    effect_points_reading: "Reading this run's display map…",
+    effect_points_failed: "This run's display map could not be read: {}; this step's points are not drawn",
+    effect_points_incomplete: "This run's display map was not read whole; this step's points are not drawn",
     action_kinds: &[
         ("tap", "tap"),
         ("long_tap", "long tap"),
@@ -4263,6 +4284,7 @@ pub const EN: Labels = Labels {
     picture_overlays: "Recognition boxes and taps",
     picture_marks_none: "No recognition was recorded on this picture",
     picture_marks_mismatch: "The recognition's size differs from the picture's; no boxes drawn",
+    picture_points_unread: "This run's display map could not be read (see the technical log); this step's points are not drawn",
     picture_aspect_undeclared: "This standard pack does not declare {} pictures; tasks may misread them",
     refresh_frame: "Capture One Frame",
     refresh_cost: "Each refresh saves a screenshot in the ledger (about 1–3 MB), cleaned up by the retention rules; taking it briefly occupies the device",

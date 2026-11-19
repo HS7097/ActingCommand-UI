@@ -21,6 +21,15 @@
 //! only of the frame shown and the one waiting to be read, hands it over with the frame, and
 //! what comes of the frame shown later, as it comes.
 //!
+//! An input meant on a frame is in its package's base pixels, the frame in the device's
+//! (UI-PT1; Runtime 945727d4 `contracts/display-adapter.md:458-464`): its points are put on
+//! the frame by its run's display map, which the thread reads once a run, the first time an
+//! input of it is to be drawn, from the run's start up to where the polls go on after
+//! (`read_runs`); the polls bring the run's later geometry records with them. Only after a
+//! poll that was not whole, which leaves the runs behind, is a run read again, when an input
+//! of it needs it. The maps are kept apart from the marks, by run, and go with the account
+//! followed.
+//!
 //! Every order to follow another account, or none, states a generation (`Pictures::sync`);
 //! what the thread hands over states the one it was for, and one of another generation is
 //! let go (`landed`), as is one of another owner epoch than the one online. A material read
@@ -37,7 +46,7 @@
 //! What a limit on its reads is checked by is in the technical log: a read that took long,
 //! as it happens, and every read's count at the end of the run (`PreviewTally`).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -46,6 +55,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use acui_model::RunMaps;
 use acui_source::workbench::preview::{
     CaptureFailure, FrameKey, FrameMarks, FrameOrigin, FrameRead, FrameSeen, Latest, LookupStopped,
     Overlay, Poll, PreviewLane, LOOKUP_PAGES,
@@ -95,6 +105,9 @@ const SELECT_SETTLE: Duration = Duration::from_millis(300);
 pub const STALE_AFTER: Duration = Duration::from_secs(30);
 /// How many frames that could not be read the thread keeps, so as not to read them again.
 const FAILED_FRAMES: usize = 64;
+/// How many runs' display maps the thread keeps before it lets go of those of runs no input
+/// it keeps was meant in (UI-PT1): a run of the past is not drawn again.
+const KEPT_RUNS: usize = 8;
 /// The most pixels a decoded frame may have.
 const MAX_DECODED_PIXELS: u64 = 16_777_216;
 /// A read longer than this leaves a line in the technical log.
@@ -203,6 +216,9 @@ pub struct PreviewTally {
     lookup_pages: AtomicU64,
     lookups_capped: AtomicU64,
     mark_pages: AtomicU64,
+    run_maps: AtomicU64,
+    run_map_pages: AtomicU64,
+    run_maps_cut: AtomicU64,
     reads: AtomicU64,
     read_bytes: AtomicU64,
     reads_missing: AtomicU64,
@@ -255,6 +271,16 @@ impl PreviewTally {
         self.mark_pages.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// A read of a run's display map of `pages` pages, the one that failed included; `cut`,
+    /// it came back and was not whole.
+    fn run_map(&self, pages: u32, cut: bool) {
+        self.run_maps.fetch_add(1, Ordering::SeqCst);
+        self.run_map_pages.fetch_add(u64::from(pages), Ordering::SeqCst);
+        if cut {
+            self.run_maps_cut.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     /// A material read that went to the Runtime, and what it came to.
     fn read(&self, took: Duration, bytes: Option<usize>, missing: bool, failed: bool) {
         self.reads.fetch_add(1, Ordering::SeqCst);
@@ -299,7 +325,8 @@ impl PreviewTally {
         let count = |counter: &AtomicU64| counter.load(Ordering::SeqCst);
         format!(
             "polls {} (fast {}, longest {} ms); lookups {} (pages {}, capped {}); \
-             mark pages {}; frame reads {} (bytes {}, missing {}, failed {}, longest {} ms); \
+             mark pages {}; run maps {} (pages {}, not whole {}); \
+             frame reads {} (bytes {}, missing {}, failed {}, longest {} ms); \
              decodes {} (longest {} ms); offers {}; refreshes {} (observed {}, refused {}, \
              unconfirmed {}, unread {}, not sent {})",
             count(&self.polls),
@@ -309,6 +336,9 @@ impl PreviewTally {
             count(&self.lookup_pages),
             count(&self.lookups_capped),
             count(&self.mark_pages),
+            count(&self.run_maps),
+            count(&self.run_map_pages),
+            count(&self.run_maps_cut),
             count(&self.reads),
             count(&self.read_bytes),
             count(&self.reads_missing),
@@ -501,6 +531,12 @@ struct Line {
     told: Option<Overlay>,
     /// A task's frame the order carried: what came of it before `after` is still to be read.
     marks_owed: Option<FrameSeen>,
+    /// The display maps of the runs whose inputs are drawn (UI-PT1), by run: kept apart from
+    /// `marks`, which keeps the records of two frames only.
+    runs: RunMaps,
+    /// The runs read since the last poll that was not whole, by their ids as the wire spells
+    /// them: none is read again before another such poll leaves it behind.
+    asked: BTreeSet<String>,
 }
 
 impl Line {
@@ -526,6 +562,8 @@ impl Line {
             shown_key,
             told: None,
             marks_owed: None,
+            runs: RunMaps::default(),
+            asked: BTreeSet::new(),
         };
         if let Some(frame) = known {
             let owed = is_task(&frame).then(|| frame.clone());
@@ -590,7 +628,7 @@ impl Line {
         if let Some(frame) = self.marks_owed.clone() {
             self.mark_page(lane, tally, &frame, after)?;
             self.marks_owed = None;
-            self.tell_marks();
+            self.tell_marks(lane, tally)?;
         }
         self.poll(lane, tally, after)
     }
@@ -657,8 +695,7 @@ impl Line {
             after: head,
         };
         post(self.generation, seen);
-        self.tell_marks();
-        Ok(())
+        self.tell_marks(lane, tally)
     }
 
     /// What came of `frame`, which a lookup found at or below `head`, before `head`: one page,
@@ -715,12 +752,21 @@ impl Line {
         Ok(())
     }
 
+    /// The display maps the inputs meant on the frame shown and the one waiting need, read
+    /// first (`read_runs`); then what is known of that frame told (`tell_known`).
+    fn tell_marks(&mut self, lane: &mut PreviewLane, tally: &PreviewTally) -> Result<(), Halt> {
+        self.read_runs(lane, tally)?;
+        self.tell_known();
+        Ok(())
+    }
+
     /// The event loop hears what is now known to be recognized and meant on the frame shown,
     /// when that changed; and the thread lets go of what it keeps of frames other than that
-    /// one and the one waiting.
-    fn tell_marks(&mut self) {
+    /// one and the one waiting, and, past `KEPT_RUNS`, of the display maps of runs none of
+    /// what it keeps was meant in.
+    fn tell_known(&mut self) {
         if let Some(key) = &self.shown_key {
-            let overlay = self.marks.overlay(key);
+            let overlay = self.marks.overlay(key, &self.runs);
             if overlay != self.told {
                 self.told = overlay.clone();
                 let seen = Seen::Marks {
@@ -735,6 +781,60 @@ impl Line {
         let waiting = self.waiting.as_ref().map(|frame| &frame.key);
         let keys: Vec<&FrameKey> = self.shown_key.iter().chain(waiting).collect();
         self.marks.keep(&keys);
+        if self.runs.run_count() > KEPT_RUNS {
+            let meant = self.marks.run_names();
+            self.runs.retain(|run| meant.contains(run));
+            self.asked.retain(|run| meant.contains(run));
+        }
+    }
+
+    /// The display map of each run an input meant on the frame shown or the one waiting was
+    /// meant in, where it is not known (UI-PT1): one read of the run's geometry records from
+    /// its start up to `after`, where the polls go on from, counted and timed whether it came
+    /// back or not; then the polls bring the rest. A run read since the last poll that was not
+    /// whole is not read again: one whose read was not whole stays unknown, its points not
+    /// drawn, and the log says so. One that stopped short is read again in a later round.
+    fn read_runs(&mut self, lane: &mut PreviewLane, tally: &PreviewTally) -> Result<(), Halt> {
+        let Some(head) = self.after else {
+            return Ok(());
+        };
+        let wanted = {
+            let waiting = self.waiting.as_ref().map(|frame| &frame.key);
+            let keys: Vec<&FrameKey> = self.shown_key.iter().chain(waiting).collect();
+            self.marks.unknown_runs(&keys, &self.runs)
+        };
+        for run in wanted {
+            if self.asked.contains(run.name()) {
+                continue;
+            }
+            let started = Instant::now();
+            let asked = lane.run_maps(self.target.key, &run, head);
+            let took = started.elapsed();
+            let alias = &self.target.alias;
+            let what = format!("the display map of run {} of {alias}", run.name());
+            let reach = match asked {
+                Ok(reach) => reach,
+                Err(LookupStopped { failure, pages }) => {
+                    tally.run_map(pages, false);
+                    slow(&format!("{what} ({pages} pages, stopped short)"), took);
+                    return Err(Halt::Unreached(failure));
+                }
+            };
+            tally.run_map(reach.pages, !reach.value.whole);
+            slow(&format!("{what} ({} pages)", reach.pages), took);
+            self.same_epoch(&reach.epoch)?;
+            if !reach.value.whole {
+                let line = format!(
+                    "{what} was not read whole at {head} ({} pages): its inputs' points are not \
+                     drawn",
+                    reach.pages
+                );
+                report::log_quiet(THREAD, &line);
+            }
+            self.runs.absorb(reach.value.maps);
+            self.asked.insert(run.name().to_owned());
+        }
+        Ok(())
     }
 
     /// The newest frame at or below `head`. One that ran out of pages says so in the log,
@@ -793,7 +893,14 @@ impl Line {
         slow(&format!("a poll for {}", self.target.alias), took);
         let reach = polled?;
         self.same_epoch(&reach.epoch)?;
-        let Poll { snapshot, complete, frames, failures, marks } = reach.value;
+        let Poll { snapshot, complete, frames, failures, marks, runs } = reach.value;
+        // UI-PT1: a whole page carries the runs read so far on to its snapshot; after one
+        // that is not, the runs are behind, and each is read again when an input needs it.
+        if complete {
+            self.runs.follow(&runs, after, snapshot);
+        } else {
+            self.asked.clear();
+        }
         let (newest, failure, marks) = if complete {
             (frames.into_iter().last(), failures.into_iter().last(), Some(marks))
         } else {
@@ -818,7 +925,8 @@ impl Line {
         if let Some(marks) = marks {
             self.marks.absorb(marks);
         }
-        self.tell_marks();
+        // What the poll found is told whatever became of a run's display map read for it.
+        let told = self.tell_marks(lane, tally);
         if fresh.is_some() || failure.is_some() || self.troubled {
             let seen = Seen::Polled {
                 alias: self.target.alias.clone(),
@@ -829,7 +937,7 @@ impl Line {
             };
             post(self.generation, seen);
         }
-        Ok(())
+        told
     }
 
     /// The waiting frame, read whole and decoded; one the thread could not read before is
@@ -881,7 +989,8 @@ impl Line {
                     Ok(pixels) => {
                         self.shown = Some(frame.sequence);
                         reads.last_unread = None;
-                        let overlay = self.marks.overlay(&frame.key);
+                        // Its runs' display maps were read in the round its marks came in.
+                        let overlay = self.marks.overlay(&frame.key, &self.runs);
                         self.shown_key = Some(frame.key.clone());
                         self.told = overlay.clone();
                         let seen = Seen::Frame {
@@ -893,7 +1002,7 @@ impl Line {
                         };
                         hand_over(waiting, ours, seen);
                         // Nothing of the frames before it is kept.
-                        self.tell_marks();
+                        self.tell_known();
                     }
                     Err((why, detail)) => self.unreadable(reads, &frame, why, &detail),
                 }

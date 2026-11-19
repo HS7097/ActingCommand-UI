@@ -32,7 +32,17 @@ impl Overlay {
 
 pub fn extract_overlays(payload: &Value) -> Vec<Overlay> {
     let mut overlays = Vec::new();
-    walk(payload, "payload", false, &mut overlays);
+    walk(payload, "payload", false, None, &mut overlays);
+    overlays
+}
+
+/// The geometry of `payload` outside every member named `skipped`, at any depth:
+/// an effect intent's `action`, in base pixels (Runtime 945727d4
+/// `contracts/display-adapter.md:458-464`), which is drawn only as its mark, put
+/// on the device frame (UI-PT1).
+pub fn extract_overlays_outside(payload: &Value, skipped: &str) -> Vec<Overlay> {
+    let mut overlays = Vec::new();
+    walk(payload, "payload", false, Some(skipped), &mut overlays);
     overlays
 }
 
@@ -48,8 +58,15 @@ pub fn extract_frame_size(payload: &Value) -> Option<(f32, f32)> {
     }
 }
 
-/// `geometry` is true once the walk has entered one of `GEOMETRY_KEYS`.
-fn walk(value: &Value, name: &str, geometry: bool, overlays: &mut Vec<Overlay>) {
+/// `geometry` is true once the walk has entered one of `GEOMETRY_KEYS`; no
+/// member named `skipped` is entered.
+fn walk(
+    value: &Value,
+    name: &str,
+    geometry: bool,
+    skipped: Option<&str>,
+    overlays: &mut Vec<Overlay>,
+) {
     match value {
         Value::Object(map) => {
             if geometry {
@@ -79,17 +96,21 @@ fn walk(value: &Value, name: &str, geometry: bool, overlays: &mut Vec<Overlay>) 
                 }
             }
             for (key, child) in map {
+                if skipped == Some(key.as_str()) {
+                    continue;
+                }
                 walk(
                     child,
                     key,
                     geometry || GEOMETRY_KEYS.contains(&key.as_str()),
+                    skipped,
                     overlays,
                 );
             }
         }
         Value::Array(items) => {
             for (index, child) in items.iter().enumerate() {
-                walk(child, &format!("{name}[{index}]"), geometry, overlays);
+                walk(child, &format!("{name}[{index}]"), geometry, skipped, overlays);
             }
         }
         _ => {}

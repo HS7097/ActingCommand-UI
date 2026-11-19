@@ -12,7 +12,8 @@
 //!
 //! - ledger pages (`QueryEvents`), which the Runtime's reader pool answers off the
 //!   ledger's writer and which take no record: a poll after a known position, a lookup
-//!   down from the head a status stated, and the marks of one frame found by a lookup;
+//!   down from the head a status stated, the marks of one frame found by a lookup, and
+//!   the display map of a run whose inputs are drawn ([`PreviewLane::run_maps`], UI-PT1);
 //! - one frame's material whole (`ReadMaterial`, through [`MaterialReader`]), which takes
 //!   no record when it is read or found gone, and one for any other failure; its artifact
 //!   lookups the same reader pool answers, off the writer (Runtime 0.12.38, #422 RA-1).
@@ -31,11 +32,13 @@
 //! The Runtime captures a frame and records it; the frame its records state is handed to
 //! the lane, which reads and shows it as any other, so the picture has one way in.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use acui_model::{InEffect, MarkConversion, RunMaps};
 use acui_rows::{
     code, page_source_complete, ArtifactKind, EventQuery, LedgerEventPosition,
     ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
@@ -44,7 +47,7 @@ use acui_rows::{
     RuntimeMaterialReadState as State, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use actingcommand_contract::outcome::Code;
-use actingcommand_contract::{EventType, FrameId, RuntimeResult};
+use actingcommand_contract::{EventType, FrameId, RunId, RuntimeResult};
 use actingcommand_runtime_client::{RuntimeClientError, RuntimeFlowOutput};
 
 use super::{connection_ended, InstanceKey, ReadLane, Unreached};
@@ -56,13 +59,21 @@ use crate::{
 /// The lane's io timeout: how long a page or a material range waits for its receipt,
 /// and the bound of its connect, as for the ledger window's page connection.
 pub const PREVIEW_IO: Duration = Duration::from_secs(20);
-/// The rows of one poll. The four kinds of record it asks for come nowhere near this many
+/// The rows of one poll. The five kinds of record it asks for come nowhere near this many
 /// in the seconds between two polls; a page that holds more is not used
 /// ([`Poll::complete`]).
 pub const POLL_ROWS: u16 = 64;
 /// The rows of the one page of a frame's marks: its recognition and the inputs meant on
 /// it come nowhere near this many.
 pub const MARK_ROWS: u16 = 16;
+/// The rows of one page of a run's display map (UI-PT1), and the most pages it reads,
+/// following its cursor: a run's `task.geometry_observed` records, its first one and one
+/// for each recheck or change (Runtime 945727d4
+/// `crates/actingcommand-contract/src/event/payload.rs:3956-3962`), come nowhere near this
+/// many. A read that goes on past them is not whole: the run's map stays unknown, and its
+/// inputs' points are not drawn.
+pub const RUN_MAP_ROWS: u16 = 64;
+pub const RUN_MAP_PAGES: u32 = 4;
 /// The windows a lookup reads down from the head, each just below the one before: 512
 /// positions, then four times as many each time.
 pub const LOOKUP_WINDOWS: [u64; 5] = [512, 2_048, 8_192, 32_768, 131_072];
@@ -99,10 +110,14 @@ pub struct Poll {
     pub frames: Vec<FrameSeen>,
     pub failures: Vec<CaptureFailure>,
     pub marks: FrameMarks,
+    /// The runs' `task.geometry_observed` records the page holds (UI-PT1), which the
+    /// display maps of the runs already read go on with ([`RunMaps::follow`]).
+    pub runs: RunMaps,
 }
 
 /// The records of what tasks recognized on frames of the instance and the inputs they meant
-/// on them, as they came, which only [`FrameMarks::overlay`] reads. A frame's come after its
+/// on them, as they came, which only [`FrameMarks::overlay`] reads, and the runs whose
+/// display maps those inputs need ([`FrameMarks::unknown_runs`]). A frame's come after its
 /// own `artifact.verified` record: a task recognizes a frame once it is captured and kept.
 #[derive(Debug, Clone, Default)]
 pub struct FrameMarks {
@@ -137,12 +152,13 @@ impl FrameMarks {
 
     /// What the records say was recognized and meant on the frame `key` names; none when
     /// they say nothing of it, and always for a frame that names no frame id. The targets'
-    /// names are left out: the picture draws no words on a frame.
-    pub fn overlay(&self, key: &FrameKey) -> Option<Overlay> {
+    /// names are left out: the picture draws no words on a frame. Each input's points are
+    /// put on the frame by its run's display map as `runs` know it (UI-PT1).
+    pub fn overlay(&self, key: &FrameKey, runs: &RunMaps) -> Option<Overlay> {
         let FrameKey::Frame(frame) = key else {
             return None;
         };
-        let group = acui_model::frame_group(frame, &self.events);
+        let group = acui_model::frame_group(frame, &self.events, runs);
         if group.recognition.is_none() && group.marks.is_empty() {
             return None;
         }
@@ -158,19 +174,88 @@ impl FrameMarks {
             })
             .collect();
         let points = group.marks.iter().flat_map(|mark| mark.points.iter().copied()).collect();
-        Some(Overlay { extent: group.extent, boxes, points })
+        let any = |conversion: MarkConversion| {
+            group.marks.iter().any(|mark| mark.conversion == conversion)
+        };
+        Some(Overlay {
+            extent: group.extent,
+            boxes,
+            points,
+            unconverted: any(MarkConversion::NotConverted),
+            unknown: any(MarkConversion::Unknown),
+        })
     }
+
+    /// The runs of the inputs meant on the frames `keys` names whose display maps `runs`
+    /// do not know there (UI-PT1), each once, in the order of their first such input.
+    pub fn unknown_runs(&self, keys: &[&FrameKey], runs: &RunMaps) -> Vec<RunRef> {
+        let mut wanted: Vec<RunRef> = Vec::new();
+        for event in &self.events {
+            if event.event_type != EventType::TaskEffectIntent {
+                continue;
+            }
+            let key = event.links.frame_id().map(|frame| FrameKey::Frame(code(frame)));
+            let Some(run) = event.links.run_id() else {
+                continue;
+            };
+            let name = code(run);
+            let on_frame = key.is_some_and(|key| keys.contains(&&key));
+            let unknown = matches!(runs.in_effect(&name, event.sequence), InEffect::Unknown);
+            if on_frame && unknown && !wanted.iter().any(|held| held.name == name) {
+                wanted.push(RunRef { id: *run, name });
+            }
+        }
+        wanted
+    }
+
+    /// The runs, by their ids as the wire spells them, of the inputs these records hold.
+    pub fn run_names(&self) -> BTreeSet<String> {
+        self.events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskEffectIntent)
+            .filter_map(|event| event.links.run_id().map(code))
+            .collect()
+    }
+}
+
+/// A run whose display map the inputs meant on a frame need (UI-PT1): its id, which only
+/// this file reads, and as the wire spells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRef {
+    id: RunId,
+    name: String,
+}
+
+impl RunRef {
+    /// The run's id as the wire spells it.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// What one read of a run's display map came to ([`PreviewLane::run_maps`]).
+#[derive(Debug, Clone)]
+pub struct RunRead {
+    /// The run's `task.geometry_observed` records read, known whole up to the position read
+    /// at when `whole`.
+    pub maps: RunMaps,
+    /// Every page came back whole, and the cursor came to its end within [`RUN_MAP_PAGES`].
+    pub whole: bool,
 }
 
 /// What a task recognized and meant on one frame, in the frame's pixels: the frame's size
 /// as the recognition or an input's intent states it, if either does; the targets of the
 /// latest recognition that have a region, each with whether it passed; and every point an
-/// input was meant at.
+/// input was meant at, put on the frame by its run's display map (UI-PT1). An input the
+/// product refuses under that map, or one whose run's map is not known, has no point here:
+/// `unconverted` and `unknown` say there is one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Overlay {
     pub extent: Option<(f32, f32)>,
     pub boxes: Vec<MarkBox>,
     pub points: Vec<(f32, f32)>,
+    pub unconverted: bool,
+    pub unknown: bool,
 }
 
 /// A target's region on a frame, and whether the recognition found it.
@@ -301,9 +386,9 @@ impl PreviewLane {
         Self { lane: ReadLane::new(root, PREVIEW_IO) }
     }
 
-    /// The instance's frames, capture failures, recognitions and inputs meant recorded after
-    /// `after`, at the Runtime's latest position: one page of at most [`POLL_ROWS`] rows,
-    /// asked without a snapshot.
+    /// The instance's frames, capture failures, recognitions, inputs meant and its runs'
+    /// geometry records (UI-PT1) recorded after `after`, at the Runtime's latest position: one
+    /// page of at most [`POLL_ROWS`] rows, asked without a snapshot.
     pub fn poll(&mut self, instance: InstanceKey, after: u64) -> Result<Reach<Poll>, Unreached> {
         let query = EventQuery {
             instance_id: Some(instance.0),
@@ -312,6 +397,7 @@ impl PreviewLane {
                 EventType::CaptureFailed,
                 EventType::TaskRecognitionCompleted,
                 EventType::TaskEffectIntent,
+                EventType::TaskGeometryObserved,
             ],
             from_sequence: Some(after.saturating_add(1)),
             ..EventQuery::default()
@@ -322,6 +408,7 @@ impl PreviewLane {
         let mut frames = Vec::new();
         let mut failures = Vec::new();
         let mut marks = FrameMarks { events: Vec::new(), cut: !complete };
+        let mut runs = RunMaps::default();
         for event in page.events() {
             if let Some(frame) = frame_seen(event) {
                 frames.push(frame);
@@ -333,11 +420,88 @@ impl PreviewLane {
                 });
             } else if is_mark(event) {
                 marks.events.push(event.clone());
+            } else if event.event_type == EventType::TaskGeometryObserved {
+                runs.take(event);
             }
         }
-        let poll =
-            Poll { snapshot: page.snapshot_ledger_position(), complete, frames, failures, marks };
+        let snapshot = page.snapshot_ledger_position();
+        let poll = Poll { snapshot, complete, frames, failures, marks, runs };
         Ok(Reach { epoch, value: poll, pages: 1 })
+    }
+
+    /// The display map of `run` (UI-PT1): its `task.geometry_observed` records from its start
+    /// up to `head`, a position the lane read at, at that snapshot, as `actingledger
+    /// task-evidence` reads a run's map in effect (Runtime 945727d4
+    /// `crates/ledger-forensics/src/input_pairing.rs:53-97`). The query names the run, whose
+    /// own link index drives the Runtime's statement (945727d4
+    /// `crates/ledger/src/global/sqlite.rs:4777-4790, 4856`), so what it reads is that run's
+    /// records, not the positions before them; position 1 is where it reads from. Pages of
+    /// [`RUN_MAP_ROWS`] rows through its cursor, at most [`RUN_MAP_PAGES`]: one that has
+    /// more, or a page whose source is not whole, makes the read not whole. One that stops
+    /// short states the pages it asked by then.
+    pub fn run_maps(
+        &mut self,
+        instance: InstanceKey,
+        run: &RunRef,
+        head: u64,
+    ) -> Result<Reach<RunRead>, LookupStopped> {
+        let mut pages = 0;
+        let read = self.read_run(instance, run, head, &mut pages);
+        read.map_err(|failure| LookupStopped { failure, pages })
+    }
+
+    /// [`Self::run_maps`], counting in `pages` every page it asks, the one that fails
+    /// included.
+    fn read_run(
+        &mut self,
+        instance: InstanceKey,
+        run: &RunRef,
+        head: u64,
+        pages: &mut u32,
+    ) -> Result<Reach<RunRead>, Unreached> {
+        let query = EventQuery {
+            instance_id: Some(instance.0),
+            run_id: Some(run.id),
+            event_types: vec![EventType::TaskGeometryObserved],
+            from_sequence: Some(1),
+            to_sequence: Some(head),
+            ..EventQuery::default()
+        };
+        let mut maps = RunMaps::default();
+        let mut answered: Option<String> = None;
+        let mut whole = true;
+        let mut cursor = None;
+        loop {
+            if *pages == RUN_MAP_PAGES {
+                whole = false;
+                break;
+            }
+            let request = page_request(RUN_MAP_ROWS, cursor)?
+                .at_snapshot(head)
+                .map_err(|error| request_refused(error.code()))?
+                .without_run_recovery();
+            *pages += 1;
+            let (epoch, page) = self.page(&query, &request)?;
+            if answered.is_none() {
+                answered = Some(epoch);
+            }
+            whole &= page_source_complete(&page);
+            for event in page.events() {
+                maps.take(event);
+            }
+            match page.next_cursor() {
+                Some(next) => cursor = Some(next.clone()),
+                None => break,
+            }
+        }
+        if whole {
+            maps.read_to(&run.name, head);
+        }
+        let epoch = match answered {
+            Some(epoch) => epoch,
+            None => self.epoch()?,
+        };
+        Ok(Reach { epoch, value: RunRead { maps, whole }, pages: *pages })
     }
 
     /// What tasks recognized on `frame`, a frame a lookup found, and the inputs meant on it,

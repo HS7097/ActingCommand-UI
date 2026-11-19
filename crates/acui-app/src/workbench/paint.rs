@@ -193,10 +193,12 @@ pub fn cards(ui: &Ui) {
 /// or what it says while no frame shows, red when that is a failure. The frame's pixels are
 /// the window's from when it landed (`picture_pixels`), let go here once no frame shows. On
 /// a task's frame, unless turned off, the boxes its recognition evaluated and the points its
-/// inputs were meant at, which the box beside the title turns off and on; under the frame in
-/// amber why nothing is drawn on it, and that its proportions are not among those its game's
-/// standard pack declares. Under all that the picture's refresh, which goes by what changes the
-/// picture (`refresh`), and over the frame the rescue bar, which `refresh` paints with it.
+/// inputs were meant at, put on the frame by their runs' display maps, which the box beside
+/// the title turns off and on; under the frame in amber why nothing is drawn on it, why an
+/// input's points are not (not converted, or its run's map not read), and that its proportions
+/// are not among those its game's standard pack declares. Under all that the picture's refresh,
+/// which goes by what changes the picture (`refresh`), and over the frame the rescue bar, which
+/// `refresh` paints with it.
 pub fn picture(ui: &Ui) {
     refresh(ui);
     let Some(window) = ui.workbench() else {
@@ -266,7 +268,17 @@ pub fn picture(ui: &Ui) {
         }
         OverlayView::NotOnThisFrame => {}
         OverlayView::Mismatch => hint.push(labels.picture_marks_mismatch.to_owned()),
-        OverlayView::Off | OverlayView::Shown(_) => {}
+        // UI-PT1: an input whose points are not drawn says why, under the frame: nothing is
+        // written on it.
+        OverlayView::Shown(overlay) => {
+            if overlay.unconverted {
+                hint.push(labels.effect_points_unconverted.to_owned());
+            }
+            if overlay.unknown {
+                hint.push(labels.picture_points_unread.to_owned());
+            }
+        }
+        OverlayView::Off => {}
     }
     if let Some((width, height)) = aspect {
         hint.push(fill(labels.picture_aspect_undeclared, &[&format!("{width}:{height}")]));
