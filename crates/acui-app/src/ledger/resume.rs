@@ -39,8 +39,13 @@
 //! Runtime release up to 0.12.51 sets either.
 //!
 //! This console's own two are said as its own, not another tool's, and are
-//! resumed here as those are; its pause of an instance, a person's, in any
-//! stage, where another's still on its way gets no resume (`pause_text`).
+//! resumed here as those are. Whether a pause still on its way is offered is
+//! the Runtime's rule, by the mode its status answers since 0.12.75 (#480
+//! PG-2e): a person's pause, this console's own or another party's, in any
+//! stage, and a tool's hold only once released; from a Runtime before 0.12.75,
+//! which answers no mode, this console's own of an instance in any stage, and
+//! another's still on its way gets no resume (`pause_text`). Who lifts a pause
+//! is still its reason's to say, as below: the mode never is.
 //!
 //! The hold of a Lab recording (Runtime 0.12.64), the pause the Lab's `record
 //! start` sets on the instance it records (`lab-record-<ms>`,
@@ -58,8 +63,8 @@
 use acui_rows::format_full;
 use acui_source::workbench::{lab_record_started, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
 use acui_source::{
-    resume_paused, resumed_device, ClientFailure, PauseFact, PauseStage, PauseTarget,
-    ResumeCause, ResumeOutcome, ResumedDevice,
+    resume_paused, resume_taken, resumed_device, ClientFailure, PauseFact, PauseStage,
+    PauseTarget, ResumeCause, ResumeOutcome, ResumedDevice,
 };
 
 use crate::ledger::paint::{age_text, code_short, models};
@@ -67,6 +72,8 @@ use crate::ledger::state::{InstancesSnapshot, LedgerState, Phase, StatusReread};
 use crate::ledger::worker::Command;
 use crate::ledger::{find, LedgerHandle};
 use crate::strings::{fill, outcome_informs, outcome_short, Labels};
+use crate::workbench::card::shown_in_the_way;
+use crate::workbench::paint::in_the_way_text;
 use crate::{launcher, report, ui, LedgerWindow, PauseItem};
 
 /// The reasons of a deployment's pause, which the installer lifts: acsetup's
@@ -330,17 +337,24 @@ fn unread(labels: &Labels, failure: &ClientFailure) -> (String, &'static str) {
     (code_short(labels, code), failure.operation)
 }
 
-/// A pause's line, `by` who lifts it, and whether a person may resume it here: one another tool,
-/// this console or a Lab recording set, global, or an instance's whose device is handed back; and
-/// this console's own of an instance in any stage. Since Runtime 0.12.73 (#480 PG-2c) a person's
-/// pause (`stand`) is resumed in every stage and a tool's hold (`quiet_or_lift`) only once
-/// released: the Runtime refuses the resume of one still draining or handing its device back
-/// (runtime-host `host/policy_dispatch.rs` 1216-1254, `check_resumable`, at 1067dfaf). Its
-/// `Status` does not say which mode a pause has (contract `runtime.rs` 2398-2405), so the reason
-/// does: this console's own are a person's; a Lab recording's hold is a tool's
-/// (Runtime `crates/lab-ops/src/scheduling.rs` 158-169); any other is offered only released, as
-/// before. An instance's line still on its way says what it is doing. The ledger's records of a
-/// pause's life (Runtime 0.12.74) do not move this: they say what happened, not what holds now.
+/// A pause's line, `by` who lifts it, and whether a person may resume it here. `by` decides who
+/// is to lift it and the words, and nothing else: one only whoever set it lifts, a deployment's
+/// and a Lab rescue's are never offered. Any other, one another tool, this console or a Lab
+/// recording set, is offered when the Runtime takes its resume now, by the stage and the mode its
+/// `Status` answers ([`resume_taken`]; runtime-host `host/policy_dispatch.rs` 1242-1280,
+/// `check_resumable`, at 945727d4): global, or an instance's handed back, in either mode; a
+/// person's pause (`stand`) in every stage, another party's too (`actingctl`'s, MCP's, the Lab's
+/// `pause` row's), which may stand on its way with no bound, an unconfirmed close's until a
+/// person's resume (`contracts/scheduling-pause.md` 227-249); a tool's hold (`quiet_or_lift`, a
+/// Lab recording's among them) only once released, as the Runtime refuses it before
+/// (`policy_dispatch.rs` 1270-1277). The mode says only whether the Runtime takes it, never whose
+/// the pause is: every pause restored at a start answers `stand`, a recording's hold too, which
+/// its reason still tells (`scheduling-pause.md` 849-852). A Runtime before 0.12.75 answers no
+/// mode (803-806): there this console's own, a
+/// person's, is offered in any stage and any other only released, as before. An instance's line
+/// still on its way says what it is doing, and what its latest check read in its way as its card
+/// says it (`card::shown_in_the_way`). The ledger's records of a pause's life (Runtime 0.12.74) do
+/// not move this: they say what happened, not what holds now.
 fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
     let scope = scope_text(labels, &fact.target);
     let (revision, since) = (fact.revision.to_string(), format_full(fact.since_unix_ms));
@@ -357,22 +371,24 @@ fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
         Lifter::Window if console_set(fact) => fill(labels.pause_console, &values),
         Lifter::Window => fill(labels.pause_other_tool, &values),
     };
-    // This console's own, a person's pause, in any stage; a Lab recording's hold, a tool's, and
-    // any other only once released.
-    let any_stage = matches!(by, Lifter::Window) && console_set(fact);
-    let resumable = match fact.stage {
-        None | Some(PauseStage::Released) => true,
-        Some(PauseStage::Draining) => {
-            text.push_str(" · ");
-            text.push_str(labels.pause_draining);
-            any_stage
-        }
-        Some(PauseStage::Paused) => {
-            text.push_str(" · ");
-            text.push_str(labels.pause_releasing);
-            any_stage
-        }
+    // This console's own, by reason and scope, as its card's button has it: an unconfirmed
+    // close's words name that button only then.
+    let own = matches!(by, Lifter::Window) && console_set(fact);
+    // Without a mode answered, this console's own, a person's pause, in any stage, and any other
+    // only once released.
+    let resumable = resume_taken(fact.stage, fact.mode).unwrap_or(own);
+    let doing = match fact.stage {
+        None | Some(PauseStage::Released) => None,
+        Some(PauseStage::Draining) => Some(labels.pause_draining),
+        Some(PauseStage::Paused) => Some(labels.pause_releasing),
     };
+    if let Some(doing) = doing {
+        text.push_str(" · ");
+        text.push_str(doing);
+        if let Some(words) = in_the_way_text(labels, &shown_in_the_way(fact), own) {
+            text.push_str(&fill(labels.pause_in_the_way, &[&words]));
+        }
+    }
     (text, resumable)
 }
 

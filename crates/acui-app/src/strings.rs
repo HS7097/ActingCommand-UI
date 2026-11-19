@@ -425,7 +425,9 @@ pub struct Labels {
     /// with the stage of an instance's still on its way (`pause_draining`,
     /// `pause_releasing`, which the line puts after a ` · `), which says what it is
     /// doing and not whether it can be resumed (a person's pause can be in every
-    /// stage); one only whoever set it lifts, by the settings file; a deployment's,
+    /// stage), then what its latest check read in its way, when the status says any
+    /// (`pause_in_the_way`, the `obstacle_*` joined by `name_list`; Runtime 0.12.75
+    /// on); one only whoever set it lifts, by the settings file; a deployment's,
     /// which the installer lifts; a Lab rescue operation's, which it lifts as it
     /// finishes, but for a stop's (`lab-down-`), which is lifted from the Lab.
     /// A Lab recording's hold of an instance (`lab-record-`): scope, reason,
@@ -439,6 +441,7 @@ pub struct Labels {
     pub pause_console: &'static str,
     pub pause_draining: &'static str,
     pub pause_releasing: &'static str,
+    pub pause_in_the_way: &'static str,
     pub pause_setter: &'static str,
     pub pause_deploy: &'static str,
     pub pause_lab_rescue: &'static str,
@@ -463,7 +466,8 @@ pub struct Labels {
     /// player holds the device, each with the code and its words; or, of the two
     /// causes the receipt carries when nothing reconnected (Runtime 0.12.74),
     /// that the pause had not finished up, or that the instance is an iOS phone
-    /// this Runtime has no backend for. scope, runtime
+    /// this Runtime cannot operate yet (no input backend; from 0.12.75 a read-only
+    /// capture one). scope, runtime
     /// refusal code, client error code, client operation: refused. scope, client
     /// error code, client operation: did not succeed without a refusal code, not
     /// sent, not confirmed. scope, why: no thread for it.
@@ -669,8 +673,13 @@ pub struct Labels {
     pub account_pause_standing_releasing: &'static str,
     pub account_pause_kept_at_shutdown: &'static str,
     /// What was in the way of a pause's stages, one short sentence per word of the Runtime's
-    /// closed list (`pause_obstacle`).
+    /// closed list (`pause_obstacle`). An unconfirmed close twice: of this console's own pause of
+    /// the account, whose card has the button that reconnects the instance, naming it; and of any
+    /// other pause, and in a record that does not say whose, without it. A run in flight twice
+    /// too: as an answer or a record read it at the end of the caller's time, past the drain, when
+    /// the run was asked to stop; and as the status reads it, which may be before (`status`).
     pub obstacle_contained_run: &'static str,
+    pub obstacle_contained_run_status: &'static str,
     pub obstacle_policy_run: &'static str,
     pub obstacle_lease: &'static str,
     pub obstacle_automatic_start: &'static str,
@@ -679,6 +688,7 @@ pub struct Labels {
     pub obstacle_client_reset: &'static str,
     pub obstacle_close_refused: &'static str,
     pub obstacle_close_unconfirmed: &'static str,
+    pub obstacle_close_unconfirmed_other: &'static str,
     pub obstacle_check_failed: &'static str,
     /// The ledger window's words for the records of a pause's life (Runtime 0.12.74, #480 PG-2d),
     /// one pair per code: short, after a row's event name; and the record's outcome in a sentence,
@@ -721,7 +731,8 @@ pub struct Labels {
     /// and one that found a player holding its device, which reconnects nothing. Then the two
     /// lifts whose receipt says why nothing connected (Runtime 0.12.74), neither a failure: the
     /// pause had not finished up, so the device was not connected again; the instance is an iOS
-    /// phone, which this Runtime has no backend for.
+    /// phone, which this Runtime cannot operate yet (no input backend; from 0.12.75 a read-only
+    /// capture one).
     pub account_resumed_held_again: &'static str,
     pub account_resumed_player_hold: &'static str,
     pub account_resumed_without_reconnect: &'static str,
@@ -1003,7 +1014,11 @@ pub struct Labels {
     pub autostart_no_paths: &'static str,
     pub autostart_not_installed: &'static str,
     /// What an account's card says it does or waits for. Draining: the task, or
-    /// `card_draining_any` when none is named. Paused: by whom it is lifted — only
+    /// `card_draining_any` when none is named, then (`card_draining_in_the_way`) the task
+    /// and what the pause's latest check read still in its way, when the status says any
+    /// (`obstacle_*` joined by `name_list`; Runtime 0.12.75 on). Handing the device back:
+    /// alone, or with those words (`card_handing_back_in_the_way`). Both say the words are
+    /// of that check, which a status read does not run again. Paused: by whom it is lifted — only
     /// whoever set it, by the settings file, the installer, or a Lab rescue operation as
     /// it finishes (a stop's from the Lab) — or the other tool's own reason as it
     /// wrote it and where it is resumed: an instance's in the ledger window, the
@@ -1015,7 +1030,9 @@ pub struct Labels {
     /// tables have no words for.
     pub card_draining: &'static str,
     pub card_draining_any: &'static str,
+    pub card_draining_in_the_way: &'static str,
     pub card_handing_back: &'static str,
+    pub card_handing_back_in_the_way: &'static str,
     pub card_paused_setter: &'static str,
     pub card_paused_installer: &'static str,
     pub card_paused_lab_rescue: &'static str,
@@ -2188,6 +2205,7 @@ pub const ZH: Labels = Labels {
     pause_console: "{}：被这个监控台暂停（理由 {}，修订 {}，自 {}）",
     pause_draining: "正在等进行中的任务收尾",
     pause_releasing: "正在交还设备",
+    pause_in_the_way: "；上次检查时挡着：{}",
     pause_setter: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停要由设下它的一方解除",
     pause_deploy: "{}：部署暂停（理由 {}，修订 {}，自 {}）· 这是安装器加的部署暂停，请用安装器恢复",
     pause_lab_rescue: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停是 Lab 救急操作挂的，操作结束会自己解除；停机（理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除",
@@ -2206,7 +2224,7 @@ pub const ZH: Labels = Labels {
     resume_held_again: " · 但它是新加的实例，又被首次启动暂停按住了，仍在暂停：{}",
     resume_player_hold: " · 设备正被人占用，所以没有重新连接：{}",
     resume_without_reconnect: " · 暂停还没收尾完，所以没有重新连接设备",
-    resume_without_backend: " · 它是 iOS 手机，这一版 Runtime 还没有它的后端，所以没有连接设备",
+    resume_without_backend: " · 它是 iOS 手机，这一版 Runtime 还不能操控它，所以没有连接设备",
     resume_refused: "恢复{}没有成功：Runtime 答 {} · 客户端 {}（{}）",
     resume_failed: "恢复{}没有成功：{}（{}）",
     resume_not_sent: "恢复{}的请求没有发出：{}（{}）",
@@ -2329,6 +2347,7 @@ pub const ZH: Labels = Labels {
     account_pause_standing_releasing: "这个实例的调度已暂停，还在交还设备",
     account_pause_kept_at_shutdown: "这个实例的调度已暂停；Runtime 在收尾完之前关闭了，暂停会保留到下次启动",
     obstacle_contained_run: "有任务还在跑，已请它在下一个检查点停下",
+    obstacle_contained_run_status: "有任务还在跑",
     obstacle_policy_run: "调度派的任务还没结算完",
     obstacle_lease: "设备正被别的一方占用（客户端、直接运行、操作员的控制、Lab 操作或体检）",
     obstacle_automatic_start: "Runtime 正在自动启动模拟器",
@@ -2337,6 +2356,7 @@ pub const ZH: Labels = Labels {
     obstacle_client_reset: "有客户端在任务被取消后还要复位设备",
     obstacle_close_refused: "关闭设备会话这次没被放行，会再试",
     obstacle_close_unconfirmed: "关闭设备会话没能确认，这个实例被隔离了，不会再试；按「恢复这个实例的调度」会重新连接它",
+    obstacle_close_unconfirmed_other: "关闭设备会话没能确认，这个实例被隔离了，不会再试",
     obstacle_check_failed: "上一次收尾检查出了错（不致命），会再试",
     pause_life_standing: "暂停还在收尾",
     pause_life_standing_detail: "暂停已经立住，还在收尾；接下来怎样看下面挡着的事，现在走到哪一步以状态里的阶段为准",
@@ -2349,7 +2369,7 @@ pub const ZH: Labels = Labels {
     pause_life_lifted_not_quiet: "工具的暂停没等到空闲就撤了",
     pause_life_lifted_not_quiet_detail: "某个工具的暂停没等到这个实例空闲就撤了，它没有把这个实例暂停住",
     pause_life_resumed_without_backend: "iOS 手机已解除暂停，没有连接",
-    pause_life_resumed_without_backend_detail: "iOS 手机的暂停已解除；这一版 Runtime 没有它的后端，没有连接设备",
+    pause_life_resumed_without_backend_detail: "iOS 手机的暂停已解除；这一版 Runtime 还不能操控它，没有连接设备",
     pause_life_unread: "这一版控制台不认识，原样见载荷",
     pause_life_nothing_in_the_way: "当时没读到挡着的东西",
     account_pause_watching: "还没收到确认，正在看它立住没有…",
@@ -2363,7 +2383,7 @@ pub const ZH: Labels = Labels {
     account_resumed_held_again: "这个实例的调度已恢复，但它是新加的实例，又被首次启动暂停按住了，以卡片上的状态为准",
     account_resumed_player_hold: "这个实例的调度已恢复；设备正被人占用，所以没有重新连接",
     account_resumed_without_reconnect: "这个实例的调度已恢复；暂停还没收尾完，所以没有重新连接设备",
-    account_resumed_without_backend: "这个实例的调度已恢复；它是 iOS 手机，这一版 Runtime 还没有它的后端，所以没有连接设备",
+    account_resumed_without_backend: "这个实例的调度已恢复；它是 iOS 手机，这一版 Runtime 还不能操控它，所以没有连接设备",
     account_resumed_global_holds: " · 全局暂停还在，这个实例仍不会被安排任务",
     account_resume_refused: "恢复这个实例的调度没有成功：{} · {}",
     performance_preset: "性能档位",
@@ -2574,7 +2594,9 @@ pub const ZH: Labels = Labels {
     autostart_not_installed: "这个 Runtime 不是按安装时的布局放的，看不到这一项；详情在技术日志里",
     card_draining: "收尾中：{}",
     card_draining_any: "等当前任务结束",
+    card_draining_in_the_way: "收尾中：{}；上次检查时还挡着：{}",
     card_handing_back: "交还设备中",
+    card_handing_back_in_the_way: "交还设备中，上次检查时挡着：{}",
     card_paused_setter: "已暂停，此暂停要由设下它的一方解除",
     card_paused_installer: "正在更新，由安装程序恢复",
     card_paused_lab_rescue: "已暂停，此暂停是 Lab 救急操作挂的，操作结束会自己解除；停机（理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除",
@@ -3498,6 +3520,7 @@ pub const EN: Labels = Labels {
     pause_console: "{}: Paused by This Console (Reason {}, Revision {}, Since {})",
     pause_draining: "Waiting for the Running Tasks to Finish",
     pause_releasing: "Handing the Device Back",
+    pause_in_the_way: "; in the way at the last check: {}",
     pause_setter: "{}: Paused (Reason {}, Revision {}, Since {}) · This Pause Is to Be Lifted by Whoever Set It",
     pause_deploy: "{}: Deployment Pause (Reason {}, Revision {}, Since {}) · The Installer Set It; Lift It with the Installer",
     pause_lab_rescue: "{}: Paused (Reason {}, Revision {}, Since {}) · A Lab Rescue Operation Set This Pause, and the Operation Lifts It When It Finishes; One a Stop Set (Reason Starting lab-down-) Is Not Lifted by Itself: Like One an Operation That Has Stopped Left Behind, Lift It from the Lab",
@@ -3516,7 +3539,7 @@ pub const EN: Labels = Labels {
     resume_held_again: " · But as a Newly Added Instance Its First-Start Pause Held It Again, So It Is Still Paused: {}",
     resume_player_hold: " · A Player Holds the Device, So It Was Not Connected Again: {}",
     resume_without_reconnect: " · The Pause Had Not Finished Up, So the Device Was Not Connected Again",
-    resume_without_backend: " · It Is an iOS Phone, Which This Runtime Version Has No Backend For Yet, So No Device Was Connected",
+    resume_without_backend: " · It Is an iOS Phone, Which This Runtime Version Cannot Operate Yet, So No Device Was Connected",
     resume_refused: "Resuming {} Did Not Succeed: the Runtime Answered {} · Client {} ({})",
     resume_failed: "Resuming {} Did Not Succeed: {} ({})",
     resume_not_sent: "The Resume of {} Was Not Sent: {} ({})",
@@ -3639,6 +3662,7 @@ pub const EN: Labels = Labels {
     account_pause_standing_releasing: "This instance's scheduling is paused, still handing the device back",
     account_pause_kept_at_shutdown: "This instance's scheduling is paused; the Runtime closed before it finished up, and the pause stays until the next start",
     obstacle_contained_run: "a task is still running; it was asked to stop at its next checkpoint",
+    obstacle_contained_run_status: "a task is still running",
     obstacle_policy_run: "a scheduled task is not settled yet",
     obstacle_lease: "another party holds the device (a client, a direct run, an operator's control, a Lab operation or a self-check)",
     obstacle_automatic_start: "the Runtime is starting the emulator by itself",
@@ -3647,6 +3671,7 @@ pub const EN: Labels = Labels {
     obstacle_client_reset: "a client still owes the device its reset after a cancelled task",
     obstacle_close_refused: "closing the device session was not let through this time; it is tried again",
     obstacle_close_unconfirmed: "closing the device session could not be confirmed, so this instance is fenced and it is not tried again; Resume This Instance's Scheduling connects it again",
+    obstacle_close_unconfirmed_other: "closing the device session could not be confirmed, so this instance is fenced and it is not tried again",
     obstacle_check_failed: "the last check of the finishing up failed (not fatally); it is tried again",
     pause_life_standing: "Pause Still Finishing Up",
     pause_life_standing_detail: "The pause holds and is still finishing up; what comes next depends on what was in the way, below, and the status's stage says where it is now",
@@ -3659,7 +3684,7 @@ pub const EN: Labels = Labels {
     pause_life_lifted_not_quiet: "A Tool's Pause Lifted Before the Instance Was Quiet",
     pause_life_lifted_not_quiet_detail: "A tool's pause was lifted before this instance became quiet, so it did not pause this instance",
     pause_life_resumed_without_backend: "iOS Phone's Pause Lifted, Nothing Connected",
-    pause_life_resumed_without_backend_detail: "The iOS phone's pause was lifted; this Runtime version has no backend for it, so no device was connected",
+    pause_life_resumed_without_backend_detail: "The iOS phone's pause was lifted; this Runtime version cannot operate it yet, so no device was connected",
     pause_life_unread: "Not known to this console version; see the payload as it is",
     pause_life_nothing_in_the_way: "Nothing was read in the way then",
     account_pause_watching: "Not confirmed yet: watching whether the pause took hold…",
@@ -3673,7 +3698,7 @@ pub const EN: Labels = Labels {
     account_resumed_held_again: "This instance's scheduling is resumed, but as a newly added instance its first-start pause held it again; see the card for what holds now",
     account_resumed_player_hold: "This instance's scheduling is resumed; a player holds its device, so it was not connected again",
     account_resumed_without_reconnect: "This instance's scheduling is resumed; the pause had not finished up, so its device was not connected again",
-    account_resumed_without_backend: "This instance's scheduling is resumed; it is an iOS phone, which this Runtime version has no backend for yet, so no device was connected",
+    account_resumed_without_backend: "This instance's scheduling is resumed; it is an iOS phone, which this Runtime version cannot operate yet, so no device was connected",
     account_resumed_global_holds: " · The global pause still holds, so no task is scheduled for this instance yet",
     account_resume_refused: "Resume This Instance's Scheduling did not succeed: {} · {}",
     performance_preset: "Performance",
@@ -3884,7 +3909,9 @@ pub const EN: Labels = Labels {
     autostart_not_installed: "This Runtime is not laid out as an installation is, so this cannot be seen; the technical log has the details",
     card_draining: "Finishing up: {}",
     card_draining_any: "waiting for the current task to end",
+    card_draining_in_the_way: "Finishing up: {}; still in the way at the last check: {}",
     card_handing_back: "Handing the device back",
+    card_handing_back_in_the_way: "Handing the device back; in the way at the last check: {}",
     card_paused_setter: "Paused; this pause is to be lifted by whoever set it",
     card_paused_installer: "Updating; the installer lifts this pause",
     card_paused_lab_rescue: "Paused; a Lab rescue operation set this pause, and the operation lifts it when it finishes; one a stop set (reason starting lab-down-) is not lifted by itself: like one an operation that has stopped left behind, lift it from the Lab",

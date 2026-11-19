@@ -17,7 +17,8 @@
 use std::collections::BTreeMap;
 
 use acui_source::workbench::{
-    ActivityFact, ActivityKind, FenceFact, InstanceExplain, InstanceLive,
+    ActivityFact, ActivityKind, FenceFact, InstanceExplain, InstanceLive, Obstacle,
+    CONSOLE_PAUSE_ACCOUNT,
 };
 use acui_source::{PauseFact, PauseStage};
 
@@ -300,10 +301,13 @@ fn row_class(row: &InstanceExplain) -> ReasonClass {
 /// missing one has words of its own.
 pub enum Line {
     Down(Down),
-    /// An instance pause, its runs still draining.
-    Draining { package: Option<String> },
-    /// An instance pause, its device being handed back.
-    HandingBack,
+    /// An instance pause, its runs still draining, and what else its latest check read in its way
+    /// (`shown_in_the_way`); `own`: it is this console's own pause of the account, whose card
+    /// offers its resume.
+    Draining { package: Option<String>, in_the_way: Vec<Obstacle>, own: bool },
+    /// An instance pause, its device being handed back, and what its latest check read in its way;
+    /// `own` as `Draining`'s.
+    HandingBack { in_the_way: Vec<Obstacle>, own: bool },
     /// A pause in full effect: an instance's handed back, or the global one
     /// (`everyone`).
     Paused { everyone: bool, by: Lifter, reason: String },
@@ -389,15 +393,23 @@ pub(super) fn said(
     let row = schedule.row(&instance.alias);
     let fence = instance.fence.as_ref().map(fence_line);
     let doing = instance.activity.as_ref().map(|activity| doing_line(activity, global.is_some()));
+    // Any instance pause still on its way, whoever set it, says its stage and what the status
+    // says is in its way (Runtime 0.12.75 on). Its own, as the card's button has it
+    // (`actions::account_view`): only then does the card offer the resume.
     if let Some(pause) = &instance.pause {
+        let own =
+            pause.reason == CONSOLE_PAUSE_ACCOUNT && lifter(pause, elsewhere) == Lifter::Window;
         match pause.stage {
             Some(PauseStage::Draining) => {
                 let package =
                     instance.activity.as_ref().and_then(|activity| activity.package_id.clone());
-                return (Band::Attention, Line::Draining { package }, fence.into_iter().collect());
+                let in_the_way = shown_in_the_way(pause);
+                let main = Line::Draining { package, in_the_way, own };
+                return (Band::Attention, main, fence.into_iter().collect());
             }
             Some(PauseStage::Paused) => {
-                return (Band::Attention, Line::HandingBack, fence.into_iter().collect());
+                let main = Line::HandingBack { in_the_way: shown_in_the_way(pause), own };
+                return (Band::Attention, main, fence.into_iter().collect());
             }
             Some(PauseStage::Released) | None => {}
         }
@@ -469,6 +481,26 @@ fn fence_line(fence: &FenceFact) -> Line {
 
 fn paused_line(pause: &PauseFact, everyone: bool, elsewhere: &ResumeElsewhere) -> Line {
     Line::Paused { everyone, by: lifter(pause, elsewhere), reason: pause.reason.clone() }
+}
+
+/// What of the status's `in_the_way` an instance pause still on its way says, on its card and on
+/// the ledger window's pause line alike (`ledger::resume`): what its latest check read, of anyone's
+/// pause, the drain's at every poll and then the hand-back's (`contracts/scheduling-pause.md`
+/// 824-833 at 945727d4). All of it while the device is handed back. While its runs drain, all but
+/// a run in flight (`contained_run`), the one word the drain reads: "finishing up" with its task
+/// says that already, and that the run was asked to stop at its next checkpoint holds only past
+/// the pause's drain timeout (contract `runtime.rs` 2330-2332), which another party's pause may
+/// set to a minute or five (Runtime `crates/lab-ops/src/scheduling.rs` 44 and 52, `actingctl`'s
+/// and the Lab's `pause` row's). Nothing left says the stage alone: an absent `in_the_way` does
+/// not say nothing is in the way (842-849).
+pub(crate) fn shown_in_the_way(pause: &PauseFact) -> Vec<Obstacle> {
+    let draining = pause.stage == Some(PauseStage::Draining);
+    pause
+        .in_the_way
+        .iter()
+        .copied()
+        .filter(|word| !(draining && *word == Obstacle::ContainedRun))
+        .collect()
 }
 
 /// The one activity the Runtime names; which of several an instance shows is the

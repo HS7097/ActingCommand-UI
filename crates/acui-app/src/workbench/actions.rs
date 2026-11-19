@@ -315,7 +315,9 @@ pub enum AccountSaid {
     Sending(AccountWrite),
     Paused,
     /// The pause holds and was still on its way at the end of its caller's time: where it stood,
-    /// and what was in the way then (`PauseOutcome::Standing`). No failure.
+    /// and what was in the way then (`PauseOutcome::Standing`). No failure. Said until a read shows
+    /// the pause handed back, or, of a Runtime that answers its mode (0.12.75 on), until the next
+    /// read shows it, whose stage and words the card's main line says instead (`status_read`).
     PauseStanding { stage: Option<PauseStage>, in_the_way: Option<Vec<Obstacle>> },
     /// A person's resume lifted the pause during its stages: none holds now. No failure.
     PauseLifted,
@@ -404,10 +406,14 @@ impl PauseWatch {
     /// other than the last goes in the log under `thread`, naming the press's ticket and `alias`,
     /// the account's, as its answer did: what the last one was, what this read showed, and how
     /// long after the press. One that holds, that was lifted later, or that is watched again, goes
-    /// quietly; one that does not hold, or is still on its way at the end, as the problem it is.
+    /// quietly; one that does not hold, or is still on its way at the end, as the problem it is,
+    /// the one still on its way with what this read said its latest check read in its way
+    /// (`in_the_way`; `None`: the status answers none, a Runtime before 0.12.75). It moves no
+    /// verdict.
     fn read(
         &mut self,
         seen: PauseSeen,
+        in_the_way: Option<&[Obstacle]>,
         now: Instant,
         settles: Duration,
         thread: &str,
@@ -443,6 +449,12 @@ impl PauseWatch {
             }
             PauseVerdict::Watching => ("seen on its way again", "watched again"),
             PauseVerdict::Overtaken => ("seen paused by another party", "left to the card"),
+        };
+        let then = match verdict {
+            PauseVerdict::StillStaging => {
+                format!("{then} (in the way at its last check: {})", last_check_words(in_the_way))
+            }
+            _ => then.to_owned(),
         };
         let reads = match self.reads {
             1 => "1 read".to_owned(),
@@ -1209,7 +1221,9 @@ impl Actions {
     /// before that press were let go, so this says someone changed it since. So does one saying a
     /// pause was confirmed late, which is said only once it holds, handed back: a read showing it
     /// gone after that says someone lifted it. A pause of an account that answered still on its
-    /// way is said to hold once a read shows its device handed back: what was in its way is over.
+    /// way is said to hold once a read shows its device handed back: what was in its way is over;
+    /// or, from a Runtime that answers the pause's mode (0.12.75 on), once a read shows it at all:
+    /// the card's main line then says where it stands and what is in its way, as that read has it.
     /// Whether it shows an unconfirmed switch over: then the writes are to be counted once more
     /// (`super::wrote`), so that the snapshot that judges it is read after this.
     pub fn status_read(
@@ -1224,10 +1238,11 @@ impl Actions {
         // "Pause all" whose answer said nothing, by the global pause this read shows.
         let thread = Write::PauseAll.thread();
         let seen = PauseSeen::of(global, CONSOLE_PAUSE_ALL);
+        // The global pause has no stage, so is never still on its way, nor anything in its way.
         let verdict = self
             .pause_watch
             .as_mut()
-            .map(|watch| watch.read(seen, now, GLOBAL_PAUSE_SETTLES, thread, None));
+            .map(|watch| watch.read(seen, None, now, GLOBAL_PAUSE_SETTLES, thread, None));
         match verdict {
             Some(PauseVerdict::Held) => {
                 self.said.insert(SaidAt::Scheduling, Said::PauseLate);
@@ -1271,8 +1286,14 @@ impl Actions {
                 .find(|instance| instance.alias == *alias)
                 .and_then(|instance| instance.pause.as_ref());
             let seen = PauseSeen::of(pause, CONSOLE_PAUSE_ACCOUNT);
+            // What this read says is in its way, for the log only; of a Runtime that answers the
+            // mode (0.12.75 on), else none answered.
+            let in_the_way = pause
+                .filter(|pause| pause.mode.is_some())
+                .map(|pause| pause.in_the_way.as_slice());
             let verdict = slot.watch.as_mut().map(|watch| {
-                watch.read(seen, now, ACCOUNT_PAUSE_SETTLES, thread, Some(alias.as_str()))
+                let alias = Some(alias.as_str());
+                watch.read(seen, in_the_way, now, ACCOUNT_PAUSE_SETTLES, thread, alias)
             });
             match verdict {
                 Some(PauseVerdict::Held) => slot.said = Some(AccountSaid::PauseLate),
@@ -1293,9 +1314,17 @@ impl Actions {
             }
             let paused = pause.is_some();
             let released = matches!(pause.and_then(|pause| pause.stage), Some(PauseStage::Released));
+            // This console's own pause of the account, of a Runtime that answers its mode (0.12.75
+            // on): the status says where it stands and what its latest check read in its way, for
+            // every observer, and the card's main line says both (`card::said`).
+            let answered = pause
+                .is_some_and(|pause| pause.reason == CONSOLE_PAUSE_ACCOUNT && pause.mode.is_some());
             // A pause that answered still on its way holds as any other once its device is handed
-            // back: what it said was in its way is over.
-            if released && matches!(slot.said, Some(AccountSaid::PauseStanding { .. })) {
+            // back: what it said was in its way is over. Where the status answers the mode, at
+            // once: the receipt's reading, of the end of its caller's time, gives way to the
+            // status's, and the line says only that it holds. The log keeps the receipt's.
+            let standing = matches!(slot.said, Some(AccountSaid::PauseStanding { .. }));
+            if standing && (released || answered) {
                 slot.said = Some(AccountSaid::Paused);
             }
             // "Did not hold" and "lifted later" say the account is not paused now, and "still
@@ -1545,12 +1574,13 @@ pub struct AccountView {
 /// one only whoever set it lifts by the settings file is not this console's to lift), in any
 /// stage, "resume this account"; under any other, none. This console's own is a person's pause,
 /// which the Runtime resumes while it still drains or hands the device back too (Runtime 0.12.73;
-/// runtime-host `host/policy_dispatch.rs` 1216-1254, `check_resumable`, at 1067dfaf), without
-/// a reconnect then (5244-5351), unless the instance is fenced or its hand-back has begun
-/// closing the device session (5104-5123, 5257-5280), when the resume reconnects it; an iOS
+/// runtime-host `host/policy_dispatch.rs` 1242-1280, `check_resumable`, at 945727d4), without
+/// a reconnect then (5317-5428), unless the instance is fenced or its hand-back has begun
+/// closing the device session (5174-5196, 5330-5353), when the resume reconnects it; an iOS
 /// handset's resume never connects anything, a fenced one's neither (Runtime 0.12.74,
-/// 5124-5137). The receipt's cause says which of these came of it (`resumed_device`). The card's
-/// main line still says which stage it is in. Either can
+/// 5197-5210). The receipt's cause says which of these came of it (`resumed_device`). The card's
+/// main line still says which stage it is in, and, of a Runtime that answers it (0.12.75 on),
+/// what the pause's latest check read in its way. Either can
 /// be pressed while no press of that account is out. A fixture is offered the pause too: the
 /// Runtime's refusal says why not. `global_holds`: that `Status` shows a global pause.
 pub fn account_view(
@@ -2642,6 +2672,18 @@ fn in_the_way_words(in_the_way: Option<&[Obstacle]>) -> String {
     match in_the_way {
         None => "not read".to_owned(),
         Some([]) => "nothing".to_owned(),
+        Some(words) => words.iter().map(|word| word.as_str()).collect::<Vec<_>>().join(", "),
+    }
+}
+
+/// What a `Status` said the latest check of a pause still on its way read in its way, by its
+/// words, for the log (`PauseWatch::read`): none answered is not nothing in the way
+/// (`contracts/scheduling-pause.md` 842-849 at 945727d4), and a Runtime before 0.12.75 answers
+/// none at all (`None`).
+fn last_check_words(in_the_way: Option<&[Obstacle]>) -> String {
+    match in_the_way {
+        None => "not answered by this Runtime".to_owned(),
+        Some([]) => "none answered".to_owned(),
         Some(words) => words.iter().map(|word| word.as_str()).collect::<Vec<_>>().join(", "),
     }
 }

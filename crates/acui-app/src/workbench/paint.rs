@@ -4206,7 +4206,7 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
         AccountEntry::Resume { offered, .. } => (false, true, *offered),
     };
     let (said, said_failed) = match &view.account.said {
-        Some(said) => account_said_text(labels, said, view.account.global_holds),
+        Some(said) => account_said_text(labels, said, view.account.global_holds, resume_shown),
         None => (String::new(), false),
     };
     AccountCard {
@@ -4242,7 +4242,13 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
 /// still not scheduled, as the top bar's says the pauses that still hold. A pause whose answer said
 /// nothing says it is watched, and then what the reads after it came to: only one that did not
 /// hold is a failure, and one still on its way at the watch's end is neither confirmed nor failed.
-fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) -> (String, bool) {
+/// `resume_shown`: the card offers the resume now, which the words of an unconfirmed close name.
+fn account_said_text(
+    labels: &Labels,
+    said: &AccountSaid,
+    global_holds: bool,
+    resume_shown: bool,
+) -> (String, bool) {
     let coded = |template: &str, code: &str| {
         let words = outcome_short(labels, code)
             .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
@@ -4259,8 +4265,10 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
         AccountSaid::PauseStanding { stage, in_the_way } => {
             let text = match in_the_way.as_deref() {
                 Some(words) if !words.is_empty() => {
-                    let words: Vec<&str> =
-                        words.iter().map(|word| obstacle_text(labels, *word)).collect();
+                    let words: Vec<&str> = words
+                        .iter()
+                        .map(|word| obstacle_text(labels, *word, resume_shown))
+                        .collect();
                     fill(labels.account_pause_standing, &[&words.join(labels.name_list)])
                 }
                 // Nothing in the way at that read: the stage says what it was still doing, the
@@ -4328,8 +4336,11 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
 }
 
 /// One thing in the way of a pause's stages, in a person's words (vocabulary `pause_obstacle`):
-/// on a card, and in the ledger window's detail of a record of a pause's life.
-pub(crate) fn obstacle_text(labels: &Labels, word: Obstacle) -> &'static str {
+/// on a card, on the ledger window's pause line, and in its detail of a record of a pause's life.
+/// `own`: the pause is this console's own of the account, whose card offers the resume that
+/// reconnects an instance an unconfirmed close fenced, and the words of that one name the button;
+/// of any other pause they do not, nor in a record, which does not say whose pause it was.
+pub(crate) fn obstacle_text(labels: &Labels, word: Obstacle, own: bool) -> &'static str {
     match word {
         Obstacle::ContainedRun => labels.obstacle_contained_run,
         Obstacle::PolicyRun => labels.obstacle_policy_run,
@@ -4339,22 +4350,50 @@ pub(crate) fn obstacle_text(labels: &Labels, word: Obstacle) -> &'static str {
         Obstacle::QueuedEntry => labels.obstacle_queued_entry,
         Obstacle::ClientReset => labels.obstacle_client_reset,
         Obstacle::CloseRefused => labels.obstacle_close_refused,
-        Obstacle::CloseUnconfirmed => labels.obstacle_close_unconfirmed,
+        Obstacle::CloseUnconfirmed if own => labels.obstacle_close_unconfirmed,
+        Obstacle::CloseUnconfirmed => labels.obstacle_close_unconfirmed_other,
         Obstacle::CheckFailed => labels.obstacle_check_failed,
     }
+}
+
+/// What the status says the latest check of an instance pause still on its way read in its way
+/// (`card::shown_in_the_way`), its words joined by `name_list`, `own` as `obstacle_text` has it;
+/// `None` with no word, when the stage alone is said. A run in flight is said without "asked to
+/// stop": a hand-back that finds one drains it again under the pause's own drain timeout first
+/// (Runtime `crates/runtime-host/src/host/policy_dispatch.rs` 4852-4869 and 4947-4956, and
+/// `contained_task.rs` 11941-11947, at 945727d4), which another party's pause may set to a minute
+/// or five, so the status's word does not say the run was asked yet.
+pub(crate) fn in_the_way_text(labels: &Labels, words: &[Obstacle], own: bool) -> Option<String> {
+    (!words.is_empty()).then(|| {
+        let words: Vec<&str> = words
+            .iter()
+            .map(|word| match word {
+                Obstacle::ContainedRun => labels.obstacle_contained_run_status,
+                word => obstacle_text(labels, *word, own),
+            })
+            .collect();
+        words.join(labels.name_list)
+    })
 }
 
 fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
     match line {
         Line::Down(down) => down_text(labels, *down).to_owned(),
-        Line::Draining { package } => {
+        // Read at the pause's latest check, which the template says: the status runs none.
+        Line::Draining { package, in_the_way, own } => {
             let task = match package {
                 Some(package) => package_name(ui, labels, package),
                 None => labels.card_draining_any.to_owned(),
             };
-            fill(labels.card_draining, &[&task])
+            match in_the_way_text(labels, in_the_way, *own) {
+                Some(words) => fill(labels.card_draining_in_the_way, &[&task, &words]),
+                None => fill(labels.card_draining, &[&task]),
+            }
         }
-        Line::HandingBack => labels.card_handing_back.to_owned(),
+        Line::HandingBack { in_the_way, own } => match in_the_way_text(labels, in_the_way, *own) {
+            Some(words) => fill(labels.card_handing_back_in_the_way, &[&words]),
+            None => labels.card_handing_back.to_owned(),
+        },
         Line::Paused { everyone, by, reason } => {
             let said = match by {
                 Lifter::Setter => labels.card_paused_setter.to_owned(),

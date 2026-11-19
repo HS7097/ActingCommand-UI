@@ -256,7 +256,7 @@ pub fn package_of<'a>(packs: Option<&'a PackTable>, task: &str) -> Option<&'a st
 pub fn held(main: Line, notes: Vec<Line>) -> Option<Line> {
     match main {
         Line::Draining { .. }
-        | Line::HandingBack
+        | Line::HandingBack { .. }
         | Line::Paused { .. }
         | Line::AwaitingPerson { .. }
         | Line::Recovering => Some(main),

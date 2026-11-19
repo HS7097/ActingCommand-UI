@@ -57,7 +57,7 @@ use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     FactValue, InstanceId, InstancePauseStage, InstancePauseState, OwnerEpoch, RuntimeFactRecord,
     RuntimeFactScope, RuntimeFactSnapshot, RuntimeInfo, RuntimeResult, SchedulingPauseExpectation,
-    SchedulingPauseScope, SchedulingPauseState, RUNTIME_INFO_FILE,
+    SchedulingPauseMode, SchedulingPauseScope, SchedulingPauseState, RUNTIME_INFO_FILE,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
@@ -69,6 +69,7 @@ use actingcommand_runtime_client::{
     RuntimeMaterialCompleteResult, RuntimeMaterialSelection,
 };
 use anyhow::{anyhow, bail, Result};
+use crate::workbench::Obstacle;
 
 pub mod place;
 pub mod workbench;
@@ -730,8 +731,12 @@ pub struct RuntimeInstances {
 
 /// A scheduling pause as one status read reported it (Workflow #191 ps1): the
 /// reason its caller gave, a name of `[a-z0-9_.-]` the contract keeps as it
-/// was given; its revision and since when; an instance pause's stage; and
-/// what a conditional resume of exactly this pause names (`resume_paused`).
+/// was given; its revision and since when; an instance pause's stage, and,
+/// since Runtime 0.12.75 (#480 PG-2e), its mode and what its latest check read
+/// in its way; and what a conditional resume of exactly this pause names
+/// (`resume_paused`). Since that release the status is where every observer
+/// learns those two, this console of another party's pause too
+/// (`contracts/scheduling-pause.md` 815-819, at 945727d4).
 #[derive(Debug, Clone)]
 pub struct PauseFact {
     pub reason: String,
@@ -739,6 +744,21 @@ pub struct PauseFact {
     pub since_unix_ms: u64,
     /// `None` for the global pause, which has no stage.
     pub stage: Option<PauseStage>,
+    /// The mode the Runtime treats an instance pause as (`pause_mode`), in every stage: the one
+    /// its request set, and `stand` for one no request set (restored at a start, held at a first
+    /// start, held again with `instance.added`). The mode is not kept across a restart, so every
+    /// pause restored at a start answers `stand`, a tool's hold among them: who set a pause is its
+    /// `reason`'s to say, never this (`contracts/scheduling-pause.md` 820-823, 849-852). `None`
+    /// for the global pause, which has none, and only from a Runtime before 0.12.75, which
+    /// answers no mode (803-806).
+    pub mode: Option<PauseMode>,
+    /// What an instance pause's own latest check read in its way (`in_the_way`), each word once:
+    /// as old as that check, ten seconds after a failed one and older while a check waits
+    /// (834-841). Empty for the global pause, always in stage `released`, from a Runtime before
+    /// 0.12.75, and before `released` when that check read nothing or none ran yet: an empty one
+    /// does not say that nothing is in the way, and only the stage says the pause is quiet
+    /// (824-833, 842-849).
+    pub in_the_way: Vec<Obstacle>,
     pub target: PauseTarget,
 }
 
@@ -748,7 +768,9 @@ pub struct PauseFact {
 /// resumed in every stage, and a tool's hold (`quiet_or_lift`, a Lab recording's)
 /// only once released: the Runtime refuses the other two of it
 /// (`scheduling_pause_draining`, `scheduling_pause_releasing`; runtime-host
-/// `host/policy_dispatch.rs` 1216-1254, `check_resumable`, at 1067dfaf).
+/// `host/policy_dispatch.rs` 1242-1280, `check_resumable`, at 945727d4), as
+/// [`resume_taken`] reads it. A pause is quiet once released, and by nothing
+/// else (`contracts/scheduling-pause.md` 848-849).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PauseStage {
     Draining,
@@ -762,6 +784,53 @@ pub(crate) const fn pause_stage(stage: InstancePauseStage) -> PauseStage {
         InstancePauseStage::Draining => PauseStage::Draining,
         InstancePauseStage::Paused => PauseStage::Paused,
         InstancePauseStage::Released => PauseStage::Released,
+    }
+}
+
+/// What an instance pause does with what is still in its way at the end of its caller's time
+/// (`SchedulingPauseMode`, #480 PG-2c; contract `runtime.rs` 2295-2321 at 945727d4), as the
+/// status answers it since Runtime 0.12.75 ([`PauseFact::mode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseMode {
+    /// A person's or an agent's pause (this console's, `actingctl`'s, the Lab's `pause` row's and
+    /// MCP's): the Runtime never lifts it, and takes a person's resume of it in every stage.
+    Stand,
+    /// A tool's hold (the Lab's rescue module's, a recording's): quiet within its caller's time or
+    /// lifted; its resume is taken only once it is released.
+    QuietOrLift,
+}
+
+/// The contract's mode as this crate's.
+const fn pause_mode(mode: SchedulingPauseMode) -> PauseMode {
+    match mode {
+        SchedulingPauseMode::Stand => PauseMode::Stand,
+        SchedulingPauseMode::QuietOrLift => PauseMode::QuietOrLift,
+    }
+}
+
+/// Whether the Runtime takes a person's resume of a pause now, by the `stage` and the `mode` one
+/// status read reported of it ([`PauseFact`]) and the rule it judges an instance resume by
+/// (runtime-host `host/policy_dispatch.rs` 1242-1280, `check_resumable`, at 945727d4;
+/// `contracts/scheduling-pause.md` 543-547, 574-575, 708-709):
+///
+/// - the global pause, which has no stage, is taken (5138-5173), and so is an instance pause
+///   handed back, in either mode (1278);
+/// - a person's pause (`stand`) still draining or handing its device back is taken (1263, 1278);
+/// - a tool's hold (`quiet_or_lift`) still on its way is refused, `scheduling_pause_draining` or
+///   `scheduling_pause_releasing` (1270-1277);
+/// - `None`: a pause still on its way from a Runtime before 0.12.75, whose status answers no mode,
+///   so this read does not say.
+///
+/// Neither the reason nor who should lift a pause moves this: that is the caller's to say. Nor is
+/// whether the pause is still the one read: that is the resume's own condition (`resume_paused`).
+pub fn resume_taken(stage: Option<PauseStage>, mode: Option<PauseMode>) -> Option<bool> {
+    match (stage, mode) {
+        (None | Some(PauseStage::Released), _) => Some(true),
+        (Some(PauseStage::Draining | PauseStage::Paused), Some(PauseMode::Stand)) => Some(true),
+        (Some(PauseStage::Draining | PauseStage::Paused), Some(PauseMode::QuietOrLift)) => {
+            Some(false)
+        }
+        (Some(PauseStage::Draining | PauseStage::Paused), None) => None,
     }
 }
 
@@ -1709,13 +1778,17 @@ fn read_instances(main: &Rebuilding, root: &Path) -> InstancesRead {
     }
 }
 
-/// The global pause one status read reported, naming that read's owner epoch.
+/// The global pause one status read reported, naming that read's owner epoch. It has no stage,
+/// and gains neither mode nor what is in its way (`contracts/scheduling-pause.md` 823 at
+/// 945727d4).
 fn global_pause_fact(pause: &SchedulingPauseState, owner_epoch: OwnerEpoch) -> PauseFact {
     PauseFact {
         reason: pause.pause_reason.as_str().to_owned(),
         revision: pause.revision,
         since_unix_ms: pause.since_unix_ms,
         stage: None,
+        mode: None,
+        in_the_way: Vec::new(),
         target: PauseTarget {
             scope: SchedulingPauseScope::Global,
             expected: SchedulingPauseExpectation { owner_epoch, revision: pause.revision },
@@ -1724,7 +1797,11 @@ fn global_pause_fact(pause: &SchedulingPauseState, owner_epoch: OwnerEpoch) -> P
 }
 
 /// The pause of the instance `alias` one status read reported, naming that
-/// read's owner epoch.
+/// read's owner epoch, with its mode and what its latest check read in its way
+/// as the status answers them: from the pause table's copy, no check of its
+/// own (runtime-host `host/read_events.rs` 588-591, `host/policy_dispatch.rs`
+/// 1104-1124, `answered_instance_state`, at 945727d4). The words come in the
+/// order the status gives them; an absent member is an empty list or `None`.
 fn instance_pause_fact(
     alias: &str,
     pause: &InstancePauseState,
@@ -1735,6 +1812,8 @@ fn instance_pause_fact(
         revision: pause.revision,
         since_unix_ms: pause.since_unix_ms,
         stage: Some(pause_stage(pause.stage)),
+        mode: pause.pause_mode.map(pause_mode),
+        in_the_way: pause.in_the_way.iter().copied().map(Obstacle::of).collect(),
         target: PauseTarget {
             scope: SchedulingPauseScope::Instance { instance_alias: alias.to_string() },
             expected: SchedulingPauseExpectation { owner_epoch, revision: pause.revision },
@@ -2342,7 +2421,10 @@ mod tests {
     use actingcommand_contract::codes::ReceiptCode;
     use actingcommand_contract::outcome::{Code, Outcome};
 
-    use super::{resume_cause, resumed_device, ResumeCause, ResumedDevice};
+    use super::{
+        resume_cause, resume_taken, resumed_device, PauseMode, PauseStage, ResumeCause,
+        ResumedDevice,
+    };
 
     /// A code of the host's, which this crate does not use, by its spelling in the catalog the
     /// pinned contract crate embeds.
@@ -2444,6 +2526,37 @@ mod tests {
                 ResumedDevice::ReconnectFailed(code),
                 "{code}"
             );
+        }
+    }
+
+    /// Every mode the status may answer, none included.
+    const MODES: [Option<PauseMode>; 3] =
+        [None, Some(PauseMode::Stand), Some(PauseMode::QuietOrLift)];
+
+    #[test]
+    fn the_global_pause_and_one_handed_back_are_resumed_in_either_mode() {
+        for mode in MODES {
+            assert_eq!(resume_taken(None, mode), Some(true), "{mode:?}");
+            assert_eq!(resume_taken(Some(PauseStage::Released), mode), Some(true), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_persons_pause_is_resumed_in_every_stage_and_a_tools_hold_only_once_released() {
+        for stage in [PauseStage::Draining, PauseStage::Paused] {
+            assert_eq!(resume_taken(Some(stage), Some(PauseMode::Stand)), Some(true), "{stage:?}");
+            assert_eq!(
+                resume_taken(Some(stage), Some(PauseMode::QuietOrLift)),
+                Some(false),
+                "{stage:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pause_on_its_way_with_no_mode_answered_says_nothing() {
+        for stage in [PauseStage::Draining, PauseStage::Paused] {
+            assert_eq!(resume_taken(Some(stage), None), None, "{stage:?}");
         }
     }
 }
