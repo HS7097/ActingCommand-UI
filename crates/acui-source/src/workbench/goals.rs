@@ -59,7 +59,7 @@
 //! alone ([`answered`]): a version conflict (`current_version`), a Runtime without the write, the
 //! goal refused with its `goal_problem` word and the values that locate it, or another refusal.
 //!
-//! What the page says, all at the pinned Runtime (v0.12.73, a8d0aa43;
+//! What the page says, all at the pinned Runtime (v0.12.74, 1067dfaf;
 //! `contracts/runtime-interface.md`, "Goal request kinds";
 //! `crates/actingcommand-contract/src/runtime/goals.rs`):
 //!
@@ -107,7 +107,7 @@
 //! document; `v3`, the record `EditGoal` writes, each target with a lifetime of its own or none and
 //! the document with none (`contracts/resource-targets.md:1054-1059`); `v1`, an agent's old form,
 //! read only, which no `EditGoal` writes against (`record_unreadable`, "neither a v2 nor a v3
-//! record", `contracts/outcome-codes/catalog.json:11001-11003`); any other, a form newer than this
+//! record", `contracts/outcome-codes/catalog.json:11095-11097`); any other, a form newer than this
 //! console, whose targets it does not interpret. A
 //! target lapsed (the document expired, or its own lifetime is before the view's time) counts no
 //! more, so it is never shown as met.
@@ -115,7 +115,7 @@
 //! The page takes the policy outcome gate, the policy and the fact write gate in turn while it is
 //! computed (`crates/runtime-host/src/host/goals.rs:11-18`): the caller reads it seldom, as it
 //! reads the task switches. A Runtime that does not know the request drops the connection, and the
-//! client then says `runtime_operation_unsupported` (`crates/runtime-client/src/client.rs:1709-1773`);
+//! client then says `runtime_operation_unsupported` (`crates/runtime-client/src/client.rs:1723-1787`);
 //! that, or a refusal `not_implemented`, is an answer here, that this Runtime has no goals to read
 //! ([`GoalsAnswer::Unsupported`]).
 
@@ -230,7 +230,7 @@ impl GoalsPage {
     /// old form. One that does not list (`not_checked_yet`, `root_failing`, `no_schedule`) refuses
     /// every `EditGoal` with its word; against a `v1` record every one is refused
     /// `record_unreadable`, the record being "neither a v2 nor a v3 record the readers read"
-    /// (`contracts/outcome-codes/catalog.json:11001-11003`), so that page only shows.
+    /// (`contracts/outcome-codes/catalog.json:11095-11097`), so that page only shows.
     pub fn writable(&self) -> bool {
         let old = matches!(&self.stored, Stored::Document(Document { form: Form::Old, .. }));
         matches!(self.state, PageState::Listed { .. }) && !old
@@ -617,7 +617,7 @@ pub enum VariableState {
 }
 
 /// Why a run does not read a variable's value: the `variable_problem` vocabulary (Runtime
-/// `contracts/outcome-codes/catalog.json:10424-10484`), one word each.
+/// `contracts/outcome-codes/catalog.json:10518-10578`), one word each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unapplied {
     NotAnOption,
@@ -1857,7 +1857,7 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
 }
 
 /// Why the Runtime refused a write `goal_value_invalid`: the `goal_problem` vocabulary (Runtime
-/// `contracts/outcome-codes/catalog.json:10939-11017`), one word each.
+/// `contracts/outcome-codes/catalog.json:11033-11111`), one word each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteProblem {
     NameUnknown,

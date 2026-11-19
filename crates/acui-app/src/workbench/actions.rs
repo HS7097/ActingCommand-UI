@@ -31,7 +31,9 @@
 //! one once it is recorded. A pause of an account answers at the latest at the end of its
 //! caller's time, perhaps still on its way, and then says what was in the way; or that a resume
 //! or a shutdown came during its stages; and an answer that its stages failed is no pause lifted
-//! (`PauseOutcome`).
+//! (`PauseOutcome`). A resume of an account says, by its receipt's cause (Runtime 0.12.74, #480
+//! PG-2d), when nothing connected: its pause had not finished up, or the account is an iOS handset
+//! this Runtime has no backend for (`resumed_device`).
 //!
 //! A pause whose answer said nothing, of every account or of one, is not left at that
 //! (UI-PF1): the `Status` reads after it are watched for the pause of its scope (`PauseWatch`,
@@ -149,7 +151,7 @@ use acui_source::workbench::{
 };
 use acui_source::{
     resume_paused, resumed_device, ClientFailure, PauseFact, PauseStage, PauseTarget,
-    ResumeOutcome, ResumedDevice,
+    ResumeCause, ResumeOutcome, ResumedDevice,
 };
 
 use super::model::{DeviceBusy, Link, Page};
@@ -325,9 +327,10 @@ pub enum AccountSaid {
     PauseFailed { code: String },
     /// A pause of the account already holds: it keeps its reason, and this press set nothing.
     AlreadyPaused,
-    /// The pause is lifted; `device_failure` is the self-check's `failure_code`, which never
-    /// rolls the resume back: a reconnect that failed, or why none ran (`resumed_device`).
-    Resumed { device_failure: Option<String> },
+    /// The pause is lifted; `cause` is the receipt's, which says why nothing connected, and
+    /// `device_failure` the self-check's `failure_code`, which never rolls the resume back: a
+    /// reconnect that failed, or why none ran (`resumed_device`).
+    Resumed { cause: Option<ResumeCause>, device_failure: Option<String> },
     /// The pause was changed or lifted elsewhere: nothing was lifted here.
     PauseMoved,
     /// `code` is the Runtime's own, shown as it gave it, with its words.
@@ -524,7 +527,8 @@ pub enum Said {
     Sending(Write),
     PauseApplied,
     /// A person's resume lifted the pause while its stages still ran: none holds now. A global
-    /// pause has no stages, so 0.12.73 never answers it so; it is read as an account's is.
+    /// pause has no stages, so 0.12.73 and 0.12.74 never answer it so; it is read as an account's
+    /// is.
     PauseLifted,
     /// The Runtime answered that the pause failed, which lifts nothing of a person's pause:
     /// `code` is the Runtime's own, for its words.
@@ -1306,8 +1310,8 @@ impl Actions {
                     | AccountSaid::PauseStanding { .. }
                     | AccountSaid::PauseKept,
                 ) => !paused,
-                Some(AccountSaid::Resumed { device_failure }) => {
-                    match resumed_device(device_failure.as_deref()) {
+                Some(AccountSaid::Resumed { cause, device_failure }) => {
+                    match resumed_device(cause.as_ref(), device_failure.as_deref()) {
                         ResumedDevice::HeldAgain => !paused,
                         _ => paused,
                     }
@@ -1541,9 +1545,11 @@ pub struct AccountView {
 /// one only whoever set it lifts by the settings file is not this console's to lift), in any
 /// stage, "resume this account"; under any other, none. This console's own is a person's pause,
 /// which the Runtime resumes while it still drains or hands the device back too (Runtime 0.12.73;
-/// runtime-host `host/policy_dispatch.rs` 1153-1191, `check_resumable`, at a8d0aa43), without
-/// a reconnect then (4930-5008), unless the instance is fenced or its hand-back has begun
-/// closing the device session (4804-4824, 4943-4966), when the resume reconnects it; the card's
+/// runtime-host `host/policy_dispatch.rs` 1216-1254, `check_resumable`, at 1067dfaf), without
+/// a reconnect then (5244-5351), unless the instance is fenced or its hand-back has begun
+/// closing the device session (5104-5123, 5257-5280), when the resume reconnects it; an iOS
+/// handset's resume never connects anything, a fenced one's neither (Runtime 0.12.74,
+/// 5124-5137). The receipt's cause says which of these came of it (`resumed_device`). The card's
 /// main line still says which stage it is in. Either can
 /// be pressed while no press of that account is out. A fixture is offered the pause too: the
 /// Runtime's refusal says why not. `global_holds`: that `Status` shows a global pause.
@@ -2409,8 +2415,8 @@ enum Written {
 impl Written {
     fn said(self, write: Write) -> Said {
         match self {
-            // A global pause has no stages: 0.12.73 answers it with no cause, and one still on its
-            // way or kept at a shutdown would hold all the same.
+            // A global pause has no stages: 0.12.73 and 0.12.74 answer it with no cause, and one
+            // still on its way or kept at a shutdown would hold all the same.
             Self::Pause(
                 PauseOutcome::Applied { .. }
                 | PauseOutcome::Standing { .. }
@@ -2495,9 +2501,17 @@ impl Written {
                 | PauseOutcome::LiftedByResume { .. }
                 | PauseOutcome::KeptAtShutdown { .. }),
             ) => report::log_quiet(write.thread(), &format!("{prefix}: {}", took_line(outcome))),
-            Self::Resume(ResumeOutcome::Resumed { revision, .. }) => report::log_quiet(
+            // A global resume carries no cause; one that did is written, by its code.
+            Self::Resume(ResumeOutcome::Resumed { revision, cause, .. }) => report::log_quiet(
                 write.thread(),
-                &format!("{prefix}: resumed at revision {revision}"),
+                &match cause {
+                    None => format!("{prefix}: resumed at revision {revision}"),
+                    Some(cause) => format!(
+                        "{prefix}: resumed at revision {revision}, with a cause the top bar does \
+                         not read: {}",
+                        cause.as_str()
+                    ),
+                },
             ),
             Self::Pause(PauseOutcome::Failed(failure)) => report::log(
                 write.thread(),
@@ -2632,6 +2646,17 @@ fn in_the_way_words(in_the_way: Option<&[Obstacle]>) -> String {
     }
 }
 
+/// A cause of a resume's receipt this console does not read (`ResumeCause::Other`), for the end
+/// of a log line: its code; nothing for any other.
+fn unread_cause(cause: Option<&ResumeCause>) -> String {
+    match cause {
+        Some(ResumeCause::Other(code)) => {
+            format!(", with a cause this console does not read: {code}")
+        }
+        _ => String::new(),
+    }
+}
+
 /// The code a refusal is known by: the host's own when the receipt names it, which
 /// is the one that says why; else the class, else the client's.
 fn refusal(failure: &ClientFailure) -> &str {
@@ -2732,8 +2757,8 @@ impl AccountWritten {
                     AccountSaid::Refused { write, code: code.to_owned() }
                 }
             }
-            Self::Resume(ResumeOutcome::Resumed { device_failure, .. }) => {
-                AccountSaid::Resumed { device_failure }
+            Self::Resume(ResumeOutcome::Resumed { cause, device_failure, .. }) => {
+                AccountSaid::Resumed { cause, device_failure }
             }
             Self::Resume(ResumeOutcome::Refused(failure)) => {
                 let code = refusal(&failure);
@@ -2758,9 +2783,11 @@ impl AccountWritten {
 
     /// Into the technical log, naming the account, as `Written::log` does the top bar's: what
     /// went as it should, a pause still on its way, lifted or kept during its stages, a lift that
-    /// found the account held again or its device held by a player, and the refusals that only say
-    /// the state moved on quietly; the rest, a pause whose stages failed and a reconnect that
-    /// failed after a lift included, as the problems they are.
+    /// found the account held again or its device held by a player, one whose receipt says why
+    /// nothing connected (its pause not finished up, or an iOS handset), and the refusals that only
+    /// say the state moved on quietly; the rest, a pause whose stages failed and a reconnect that
+    /// failed after a lift included, as the problems they are. A cause of a lift's receipt this
+    /// console does not read is written by its code.
     fn log(&self, alias: &str, write: AccountWrite, ticket: Ticket) {
         let thread = write.thread();
         let prefix = format!("ticket {} of {alias}", ticket.0);
@@ -2775,31 +2802,49 @@ impl AccountWritten {
                 thread,
                 &format!("{prefix}: failed; whether a pause holds, the status tells: {}", failure_line(failure)),
             ),
-            Self::Resume(ResumeOutcome::Resumed { revision, device_failure }) => {
-                match resumed_device(device_failure.as_deref()) {
+            Self::Resume(ResumeOutcome::Resumed { revision, cause, device_failure }) => {
+                let unread = unread_cause(cause.as_ref());
+                match resumed_device(cause.as_ref(), device_failure.as_deref()) {
                     ResumedDevice::Fine => report::log_quiet(
                         thread,
-                        &format!("{prefix}: resumed at revision {revision}"),
+                        &format!("{prefix}: resumed at revision {revision}{unread}"),
+                    ),
+                    ResumedDevice::WithoutReconnect => report::log_quiet(
+                        thread,
+                        &format!(
+                            "{prefix}: resumed at revision {revision}; its pause had not \
+                             finished up, so nothing reconnected: \
+                             scheduling_resume_without_reconnect"
+                        ),
+                    ),
+                    ResumedDevice::WithoutBackend => report::log_quiet(
+                        thread,
+                        &format!(
+                            "{prefix}: resumed at revision {revision}; an iOS handset, which \
+                             this Runtime has no backend for, so nothing connected: \
+                             scheduling_resume_without_backend"
+                        ),
                     ),
                     ResumedDevice::HeldAgain => report::log_quiet(
                         thread,
                         &format!(
                             "{prefix}: resumed, and held again by its first-start pause at \
-                             revision {revision}, not applied before: dispatch_paused_instance"
+                             revision {revision}, not applied before: \
+                             dispatch_paused_instance{unread}"
                         ),
                     ),
                     ResumedDevice::PlayerHolds => report::log_quiet(
                         thread,
                         &format!(
                             "{prefix}: resumed at revision {revision}; a player holds the \
-                             device, so nothing reconnected: player_hold_active"
+                             device, so nothing reconnected: player_hold_active{unread}"
                         ),
                     ),
                     ResumedDevice::ReconnectFailed(code) => report::log(
                         thread,
                         &format!(
                             "{prefix}: resumed at revision {revision}; the device's reconnect \
-                             failed: {code}"
+                             failed: {code}{unread}"
                         ),
                     ),
                 }

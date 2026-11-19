@@ -78,6 +78,11 @@
 //! start, are rows of the page's tiers that the main page changes: [`rules`] reads them out of the
 //! same snapshot, a blackout list's entries through the Runtime's own parser (BX-1, 0.12.39), and
 //! spells their changes, a list's in the shape that parser reads.
+//!
+//! What a ledger record of a pause's life says (Runtime 0.12.74, #480 PG-2d) is read here too,
+//! as what a pause's receipt says is ([`pause_moment`], beside `pause_answer`), for the ledger
+//! window, which finds such records in its own pages: no lane reads them, and nothing on the
+//! workbench shows them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -89,9 +94,10 @@ use acui_rows::{code, EventActor, EventSource};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     config_parameters_fact_key, is_instance_backend_key, ConfigParameter, ConfigParameterSource,
-    ConfigSettingChange, EmulatorCapability, EmulatorRunningState, ExecutionBackendProvenance,
-    FactScalar, FactValue, InstanceActivity, InstanceActivityKind, InstanceId, InstancePauseStage,
-    OwnerEpoch, PauseObstacle, RequestId, RuntimeControlPlaneStatus,
+    ConfigSettingChange, EmulatorCapability, EmulatorRunningState, EventType,
+    ExecutionBackendProvenance, FactScalar, FactValue, InstanceActivity, InstanceActivityKind,
+    InstanceId, InstancePauseStage, OwnerEpoch, PauseObstacle, ProjectedEvent, ProjectionPayload,
+    PublicEventPayload, RequestId, RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
     RuntimeScheduleExplanation, RuntimeStartReport, ScheduleCandidateEligibility,
@@ -115,7 +121,8 @@ use actingcommand_runtime_config::{
 
 use super::{
     global_pause_fact, instance_pause_fact, pause_stage, runtime_connection, ClientFailure,
-    NoConnection, OnlineSource, PauseFact, PauseStage, RUNTIME_RESULT_UNEXPECTED,
+    NoConnection, OnlineSource, PauseFact, PauseStage, RESUME_WITHOUT_BACKEND,
+    RESUME_WITHOUT_RECONNECT, RUNTIME_RESULT_UNEXPECTED,
 };
 
 pub mod backends;
@@ -507,44 +514,44 @@ fn connection_ended(error: &RuntimeClientError) -> bool {
 
 /// What became of one person's global pause ([`pause_global`]), or of one person's pause of
 /// one account ([`pause_account`]). Both are a person's pause, `stand` (#480 PG-2c, Runtime
-/// 0.12.73; `contracts/scheduling-pause.md` 197-280 at a8d0aa43): once its row is recorded the
+/// 0.12.73; `contracts/scheduling-pause.md` 197-281 at 1067dfaf): once its row is recorded the
 /// Runtime never lifts it by itself, not for something in the way, a shutdown or a failure of its
 /// own; only a person's resume does. What came of an instance pause's stages is the cause its
 /// completed receipt carries under its success code ([`pause_answer`]); a global pause has no
-/// stages, and its receipt carries none (runtime-host `host/policy_dispatch.rs` 3711-3745).
+/// stages, and its receipt carries none (runtime-host `host/policy_dispatch.rs` 3774-3808).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PauseOutcome {
     /// The pause holds, at this revision of its scope: an instance's with its device handed back
     /// within its caller's time, or the global one. `cause`: the code of a cause under the success
-    /// code that this console does not read, for the log only; 0.12.73 gives none such.
+    /// code that this console does not read, for the log only; 0.12.74 gives none such.
     Applied { revision: u64, cause: Option<String> },
     /// An instance pause holds at this revision, its gate closed, and was still on its way at the
     /// end of its caller's time (`scheduling_pause_standing`): the Runtime carries its stages on by
     /// itself, until its device is handed back or a person resumes it (`scheduling-pause.md`
-    /// 213-237). No failure. `stage`: where it stood then, draining or handing its device back;
+    /// 213-238). No failure. `stage`: where it stood then, draining or handing its device back;
     /// `in_the_way`: what was in the way at that read, empty when nothing was and the hand-back had
     /// not finished (222-225). Either is `None` when the cause carried none this build reads.
     Standing { revision: u64, stage: Option<PauseStage>, in_the_way: Option<Vec<Obstacle>> },
     /// A person's resume lifted the pause while its own stages still ran
-    /// (`scheduling_pause_lifted_by_resume`, 269-273): it set the pause at this revision, and no
+    /// (`scheduling_pause_lifted_by_resume`, 270-274): it set the pause at this revision, and no
     /// pause of it holds now. No failure. `stage`: where it stood then.
     LiftedByResume { revision: u64, stage: Option<PauseStage> },
     /// The Runtime shut down before the device was handed back
-    /// (`scheduling_pause_kept_at_shutdown`, 263-268): the pause holds at this revision until the
+    /// (`scheduling_pause_kept_at_shutdown`, 264-269): the pause holds at this revision until the
     /// Runtime stops, and the next start restores it. No failure. `stage`: where it stood then.
     KeptAtShutdown { revision: u64, stage: Option<PauseStage> },
     /// The Runtime denied it (`Denied`), or answered that the record of its pauses failed
     /// (`scheduling_pause_persist_failed`), and set nothing: what can refuse a pause for its own
-    /// input is checked before its row is recorded (`scheduling-pause.md` 259-262, 675-682), and a
+    /// input is checked before its row is recorded (`scheduling-pause.md` 260-263, 702-709), and a
     /// refused record leaves the gate as it was (runtime-host `host/scheduling_pause.rs` 102-119,
     /// 164-173). Its code is the host's, in `host`: `runtime_code` is only the receipt's class. One
     /// pause already holding is `scheduling_already_paused`, and keeps its own reason.
     Refused(ClientFailure),
     /// The Runtime answered that it failed (`Failed`): a fatal failure, or one that fenced the
     /// instance, in its stages, which lifts nothing of a person's pause: its gate stays closed and
-    /// its row names it, so the next start restores it (`scheduling-pause.md` 274-280;
-    /// `policy_dispatch.rs` 3817-3852). A fatal failure before the row was recorded leaves none,
-    /// and the Runtime latched (3704-3786): what holds is the status's to say. Its code, as
+    /// its row names it, so the next start restores it (`scheduling-pause.md` 275-281;
+    /// `policy_dispatch.rs` 3911-3946). A fatal failure before the row was recorded leaves none,
+    /// and the Runtime latched (3767-3852): what holds is the status's to say. Its code, as
     /// `Refused`'s.
     Failed(ClientFailure),
     /// No connection, so nothing was sent.
@@ -555,8 +562,8 @@ pub enum PauseOutcome {
 
 /// What was in the way of an instance pause's stages when its caller's time ended, as its
 /// `scheduling_pause_standing` named it: the contract's closed list `pause_obstacle`, ten words
-/// (`PauseObstacle`; contract `runtime.rs` 2314-2375 at a8d0aa43), each in the list once, in that
-/// order (runtime-host `host/policy_dispatch.rs` 1340-1364).
+/// (`PauseObstacle`; contract `runtime.rs` 2314-2375 at 1067dfaf), each in the list once, in that
+/// order (runtime-host `host/policy_dispatch.rs` 1403-1427).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Obstacle {
     /// A run of the instance still in flight; past the drain it was asked to stop at its next
@@ -578,7 +585,7 @@ pub enum Obstacle {
     /// The lease of the device session's close was refused; the close is tried again.
     CloseRefused,
     /// The session's close could not be confirmed and fenced the instance; it is not tried again,
-    /// and only a person's resume connects the instance again (`policy_dispatch.rs` 1246-1257).
+    /// and only a person's resume connects the instance again (`policy_dispatch.rs` 1309-1320).
     CloseUnconfirmed,
     /// The last check of the stages failed, not fatally; it is tried again.
     CheckFailed,
@@ -623,8 +630,9 @@ impl Obstacle {
 
 /// The causes a person's pause's completed receipt carries under its success code
 /// (`caused_by`), each informing, the host's own spellings, of a crate this one does not use
-/// (runtime-host `codes.rs` 1683-1693 at a8d0aa43), and the keys of their values (contract
-/// `outcome/keys.rs` 420-421).
+/// (runtime-host `codes.rs` 1705-1715 at 1067dfaf), and the keys of their values (contract
+/// `outcome/keys.rs` 420-421). The record of a pause's life carries two of them on top as well
+/// ([`PauseMoment`]).
 const PAUSE_STANDING: &str = "scheduling_pause_standing";
 const PAUSE_LIFTED_BY_RESUME: &str = "scheduling_pause_lifted_by_resume";
 const PAUSE_KEPT_AT_SHUTDOWN: &str = "scheduling_pause_kept_at_shutdown";
@@ -636,41 +644,161 @@ const PAUSE_PERSIST_FAILED: &str = "scheduling_pause_persist_failed";
 
 /// What a person's pause answered `Completed` with says of it: `revision`, its result's, and
 /// `outcome`, its receipt's, whose first cause under the success code tells, read as the Lab reads
-/// it (Runtime `crates/lab-ops/src/scheduling.rs` 163-182, `hold_not_quiet`, at a8d0aa43): its code
+/// it (Runtime `crates/lab-ops/src/scheduling.rs` 186-205, `hold_not_quiet`, at 1067dfaf): its code
 /// by its spelling, `pause_stage` as an `InstancePauseStage` and `in_the_way` as a list of
 /// `PauseObstacle`, both as the receipt carries them (`RuntimeReceipt::scheduling_paused`, contract
-/// `runtime.rs` 6141-6165; runtime-host `host/policy_dispatch.rs` 1366-1393, `stages_cause`). No
+/// `runtime.rs` 6141-6165; runtime-host `host/policy_dispatch.rs` 1429-1456, `stages_cause`). No
 /// cause: it holds. A cause of another code: it holds as well, the code kept for the log. An
 /// absent `in_the_way` is an empty one (`contracts/scheduling-pause.md` 222-225).
 fn pause_answer(revision: u64, outcome: &Outcome) -> PauseOutcome {
     let Some(cause) = outcome.causes().first().map(|link| link.outcome()) else {
         return PauseOutcome::Applied { revision, cause: None };
     };
-    let stage = || {
-        cause
-            .value(PAUSE_STAGE)
-            .and_then(|stage| serde_json::from_value::<InstancePauseStage>(stage.clone()).ok())
-            .map(pause_stage)
-    };
     match cause.code().as_str() {
-        PAUSE_STANDING => {
-            let in_the_way = match cause.value(IN_THE_WAY) {
-                None => Some(Vec::new()),
-                Some(words) => serde_json::from_value::<Vec<PauseObstacle>>(words.clone())
-                    .ok()
-                    .map(|words| words.into_iter().map(Obstacle::of).collect()),
-            };
-            PauseOutcome::Standing { revision, stage: stage(), in_the_way }
+        PAUSE_STANDING => PauseOutcome::Standing {
+            revision,
+            stage: stage_value(cause),
+            in_the_way: in_the_way_value(cause),
+        },
+        PAUSE_LIFTED_BY_RESUME => {
+            PauseOutcome::LiftedByResume { revision, stage: stage_value(cause) }
         }
-        PAUSE_LIFTED_BY_RESUME => PauseOutcome::LiftedByResume { revision, stage: stage() },
-        PAUSE_KEPT_AT_SHUTDOWN => PauseOutcome::KeptAtShutdown { revision, stage: stage() },
+        PAUSE_KEPT_AT_SHUTDOWN => {
+            PauseOutcome::KeptAtShutdown { revision, stage: stage_value(cause) }
+        }
         other => PauseOutcome::Applied { revision, cause: Some(other.to_owned()) },
     }
 }
 
+/// The `pause_stage` an outcome of a pause carries, as an `InstancePauseStage`; `None` without
+/// one, or with a word this build does not read.
+fn stage_value(outcome: &Outcome) -> Option<PauseStage> {
+    outcome
+        .value(PAUSE_STAGE)
+        .and_then(|stage| serde_json::from_value::<InstancePauseStage>(stage.clone()).ok())
+        .map(pause_stage)
+}
+
+/// The `in_the_way` an outcome of a pause carries, as a list of `PauseObstacle`: an absent one is
+/// an empty one (`contracts/scheduling-pause.md` 222-225); `None` with a word this build does not
+/// read.
+fn in_the_way_value(outcome: &Outcome) -> Option<Vec<Obstacle>> {
+    match outcome.value(IN_THE_WAY) {
+        None => Some(Vec::new()),
+        Some(words) => serde_json::from_value::<Vec<PauseObstacle>>(words.clone())
+            .ok()
+            .map(|words| words.into_iter().map(Obstacle::of).collect()),
+    }
+}
+
+/// One moment of an instance pause's life that the Runtime records in its ledger, so that a second
+/// console, the Lab or this one after a restart can tell what happened to a pause (#480 PG-2d,
+/// Runtime 0.12.74; `contracts/scheduling-pause.md` 711-760 at 1067dfaf): a
+/// `runtime.lifecycle_observed` record of the phase `device_state_observed`, under the instance and
+/// the links of the pause's own request, whose outcome's code says which and whose severity is that
+/// code's category (runtime-host `host/policy_dispatch.rs` 4002-4031, `record_pause_moment`). The
+/// ledger window reads it, online and offline, in the public projection (`ProjectionProfile::Ui`),
+/// which keeps of that outcome every node's code, category and relation, and of its values only
+/// the registered names, `pause_stage` and `in_the_way` but not `pause_reason` (contract
+/// `outcome.rs` 1278-1308, `outcome/keys.rs` 218 and 420-421, `event/payload.rs` 14127-14130).
+/// Nothing on the workbench reads it: what a pause is doing now is the status's `stage`
+/// (`contracts/scheduling-pause.md` 797-804).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PauseMoment {
+    /// `scheduling_pause_standing` (info): a person's pause answered at the end of its caller's
+    /// time with something still in the way, the record of its receipt's own cause
+    /// (`policy_dispatch.rs` 1429-1456, 3954-3972): where it stood, what was in the way, and, for
+    /// `check_failed`, the code of the failed check, its cause. The Runtime carries its stages on,
+    /// unless only an unconfirmed close stood in the way: that fences the instance and is not
+    /// tried again, and only a person's resume reconnects it (1309-1311, 3973-3989, 4833-4848).
+    /// `stage` or `in_the_way` is `None` when the record carries a word this build does not read.
+    Standing { stage: Option<PauseStage>, in_the_way: Option<Vec<Obstacle>>, cause: Option<String> },
+    /// `scheduling_pause_settled` (info, no member): that pause later became quiet by itself, its
+    /// tasks stopped and its device handed back; the pause still holds (4326-4340).
+    Settled,
+    /// `scheduling_resume_without_reconnect` (info, no member): a person's resume lifted the pause
+    /// while it still drained or handed its device back, and nothing reconnected. Recorded under
+    /// the pause request's links, not the resume's (5281-5282, 5316-5326;
+    /// `contracts/scheduling-pause.md` 718-720, 727, 762-764).
+    ResumedWithoutReconnect,
+    /// `scheduling_pause_kept_at_shutdown` (info): the Runtime stopped before the pause became
+    /// quiet, and keeps it until its next start, which restores it: where it stood (1434-1435,
+    /// 3963-3971, 4335).
+    KeptAtShutdown { stage: Option<PauseStage> },
+    /// `scheduling_pause_lifted_not_quiet` (warning): a tool's hold (`quiet_or_lift`) was lifted
+    /// without its instance having become quiet, so it held nothing: what was in the way (perhaps
+    /// nothing read, when another party held the instance's admission guard), and the code of the
+    /// failure that ended it, its cause (3889-3910). Which tool's hold it was, its `pause_reason`,
+    /// the projection leaves out.
+    LiftedNotQuiet { in_the_way: Option<Vec<Obstacle>>, cause: Option<String> },
+    /// `scheduling_resume_without_backend` (info, no member, Workflow #479 F-2): the pause of an
+    /// iOS handset was lifted, by a person's resume or a tool's, and nothing connected, this
+    /// Runtime having no backend for its device system (5407-5420;
+    /// `contracts/device-binding.md` 535-543).
+    ResumedWithoutBackend,
+}
+
+impl PauseMoment {
+    /// The record's code, as the wire spells it.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Standing { .. } => PAUSE_STANDING,
+            Self::Settled => PAUSE_SETTLED,
+            Self::ResumedWithoutReconnect => RESUME_WITHOUT_RECONNECT,
+            Self::KeptAtShutdown { .. } => PAUSE_KEPT_AT_SHUTDOWN,
+            Self::LiftedNotQuiet { .. } => PAUSE_LIFTED_NOT_QUIET,
+            Self::ResumedWithoutBackend => RESUME_WITHOUT_BACKEND,
+        }
+    }
+}
+
+/// The two codes of a pause's life only its records carry, never a receipt, the host's own
+/// spellings (runtime-host `codes.rs` 1728 and 1735 at 1067dfaf).
+const PAUSE_SETTLED: &str = "scheduling_pause_settled";
+const PAUSE_LIFTED_NOT_QUIET: &str = "scheduling_pause_lifted_not_quiet";
+
+/// The moment of a pause's life `event` records ([`PauseMoment`]), read as `stop_marked` reads a
+/// record's outcome: a `runtime.lifecycle_observed` record of the Runtime's family whose public
+/// projection's outcome has one of the six codes on top. Any other record is none, another code of
+/// `device_state_observed` among them (the emulator watch's `emulator_autostart_skipped`, the idle
+/// check's `instance_idle_action`), and shows as before.
+pub fn pause_moment(event: &ProjectedEvent) -> Option<PauseMoment> {
+    if event.event_type != EventType::RuntimeLifecycleObserved {
+        return None;
+    }
+    let ProjectionPayload::Public(payload) = &event.payload else {
+        return None;
+    };
+    let PublicEventPayload::Runtime(payload) = payload.as_ref() else {
+        return None;
+    };
+    moment_of(payload.outcome()?)
+}
+
+/// What a record's `outcome` says of a pause's life, by its top code's spelling, its values read as
+/// a pause's receipt's cause is (`pause_answer`): `None` for any other code.
+fn moment_of(outcome: &Outcome) -> Option<PauseMoment> {
+    let cause = || outcome.causes().first().map(|link| link.outcome().code().as_str().to_owned());
+    Some(match outcome.code().as_str() {
+        PAUSE_STANDING => PauseMoment::Standing {
+            stage: stage_value(outcome),
+            in_the_way: in_the_way_value(outcome),
+            cause: cause(),
+        },
+        PAUSE_SETTLED => PauseMoment::Settled,
+        RESUME_WITHOUT_RECONNECT => PauseMoment::ResumedWithoutReconnect,
+        PAUSE_KEPT_AT_SHUTDOWN => PauseMoment::KeptAtShutdown { stage: stage_value(outcome) },
+        PAUSE_LIFTED_NOT_QUIET => {
+            PauseMoment::LiftedNotQuiet { in_the_way: in_the_way_value(outcome), cause: cause() }
+        }
+        RESUME_WITHOUT_BACKEND => PauseMoment::ResumedWithoutBackend,
+        _ => return None,
+    })
+}
+
 /// What a pause's failure says of it, by the Runtime's own receipt of it the client kept
 /// ([`RuntimeClientError::received_receipt`]), as the Lab tells its own apart (Runtime
-/// `crates/lab-ops/src/scheduling.rs` 184-211, `failed_pause`, at a8d0aa43).
+/// `crates/lab-ops/src/scheduling.rs` 207-234, `failed_pause`, at 1067dfaf).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FailedPause {
     /// Nothing was set ([`PauseOutcome::Refused`]).
@@ -713,9 +841,9 @@ pub fn pause_global(root: &Path) -> PauseOutcome {
 /// account still in flight once it has passed is asked to stop at its next checkpoint, and the
 /// Runtime answers once the device is handed back or, at the latest, at the end of its caller's
 /// time, that timeout and the checkpoint grace (1 s and 30 s; runtime-host
-/// `host/contained_task.rs` 1383-1393 at a8d0aa43), with what was still in the way
+/// `host/contained_task.rs` 1383-1393 at 1067dfaf), with what was still in the way
 /// ([`PauseOutcome::Standing`]); the client waits for the receipt that long and its io timeout
-/// besides (runtime-client `client.rs` 6960-6976). A fixture instance's is a refusal
+/// besides (runtime-client `client.rs` 7041-7057). A fixture instance's is a refusal
 /// (`fixture_execution_scope_forbidden`), and so is an alias the Runtime does not know.
 pub fn pause_account(root: &Path, instance_alias: &str) -> PauseOutcome {
     let scope = SchedulingPauseScope::Instance { instance_alias: instance_alias.to_owned() };
@@ -724,9 +852,9 @@ pub fn pause_account(root: &Path, instance_alias: &str) -> PauseOutcome {
 
 /// One `PauseScheduling` of `scope` with `reason`, for both of the above: a person's pause,
 /// `stand`, sent with the receipt's outcome kept (`pause_scheduling_as`, runtime-client
-/// `client.rs` 1830-1870 at a8d0aa43; `pause_scheduling` sends the same mode and lets the outcome
+/// `client.rs` 1844-1884 at 1067dfaf; `pause_scheduling` sends the same mode and lets the outcome
 /// go). A Runtime before 0.12.73 (`runtime-client` 11 or lower) cannot decode the request and
-/// ends the connection without a receipt (1836-1837): unconfirmed.
+/// ends the connection without a receipt (1850-1851): unconfirmed.
 fn pause(root: &Path, scope: SchedulingPauseScope, reason: &str) -> PauseOutcome {
     let reason = match SchedulingPauseReason::new(reason) {
         Ok(reason) => reason,
@@ -778,23 +906,23 @@ fn pause(root: &Path, scope: SchedulingPauseScope, reason: &str) -> PauseOutcome
 }
 
 /// The longest the Runtime takes, once it has one person's pause of one account
-/// ([`pause_account`]), to show it in `Status` (runtime-host `host/policy_dispatch.rs` 3746-3791,
-/// at a8d0aa43, the Runtime this console pins). Its deadlines are taken first (3750); then it
+/// ([`pause_account`]), to show it in `Status` (runtime-host `host/policy_dispatch.rs` 3809-3862,
+/// at 1067dfaf, the Runtime this console pins). Its deadlines are taken first (3813); then it
 /// records the pauses, which the ledger's writer answers within `LEDGER_WRITER_REPLY_WAIT_MS`
-/// (10 s; contract `runtime.rs` 154-159; the record at 3781), and sets the pause, stage
-/// `draining`, in the table `Status` reads right after (3782-3788), before any of its stages runs.
+/// (10 s; contract `runtime.rs` 154-159; the record at 3844), and sets the pause, stage
+/// `draining`, in the table `Status` reads right after (3848-3854), before any of its stages runs.
 /// From then on a person's pause is never lifted by the Runtime, a failed stage's included
-/// (3817-3852; `contracts/scheduling-pause.md` 197-209): only a person's resume lifts it. So this
+/// (3911-3946; `contracts/scheduling-pause.md` 197-209): only a person's resume lifts it. So this
 /// is all there is to wait for: a pause a read showed and that is gone again was lifted by a
 /// resume ([`PauseVerdict::LiftedLater`]), and one no read showed did not hold, its request lost
-/// (a Runtime before 0.12.73 drops it undecoded, runtime-client `client.rs` 1836-1837). The
+/// (a Runtime before 0.12.73 drops it undecoded, runtime-client `client.rs` 1850-1851). The
 /// locks it waits for on the way have no bound in the source, so this bounds no pause: only one
 /// no read showed is taken as not held, and not before this long after its press
 /// ([`pause_verdict`]).
 pub const ACCOUNT_PAUSE_SETTLES: Duration = Duration::from_millis(LEDGER_WRITER_REPLY_WAIT_MS);
 
 /// The same of one person's global pause ([`pause_global`]): it drains nothing, and holds once
-/// the pauses are recorded (`policy_dispatch.rs` 3711-3745), within `LEDGER_WRITER_REPLY_WAIT_MS`
+/// the pauses are recorded (`policy_dispatch.rs` 3774-3808), within `LEDGER_WRITER_REPLY_WAIT_MS`
 /// (10 s). Nothing lifts it again but a resume.
 pub const GLOBAL_PAUSE_SETTLES: Duration = Duration::from_millis(LEDGER_WRITER_REPLY_WAIT_MS);
 
@@ -802,7 +930,7 @@ pub const GLOBAL_PAUSE_SETTLES: Duration = Duration::from_millis(LEDGER_WRITER_R
 /// a pause none of them showed is taken as not held ([`pause_verdict`]). Counted from that answer,
 /// not from the press: the client waits for a pause's receipt up to the drain timeout, the
 /// checkpoint grace and its io timeout (1 s, 30 s and the default 5 s; runtime-client `client.rs`
-/// 1845-1858, 6960-6976, 90 and 185, at a8d0aa43), longer than a pause takes to show, so an answer
+/// 1859-1872, 7041-7057, 90 and 185, at 1067dfaf), longer than a pause takes to show, so an answer
 /// that said nothing may land past [`GLOBAL_PAUSE_SETTLES`] and [`ACCOUNT_PAUSE_SETTLES`], with the
 /// pause not yet recorded. Each read counted was begun after that answer (the workbench lets go of
 /// a read begun before a write's answer), so three of them are three looks at the Runtime after
@@ -813,9 +941,9 @@ pub const PAUSE_WATCH_READS: u32 = 3;
 /// draining or handing its device back ([`PauseSeen::Staging`]): ten minutes from the press. A
 /// person's pause that a read shows on its way is moved on by the Runtime only to held, its device
 /// handed back, or not at all until a person resumes it: past its caller's time the host carries
-/// its stages on with no bound (`policy_dispatch.rs` 1203-1233; `contracts/scheduling-pause.md`
-/// 225-237), and a close it could not confirm leaves it handing its device back, not tried again
-/// (1246-1257). One has been seen lifted 107 s after its press (UI-PF1), on a Runtime before
+/// its stages on with no bound (`policy_dispatch.rs` 1266-1296; `contracts/scheduling-pause.md`
+/// 225-238), and a close it could not confirm leaves it handing its device back, not tried again
+/// (1309-1320). One has been seen lifted 107 s after its press (UI-PF1), on a Runtime before
 /// 0.12.73, which still lifted a pause whose stage failed. A pause still on its way at ten minutes
 /// is past anything the console has seen, and it is no longer said to be watched, nor confirmed,
 /// but left to what the card shows.
@@ -2254,9 +2382,9 @@ mod tests {
     use actingcommand_contract::{InstancePauseStage, PauseObstacle, RuntimeReceiptState};
 
     use super::{
-        failed_pause, lab_record_started, pause_answer, pause_verdict, FailedPause, Obstacle,
-        PauseOutcome, PauseSeen, PauseStage, PauseVerdict, ACCOUNT_PAUSE_SETTLES,
-        GLOBAL_PAUSE_SETTLES, PAUSE_WATCH_LIMIT, PAUSE_WATCH_READS,
+        failed_pause, lab_record_started, moment_of, pause_answer, pause_verdict, FailedPause,
+        Obstacle, PauseMoment, PauseOutcome, PauseSeen, PauseStage, PauseVerdict,
+        ACCOUNT_PAUSE_SETTLES, GLOBAL_PAUSE_SETTLES, PAUSE_WATCH_LIMIT, PAUSE_WATCH_READS,
     };
 
     /// How long the Runtime takes to show a pause, here: an account's.
@@ -2404,6 +2532,117 @@ mod tests {
                 stage: Some(PauseStage::Paused),
                 in_the_way: Some(Vec::new()),
             }
+        );
+    }
+
+    #[test]
+    fn a_standing_record_says_its_stage_what_was_in_the_way_and_a_failed_check() {
+        // As the ledger window reads it: the public projection, codes only.
+        let record =
+            standing(InstancePauseStage::Draining, &[PauseObstacle::ContainedRun]).codes_only();
+        assert_eq!(
+            moment_of(&record),
+            Some(PauseMoment::Standing {
+                stage: Some(PauseStage::Draining),
+                in_the_way: Some(vec![Obstacle::ContainedRun]),
+                cause: None,
+            })
+        );
+        let failure =
+            Outcome::from_io_error(&std::io::Error::from(std::io::ErrorKind::TimedOut), IoOp::Read);
+        let record = standing(InstancePauseStage::Paused, &[PauseObstacle::CheckFailed])
+            .caused_by(failure)
+            .codes_only();
+        assert_eq!(
+            moment_of(&record),
+            Some(PauseMoment::Standing {
+                stage: Some(PauseStage::Paused),
+                in_the_way: Some(vec![Obstacle::CheckFailed]),
+                cause: Some("foreign_os_error".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn the_records_of_no_member_say_which_moment_alone() {
+        for (code, moment) in [
+            ("scheduling_pause_settled", PauseMoment::Settled),
+            ("scheduling_resume_without_reconnect", PauseMoment::ResumedWithoutReconnect),
+            ("scheduling_resume_without_backend", PauseMoment::ResumedWithoutBackend),
+        ] {
+            let record = Outcome::new(host(code)).codes_only();
+            assert_eq!(moment.code(), code);
+            assert_eq!(moment_of(&record), Some(moment), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_pause_kept_at_a_shutdown_says_where_it_stood() {
+        let record = Outcome::new(host("scheduling_pause_kept_at_shutdown"))
+            .pause_stage(InstancePauseStage::Paused)
+            .codes_only();
+        assert_eq!(
+            moment_of(&record),
+            Some(PauseMoment::KeptAtShutdown { stage: Some(PauseStage::Paused) })
+        );
+    }
+
+    #[test]
+    fn a_hold_lifted_not_quiet_keeps_what_was_in_the_way_and_its_failure_but_not_whose() {
+        let record = Outcome::new(host("scheduling_pause_lifted_not_quiet"))
+            .pause_reason("lab-record-1")
+            .in_the_way([PauseObstacle::QueuedEntry])
+            .caused_by(Outcome::new(host("scheduling_pause_release_busy")))
+            .codes_only();
+        // The projection drops the hold's reason, a name.
+        assert!(record.value("pause_reason").is_none());
+        assert_eq!(
+            moment_of(&record),
+            Some(PauseMoment::LiftedNotQuiet {
+                in_the_way: Some(vec![Obstacle::QueuedEntry]),
+                cause: Some("scheduling_pause_release_busy".to_owned()),
+            })
+        );
+        // Another party held the admission guard: nothing read in the way.
+        let record = Outcome::new(host("scheduling_pause_lifted_not_quiet"))
+            .in_the_way(std::iter::empty::<PauseObstacle>())
+            .caused_by(Outcome::new(host("scheduling_pause_drain_incomplete")))
+            .codes_only();
+        assert_eq!(
+            moment_of(&record),
+            Some(PauseMoment::LiftedNotQuiet {
+                in_the_way: Some(Vec::new()),
+                cause: Some("scheduling_pause_drain_incomplete".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn another_record_of_a_device_state_is_no_moment_of_a_pause() {
+        // The emulator watch's and the idle check's, written as the same phase.
+        for code in ["emulator_autostart_skipped", "instance_idle_action"] {
+            let record = Outcome::new(host(code)).codes_only();
+            assert_eq!(moment_of(&record), None, "{code}");
+        }
+        // A pause's receipt's cause, which no record carries on top.
+        let lifted = Outcome::new(host("scheduling_pause_lifted_by_resume"))
+            .pause_stage(InstancePauseStage::Draining)
+            .codes_only();
+        assert_eq!(moment_of(&lifted), None);
+    }
+
+    #[test]
+    fn a_record_with_words_this_build_does_not_read_keeps_none_of_them() {
+        // As a newer Runtime might write it: a stage and an obstacle the pinned contract lacks.
+        let record: Outcome = serde_json::from_value(serde_json::json!({
+            "code": "scheduling_pause_standing",
+            "category": "info",
+            "values": {"pause_stage": "parked", "in_the_way": ["lease", "new_word"]},
+        }))
+        .expect("a record outcome's form");
+        assert_eq!(
+            moment_of(&record),
+            Some(PauseMoment::Standing { stage: None, in_the_way: None, cause: None })
         );
     }
 

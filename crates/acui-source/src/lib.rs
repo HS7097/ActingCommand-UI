@@ -53,7 +53,7 @@ use acui_rows::{
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
     MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     FactValue, InstanceId, InstancePauseStage, InstancePauseState, OwnerEpoch, RuntimeFactRecord,
     RuntimeFactScope, RuntimeFactSnapshot, RuntimeInfo, RuntimeResult, SchedulingPauseExpectation,
@@ -748,7 +748,7 @@ pub struct PauseFact {
 /// resumed in every stage, and a tool's hold (`quiet_or_lift`, a Lab recording's)
 /// only once released: the Runtime refuses the other two of it
 /// (`scheduling_pause_draining`, `scheduling_pause_releasing`; runtime-host
-/// `host/policy_dispatch.rs` 1153-1191, `check_resumable`, at a8d0aa43).
+/// `host/policy_dispatch.rs` 1216-1254, `check_resumable`, at 1067dfaf).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PauseStage {
     Draining,
@@ -1956,11 +1956,13 @@ const RUNTIME_RESULT_UNEXPECTED: &str = "runtime_result_unexpected";
 /// What became of one person's conditional resume (`resume_paused`).
 #[derive(Debug, Clone)]
 pub enum ResumeOutcome {
-    /// The pause is lifted: its scope's revision after the lift and, for an
-    /// instance, its self-check's `failure_code`, which never rolls the resume
-    /// back: the code of a reconnect that failed, or one that says why none ran
-    /// ([`resumed_device`]).
-    Resumed { revision: u64, device_failure: Option<String> },
+    /// The pause is lifted: its scope's revision after the lift; the cause its
+    /// completed receipt carries under its success code, if any, which says why
+    /// no reconnect ran ([`ResumeCause`]); and, for an instance, its self-check's
+    /// `failure_code`, which never rolls the resume back: the code of a reconnect
+    /// that failed, or one that says why none ran. What the two say of the
+    /// device together is [`resumed_device`]'s.
+    Resumed { revision: u64, cause: Option<ResumeCause>, device_failure: Option<String> },
     /// The Runtime answered and the resume did not succeed: its refusal, in
     /// `runtime_code`; or the client's own `runtime_operation_unsupported`,
     /// from a Runtime that does not know the condition and lifted nothing.
@@ -1979,23 +1981,37 @@ pub enum ResumeOutcome {
 /// (Workflow #338 R4), and the connection let go. Sent once, whatever comes
 /// back, and never as an unconditional resume; what to show after it is a
 /// status read on another connection (`OnlineSource::reread_instances`).
+///
+/// Sent with the receipt's outcome kept (`resume_scheduling_expected_as`,
+/// runtime-client `client.rs` 1968-2025 at 1067dfaf, #480 PG-2d), whose cause
+/// says why no reconnect ran (`resume_cause`). It is the same request, the
+/// same wait and the same failures as `resume_scheduling_expected`, which lets
+/// that outcome go (1959-1966): a connection that ended before the receipt is
+/// still reconnected and the `Status` read, and answers
+/// `runtime_operation_unsupported` while the scope still stands at the expected
+/// revision, `runtime_scheduling_resume_unconfirmed` otherwise (1987-2022).
 pub fn resume_paused(state_root: &Path, target: &PauseTarget) -> ResumeOutcome {
     let client = match OnlineSource::connect_as_person(state_root) {
         Ok(client) => client,
         Err(error) => return ResumeOutcome::NotSent(ClientFailure::from(error)),
     };
-    match client.resume_scheduling_expected(target.scope.clone(), target.expected) {
-        Ok(RuntimeResult::SchedulingResumed { revision, selfcheck, .. }) => ResumeOutcome::Resumed {
-            revision,
-            device_failure: selfcheck.and_then(|check| check.failure_code),
+    match client.resume_scheduling_expected_as(target.scope.clone(), target.expected) {
+        Ok(answer) => match answer.result {
+            RuntimeResult::SchedulingResumed { revision, selfcheck, .. } => {
+                ResumeOutcome::Resumed {
+                    revision,
+                    cause: resume_cause(&answer.outcome),
+                    device_failure: selfcheck.and_then(|check| check.failure_code),
+                }
+            }
+            // The client checks the result itself and gives back no other.
+            _ => ResumeOutcome::Unconfirmed(ClientFailure {
+                code: RUNTIME_RESULT_UNEXPECTED,
+                operation: RESUME_SCHEDULING,
+                runtime_code: None,
+                host: None,
+            }),
         },
-        // The client checks the result itself and gives back no other.
-        Ok(_) => ResumeOutcome::Unconfirmed(ClientFailure {
-            code: RUNTIME_RESULT_UNEXPECTED,
-            operation: RESUME_SCHEDULING,
-            runtime_code: None,
-            host: None,
-        }),
         Err(error) => {
             let failure = ClientFailure::from(error);
             if failure.runtime_code.is_some() || failure.code == RUNTIME_OPERATION_UNSUPPORTED {
@@ -2007,42 +2023,108 @@ pub fn resume_paused(state_root: &Path, target: &PauseTarget) -> ResumeOutcome {
     }
 }
 
+/// The cause a completed instance resume's receipt carries under its success code (`caused_by`;
+/// `RuntimeReceipt::scheduling_resumed`, contract `runtime.rs` 6167-6192 at 1067dfaf): why the
+/// Runtime ran no reconnect, each informing (#480 PG-2d, Runtime 0.12.74;
+/// `contracts/scheduling-pause.md` 541-573, 592-599). A global resume carries none, and neither does
+/// one that reconnected, one held again by a first start's pause or one whose device a player holds
+/// (runtime-host `host/policy_dispatch.rs` 5090-5099, 5173-5188, 5207-5224).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeCause {
+    /// `scheduling_resume_without_reconnect` (since Runtime 0.12.73, #480 PG-2c): a person's pause
+    /// was lifted while it still drained or handed its device back, on an instance not fenced, its
+    /// hand-back's close not begun: nothing reconnected and the device's session was never closed,
+    /// and what still used the instance goes on (5105-5123, 5264-5351).
+    WithoutReconnect,
+    /// `scheduling_resume_without_backend` (Workflow #479 F-2, Runtime 0.12.74): the instance is an
+    /// iOS handset, whose device system has no backend in this Runtime, so the lift connected
+    /// nothing, a person's resume or a tool's, fenced or not; a fenced one stays fenced (5124-5137,
+    /// 5353-5431; `contracts/device-binding.md` 528-549, `contracts/scheduling-pause.md` 567-571).
+    WithoutBackend,
+    /// A cause of another code, which this console does not read: kept for the log, and read as
+    /// no cause.
+    Other(String),
+}
+
+impl ResumeCause {
+    /// Its code, as the wire spells it: for the log.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::WithoutReconnect => RESUME_WITHOUT_RECONNECT,
+            Self::WithoutBackend => RESUME_WITHOUT_BACKEND,
+            Self::Other(code) => code,
+        }
+    }
+}
+
+/// The two causes a resume's receipt carries, the host's own spellings, of a crate this one does
+/// not use (runtime-host `codes.rs` 1722 and 1681 at 1067dfaf).
+const RESUME_WITHOUT_RECONNECT: &str = "scheduling_resume_without_reconnect";
+const RESUME_WITHOUT_BACKEND: &str = "scheduling_resume_without_backend";
+
+/// What a completed resume's receipt `outcome` says of it, read as a pause's is
+/// (`workbench::pause_answer`): its first cause under the success code, by its code's spelling
+/// (the client hands the outcome back unchanged, runtime-client `client.rs` 1928-1945 at
+/// 1067dfaf). Neither code carries a value (`contracts/outcome-codes/runtime-host.json`
+/// 23886-23899, 24074-24087). No cause: `None`.
+fn resume_cause(outcome: &Outcome) -> Option<ResumeCause> {
+    let cause = outcome.causes().first()?.outcome();
+    Some(match cause.code().as_str() {
+        RESUME_WITHOUT_RECONNECT => ResumeCause::WithoutReconnect,
+        RESUME_WITHOUT_BACKEND => ResumeCause::WithoutBackend,
+        other => ResumeCause::Other(other.to_owned()),
+    })
+}
+
 /// The two codes an instance resume's self-check names that are no failure of a reconnect, the
 /// host's own spellings, of a crate this one does not use (runtime-host `codes.rs` 620 and 987,
-/// at a8d0aa43).
+/// at 1067dfaf).
 const DISPATCH_PAUSED_INSTANCE: &str = "dispatch_paused_instance";
 const PLAYER_HOLD_ACTIVE: &str = "player_hold_active";
 
-/// What an instance resume's self-check says of the account's device, by its `failure_code`
-/// (`ResumeOutcome::Resumed`'s `device_failure`), which names more than a reconnect that failed
-/// (Runtime 0.12.73; runtime-host `host/policy_dispatch.rs`, at a8d0aa43).
+/// What an instance resume says of the account's device: by the cause its receipt carries, which
+/// says why no reconnect ran and decides when it is one this console reads ([`ResumeCause`]); else
+/// by its self-check's `failure_code` (`ResumeOutcome::Resumed`'s `device_failure`), which names
+/// more than a reconnect that failed (Runtime 0.12.74; runtime-host `host/policy_dispatch.rs`, at
+/// 1067dfaf).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResumedDevice<'a> {
-    /// No code: the reconnect passed, or none ran, the pause, a person's, lifted while it still
-    /// drained or handed its device back (#480 PG-2c; 4950-5008). The client hands back no cause
-    /// of the receipt that would tell the two apart (`scheduling_resume_without_reconnect`):
-    /// either way nothing failed.
+    /// No such cause and no code: the reconnect passed.
     Fine,
+    /// `scheduling_resume_without_reconnect`: the pause, a person's, was lifted while it still
+    /// drained or handed its device back, and nothing reconnected, the device's session never
+    /// closed. Its self-check's two sides are `ok: false` with no values and no code: the shape of
+    /// no reconnect, not a failure (5310-5336). No failure.
+    WithoutReconnect,
+    /// `scheduling_resume_without_backend`: an iOS handset, which this Runtime has no backend for:
+    /// nothing connected, its self-check of the same shape (5416-5430). No failure.
+    WithoutBackend,
     /// `dispatch_paused_instance` (Workflow #453 S2): the instance was added while the Runtime
     /// was stopped and the pause it starts with (`start_paused`) was not applied yet, so the
     /// lift held it again with `instance.added` instead, at the revision the resume answers,
-    /// and nothing reconnected (4837-4874, 4972-4988): it is still paused.
+    /// and nothing reconnected (5151-5188, 5288-5304, 5390-5405): it is still paused.
     HeldAgain,
     /// `player_hold_active`: a player holds the device, so the lift reconnected nothing, which
-    /// the contract calls the expected, not a failure (`contracts/scheduling-pause.md` 709-720).
+    /// the contract calls the expected, not a failure (`contracts/scheduling-pause.md` 806-817).
     PlayerHolds,
     /// Any other: the code of the reconnect's failing step.
     ReconnectFailed(&'a str),
 }
 
-/// What `device_failure`, an instance resume's self-check's `failure_code`, says of its device
-/// ([`ResumedDevice`]).
-pub fn resumed_device(device_failure: Option<&str>) -> ResumedDevice<'_> {
-    match device_failure {
-        None => ResumedDevice::Fine,
-        Some(DISPATCH_PAUSED_INSTANCE) => ResumedDevice::HeldAgain,
-        Some(PLAYER_HOLD_ACTIVE) => ResumedDevice::PlayerHolds,
-        Some(code) => ResumedDevice::ReconnectFailed(code),
+/// What an instance resume's `cause` and `device_failure`, its self-check's `failure_code`, say of
+/// its device ([`ResumedDevice`]). A cause this console does not read (`ResumeCause::Other`) is
+/// none.
+pub fn resumed_device<'a>(
+    cause: Option<&ResumeCause>,
+    device_failure: Option<&'a str>,
+) -> ResumedDevice<'a> {
+    match (cause, device_failure) {
+        (Some(ResumeCause::WithoutReconnect), _) => ResumedDevice::WithoutReconnect,
+        (Some(ResumeCause::WithoutBackend), _) => ResumedDevice::WithoutBackend,
+        (_, None) => ResumedDevice::Fine,
+        (_, Some(DISPATCH_PAUSED_INSTANCE)) => ResumedDevice::HeldAgain,
+        (_, Some(PLAYER_HOLD_ACTIVE)) => ResumedDevice::PlayerHolds,
+        (_, Some(code)) => ResumedDevice::ReconnectFailed(code),
     }
 }
 
@@ -2257,23 +2339,111 @@ fn read_material_online(
 
 #[cfg(test)]
 mod tests {
-    use super::{resumed_device, ResumedDevice};
+    use actingcommand_contract::codes::ReceiptCode;
+    use actingcommand_contract::outcome::{Code, Outcome};
+
+    use super::{resume_cause, resumed_device, ResumeCause, ResumedDevice};
+
+    /// A code of the host's, which this crate does not use, by its spelling in the catalog the
+    /// pinned contract crate embeds.
+    fn host(spelling: &'static str) -> Code {
+        Code::relayed(spelling).unwrap_or_else(|| panic!("the pinned catalog has no {spelling}"))
+    }
+
+    /// A completed resume's receipt outcome as the Runtime gives it
+    /// (`RuntimeReceipt::scheduling_resumed`): the success code, caused by `cause` when there is
+    /// one.
+    fn completed(cause: Option<Outcome>) -> Outcome {
+        let success = Outcome::new(ReceiptCode::ResumeSchedulingCompleted);
+        match cause {
+            Some(cause) => success.caused_by(cause),
+            None => success,
+        }
+    }
+
+    #[test]
+    fn a_resume_without_a_cause_has_none() {
+        assert_eq!(resume_cause(&completed(None)), None);
+    }
+
+    #[test]
+    fn a_resume_that_ran_no_reconnect_says_why() {
+        let unquiet = Outcome::new(host("scheduling_resume_without_reconnect"));
+        assert_eq!(resume_cause(&completed(Some(unquiet))), Some(ResumeCause::WithoutReconnect));
+        let ios = Outcome::new(host("scheduling_resume_without_backend"));
+        assert_eq!(resume_cause(&completed(Some(ios))), Some(ResumeCause::WithoutBackend));
+    }
+
+    #[test]
+    fn a_cause_this_console_does_not_read_is_kept_by_its_code() {
+        let other = Outcome::new(host("scheduling_pause_settled"));
+        assert_eq!(
+            resume_cause(&completed(Some(other))),
+            Some(ResumeCause::Other("scheduling_pause_settled".to_owned()))
+        );
+        // As a newer Runtime might answer it: a code the pinned catalog lacks.
+        let outcome: Outcome = serde_json::from_value(serde_json::json!({
+            "code": "request_resume_scheduling_completed",
+            "category": "success",
+            "values": {},
+            "causes": [{
+                "code": "scheduling_resume_new_word",
+                "category": "info",
+                "relation": "caused_by",
+                "values": {},
+            }],
+        }))
+        .expect("a receipt outcome's form");
+        let cause = resume_cause(&outcome);
+        assert_eq!(cause, Some(ResumeCause::Other("scheduling_resume_new_word".to_owned())));
+        assert_eq!(cause.as_ref().map(ResumeCause::as_str), Some("scheduling_resume_new_word"));
+    }
+
+    #[test]
+    fn a_cause_says_why_nothing_reconnected_whatever_the_self_check_names() {
+        // Both sides `ok: false` and no code: the shape of no reconnect, not a failure.
+        let unquiet = ResumeCause::WithoutReconnect;
+        assert_eq!(resumed_device(Some(&unquiet), None), ResumedDevice::WithoutReconnect);
+        let ios = ResumeCause::WithoutBackend;
+        assert_eq!(resumed_device(Some(&ios), None), ResumedDevice::WithoutBackend);
+        assert_eq!(
+            resumed_device(Some(&ios), Some("input_backend_open_failed")),
+            ResumedDevice::WithoutBackend
+        );
+    }
+
+    #[test]
+    fn a_cause_this_console_does_not_read_leaves_the_self_check_to_say() {
+        let other = ResumeCause::Other("scheduling_resume_new_word".to_owned());
+        assert_eq!(resumed_device(Some(&other), None), ResumedDevice::Fine);
+        assert_eq!(
+            resumed_device(Some(&other), Some("player_hold_active")),
+            ResumedDevice::PlayerHolds
+        );
+    }
 
     #[test]
     fn a_resume_with_no_code_is_fine() {
-        assert_eq!(resumed_device(None), ResumedDevice::Fine);
+        assert_eq!(resumed_device(None, None), ResumedDevice::Fine);
     }
 
     #[test]
     fn a_first_start_pause_held_again_and_a_player_hold_are_no_reconnect_failures() {
-        assert_eq!(resumed_device(Some("dispatch_paused_instance")), ResumedDevice::HeldAgain);
-        assert_eq!(resumed_device(Some("player_hold_active")), ResumedDevice::PlayerHolds);
+        assert_eq!(
+            resumed_device(None, Some("dispatch_paused_instance")),
+            ResumedDevice::HeldAgain
+        );
+        assert_eq!(resumed_device(None, Some("player_hold_active")), ResumedDevice::PlayerHolds);
     }
 
     #[test]
     fn any_other_code_is_a_reconnect_that_failed() {
         for code in ["input_backend_open_failed", "capture_backend_open_failed", "dispatch_paused"] {
-            assert_eq!(resumed_device(Some(code)), ResumedDevice::ReconnectFailed(code), "{code}");
+            assert_eq!(
+                resumed_device(None, Some(code)),
+                ResumedDevice::ReconnectFailed(code),
+                "{code}"
+            );
         }
     }
 }
