@@ -8,37 +8,53 @@
 //! shown, because its words depend on the language and on the names `actingctl packs` gives, which
 //! come and go on their own.
 //!
-//! The writes (G2: the simple controls). A resource entry's amount (`{"at_least": n}`, a whole
-//! number of at least 1 checked here, the pool's capacity by the Runtime, whose `out_of_range` names
-//! it), a `choice` variable's option (its value as a JSON string) and a `switch` variable (`true` or
-//! `false`) are set; a resource entry's goal, a variable's value ("back to the default"), a value no
-//! longer offered, a value of a placement no bound package offers, and an other target whose id has
-//! an entry name's form (`goal_name`, `[a-z0-9][a-z0-9_]*` of at most 64 bytes, the only names
-//! `EditGoal` takes) are cleared, but for a name two lines share (below). `integer` and `ordered`
-//! variables (neither set nor put back to their default: no control of them here could set one
-//! again, G3's) and tiers (`tier_not_built`) are only shown; the bound packages' remedy parameters
-//! (`GoalView.remedy_parameters`) are not read here at all. One press is one `EditGoal`, of one
-//! name, naming the page's version (`GoalView.version`) as its `expected_version`. Nothing of a
-//! page is pressed while the stored record is of the old form (`v1`), against which the Runtime
-//! refuses every write `record_unreadable` ([`GoalsPage::writable`]).
+//! The writes (G2: the simple controls; G3: numbers and orders). A resource entry's amount
+//! (`{"at_least": n}`, a whole number of at least 1 checked here, the pool's capacity by the
+//! Runtime, whose `out_of_range` names it), a `choice` variable's option (its value as a JSON
+//! string), a `switch` variable (`true` or `false`), an `integer` variable's number ([`number`]:
+//! typed in its entry unit, checked here against its range, then its step, as the Runtime judges
+//! a value, 945727d4 `crates/actingcommand-contract/src/package_variables.rs:336-347`, sent only
+//! by "set", and written in milliseconds for a time unit) and an `ordered` variable's list (edited
+//! as a draft, [`order_edit`], and saved whole as the compact JSON list of its option values,
+//! [`ordered_json`], checked here against its counts and the 1024 bytes a value's text holds,
+//! `crates/policy/src/resource_targets/v3.rs:48`, [`order_problem`]) are set; a resource entry's
+//! goal, a variable's value ("back to the default"), a value no longer offered, a value of a
+//! placement no bound package offers, and an other target whose id has an entry name's form
+//! (`goal_name`, `[a-z0-9][a-z0-9_]*` of at most 64 bytes, the only names `EditGoal` takes) are
+//! cleared, but for a name two lines share (below). A variable whose declaration this console does
+//! not read as the Runtime reads it (a type it does not know, or a declaration the Runtime would
+//! refuse, [`ValueControl::Unknown`]) is shown and never written, as the contract's fallback rule
+//! has it (945727d4 `contracts/standard-pack-goals.md:139-141`): neither set nor put back to the
+//! default; only a value stored under the name of a placement no bound package offers is cleared,
+//! which writes no value. A `block` is never read: one this console does not know is shown as its
+//! type's base block, the same rule. Tiers (`tier_not_built`) are only shown; the bound packages'
+//! remedy parameters (`GoalView.remedy_parameters`) are not read here at all. One press is one
+//! `EditGoal`, of one name, naming the page's version (`GoalView.version`) as its
+//! `expected_version`. Nothing of a page is pressed while the stored record is of the old form
+//! (`v1`), against which the Runtime refuses every write `record_unreadable`
+//! ([`GoalsPage::writable`]).
 //!
 //! A press asks first only where what it loses cannot be set back from here ([`Loses`]): a value no
 //! run reads (no longer offered, or of a placement not offered); a value stored that the next run
-//! does not take, replaced by another option or switch or put back to the default (an option no
-//! longer offered, a value of another type, a number off its range or step: no control here sets
-//! it again, and of a variable the game root does not apply no value is set at all,
-//! `variable_not_applying`); an other target; a resource goal on a pool that takes no goal here
-//! now (without a step, not targetable, not listed), cleared, as no amount is set on that pool here
-//! again; and a resource goal set elsewhere (no setter, or another channel than this console's) that
-//! carries what a goal set by name does not: tasks, a step, an importance, a validity. Setting a
-//! pool's amount replaces its goal whole, whatever its id
-//! (`crates/runtime-host/src/goals.rs:305-311`; `crates/policy/src/resource_targets/v3.rs:1539-1566`),
-//! so those are lost then too; which of them it
-//! carries is read from the stored document's target of the same id, and all four are said when
+//! does not take, replaced by another option, switch, number or list or put back to the default (an
+//! option no longer offered, a value of another type, a number off its range or step, a list of
+//! keys no longer offered: no control here sets it again, and of a variable the game root does not
+//! apply no value is set at all, `variable_not_applying`); the keys of an `ordered` value in effect
+//! that its declaration no longer offers and the run leaves out (`keys_left_out`, 945727d4
+//! `crates/policy/src/variables.rs:639-653`), lost as another list is saved or the value put back
+//! to the default; an other target; a resource goal on a pool that takes no goal here now (without
+//! a step, not targetable, not listed), cleared, as no amount is set on that pool here again; and a
+//! resource goal set elsewhere (no setter, or another channel than this console's) that carries
+//! what a goal set by name does not: tasks, a step, an importance, a validity. Setting a pool's
+//! amount replaces its goal whole, whatever its id (`crates/runtime-host/src/goals.rs:305-311`;
+//! `crates/policy/src/resource_targets/v3.rs:1539-1566`), so those are lost then too; which of them
+//! it carries is read from the stored document's target of the same id, and all four are said when
 //! that does not read. A goal set elsewhere that carries none of them, on a pool that takes a goal
 //! here, loses nothing a goal set here does not hold again, so it is only said beside the line, not
-//! asked. Back to the default of a variable whose value is in effect, and a goal this console set on
-//! a pool that takes one here, ask nothing.
+//! asked. Back to the default of a variable whose value is in effect, a number set or a list saved
+//! while the value in effect is the one stored (any of them but of an `ordered` value with keys
+//! left out, above), and a goal this console set on a pool that takes one here, ask nothing; nor
+//! does editing a list's draft, which writes nothing.
 //!
 //! A write names a name only, which the Runtime resolves by what is stored under it, in its order
 //! (`crates/runtime-host/src/goals.rs:354-377`): a `clear` takes a resource entry's goal on its pool
@@ -112,7 +128,14 @@
 //! `ResourceTargetView::validate` ties to a missing `default_scale` or `default_importance_milli`.
 //! An `integer` variable whose `unit` is a time word holds milliseconds; it is shown in the largest
 //! unit at most the declared one in which it is a whole number, down to seconds, and in
-//! milliseconds when it is no whole number of seconds: never a fraction ([`whole_time`]).
+//! milliseconds when it is no whole number of seconds: never a fraction ([`whole_time`]). It is
+//! typed in one unit of its own ([`entry_unit`]): the largest at most the declared one that is a
+//! whole number of steps, of which `min` is a whole number, and one of which on from `min` is not
+//! above `max`, so that every whole number typed lands on a step and more than `min` can be typed;
+//! failing every unit, the largest of which both `min` and the step are whole numbers
+//! (milliseconds always are). A value in effect that is no whole number of that unit (set
+//! elsewhere, or the default) is still shown, and can only be changed here to a whole number of
+//! it; such a value is set with the Lab.
 //!
 //! The stored record's form is `targets.active.schema_version`: `v2`, one validity for the whole
 //! document; `v3`, the record `EditGoal` writes, each target with a lifetime of its own or none and
@@ -137,11 +160,12 @@ use std::time::Duration;
 use acui_rows::outcome::Tongue;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    goal_name, ActiveResourceTargets, GoalDeclarationRead, GoalEdit, GoalEntryState,
-    GoalEntryType, GoalOrphan, GoalProblem, GoalSetBy, GoalValueSource, GoalView, GoalViewEntry,
-    Initiator, ResourceTargetCondition, ResourceTargetConditionState, ResourceTargetObservation,
-    ResourceTargetPendingReason, ResourceTargetView, ResourceTargetsRejectionReason,
-    RuntimeChannel,
+    goal_name, remedy_token_valid, ActiveResourceTargets, GoalDeclarationRead, GoalEdit,
+    GoalEntryState, GoalEntryType, GoalOrphan, GoalProblem, GoalSetBy, GoalValueSource, GoalView,
+    GoalViewEntry, Initiator, ResourceTargetCondition, ResourceTargetConditionState,
+    ResourceTargetObservation, ResourceTargetPendingReason, ResourceTargetView,
+    ResourceTargetsRejectionReason, RuntimeChannel, MAX_GOAL_LIST_VALUES, MAX_GOAL_ORDERED_COUNT,
+    MAX_GOAL_SAFE_INTEGER,
 };
 use actingcommand_runtime_client::RuntimeClientError;
 use serde_json::{Map, Value};
@@ -249,7 +273,7 @@ impl GoalsPage {
 
     /// Whether the page has something to set: it lists, and lists an entry, a value no longer
     /// offered or an other target (not `nothing`). Only then does the tab say what can be changed
-    /// here and what still needs the Lab.
+    /// here.
     pub fn something_to_set(&self) -> bool {
         matches!(self.state, PageState::Listed { nothing: false, .. })
     }
@@ -324,7 +348,7 @@ impl GoalLine {
     pub fn key(&self) -> Option<String> {
         match self {
             Self::Resource(line) => Some(format!("resource:{}", line.name)),
-            Self::Variable(line) => Some(format!("variable:{}", line.name)),
+            Self::Variable(line) => Some(format!("{VARIABLE_KEY}{}", line.name)),
             Self::Orphan(line) => Some(format!("orphan:{}", line.name)),
             Self::OtherTarget(other) => Some(format!("target:{}", other.id)),
             Self::Heading(_)
@@ -336,6 +360,9 @@ impl GoalLine {
         }
     }
 }
+
+/// What the key of a variable's line begins with ([`GoalLine::key`]).
+pub const VARIABLE_KEY: &str = "variable:";
 
 /// The groups that close the page, in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -523,6 +550,11 @@ pub struct VariableLine {
     pub state: VariableState,
     /// The stored keys of an `ordered` value the run leaves out (`keys_left_out`), as stored.
     pub left_out: Vec<String>,
+    /// The keys of an `ordered` value stored and not applied that its declaration no longer
+    /// offers, each once, in their stored order: the Runtime names them only of a value in effect
+    /// (`removed_keys`, 945727d4 `crates/runtime-host/src/goals.rs:865-879`), so they are found
+    /// here, by the declaration's options.
+    pub gone: Vec<String>,
     /// What a press changes of it here, at the value the next run reads.
     pub control: ValueControl,
     /// A value is stored under its name (`value_json`).
@@ -545,18 +577,23 @@ impl VariableLine {
         }
     }
 
-    /// What clears the value stored under its name, when one is: "back to the default" of a
-    /// variable this page has a control of; "clear" of a placement no bound package offers, whose
-    /// value no run reads. None of an `integer` or `ordered` variable, which this version only
-    /// shows: its value could not be set back from here. Whether it is pressed here is
-    /// [`Self::clearable`].
+    /// What clears the value stored under its name, when one is: "clear" of a placement no bound
+    /// package offers, whose value no run reads, whatever its declaration (one with none reads as
+    /// unknown, 945727d4 `crates/runtime-host/src/goals.rs:901-913`), as clearing writes no value
+    /// and a value nobody can remove must not exist (`:346-347`); "back to the default" of a
+    /// variable this page has a control of. None of a variable whose declaration this console does
+    /// not read ([`ValueControl::Unknown`]), which is never written here. Whether it is pressed
+    /// here is [`Self::clearable`].
     pub fn clear_offer(&self) -> Option<ClearOffer> {
         if !self.stored {
             return None;
         }
         match (&self.state, &self.control) {
             (VariableState::NotOffered, _) => Some(ClearOffer::Clear),
-            (_, ValueControl::None) => None,
+            (_, ValueControl::Unknown) => None,
+            (_, ValueControl::Number { .. } | ValueControl::Ordered { .. }) => {
+                Some(ClearOffer::Restore)
+            }
             (_, ValueControl::Choice { .. } | ValueControl::Switch { .. }) => {
                 Some(ClearOffer::Restore)
             }
@@ -596,17 +633,156 @@ impl VariableLine {
             }
         }
     }
+
+    /// The keys of an `ordered` value in effect that the run leaves out (`keys_left_out`), lost as
+    /// another list is saved (`cleared` false) or the value is put back to the default (`cleared`):
+    /// what that asks about; none when there are none.
+    fn left_out_lost(&self, cleared: bool) -> Option<Loses> {
+        let in_effect = matches!(self.state, VariableState::InEffect);
+        (in_effect && !self.left_out.is_empty())
+            .then(|| Loses::LeftOut { keys: self.left_out.clone(), cleared })
+    }
 }
 
-/// What a press changes of a variable here (G2): a `choice`'s option, a `switch`. None of an
-/// `integer`, an `ordered` or an unknown type, which this version only shows.
+/// What a press changes of a variable here: a `choice`'s option, a `switch` (G2), an `integer`'s
+/// number, an `ordered` variable's list (G3); nothing of a declaration this console does not read
+/// as the Runtime reads it (`Unknown`: no `variable`, a type it does not know, or a declaration
+/// the Runtime refuses), which is only shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueControl {
-    None,
     /// Its options in the declaration's order, and the one the next run reads when it is one.
     Choice { options: Vec<ChoiceOption>, chosen: Option<String> },
     /// Whether the next run reads it on, when that reads as a boolean.
     Switch { on: Option<bool> },
+    /// Its rule, and the number the next run reads when it reads as one (`effective_json`).
+    Number { rule: NumberRule, now: Option<i64> },
+    /// Its rule, and the keys the next run reads in their order (`effective_json`; none when it
+    /// does not read as a list of strings): of a value not applied the default, of one applied in
+    /// part the value stored without the keys no longer offered.
+    Ordered { rule: OrderRule, chosen: Vec<String> },
+    /// Shown, never written.
+    Unknown,
+}
+
+/// An `integer` variable's rule, as the Runtime reads it (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:708-768`): safe integers `min` up to
+/// `max`, on a `step` of at least 1 from `min` (1 when the declaration gives none); `max` need not
+/// be on a step. A time unit's values are milliseconds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberRule {
+    pub min: i64,
+    pub max: i64,
+    pub step: i64,
+    pub unit: NumberUnit,
+}
+
+/// An `integer` variable's unit: none; a text, in the language shown; or a time word, the unit
+/// declared and the one typed in ([`entry_unit`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NumberUnit {
+    Plain,
+    Text(String),
+    Time { declared: TimeUnit, entry: TimeUnit },
+}
+
+impl NumberRule {
+    /// How many milliseconds one whole number typed is: those of the unit typed in, else 1.
+    fn entry_milliseconds(&self) -> i64 {
+        match self.unit {
+            NumberUnit::Time { entry, .. } => entry.milliseconds(),
+            NumberUnit::Plain | NumberUnit::Text(_) => 1,
+        }
+    }
+
+    /// `value` in the unit typed in; none when it is no whole number of it.
+    pub fn in_entry(&self, value: i64) -> Option<i64> {
+        let unit = self.entry_milliseconds();
+        (value % unit == 0).then(|| value / unit)
+    }
+
+    /// The step between the values that can be typed here: the unit typed in when it is a whole
+    /// number of steps (the larger of the two: [`entry_unit`] takes a unit that the step divides,
+    /// or failing that one that divides the step), else the step. `min` is a whole number of the
+    /// unit typed in either way, so the values that can be typed here are `min` and each this far
+    /// on from it.
+    pub fn interval(&self) -> i64 {
+        let (unit, step) = (self.entry_milliseconds(), self.step.max(1));
+        if unit % step == 0 {
+            unit
+        } else {
+            step
+        }
+    }
+}
+
+/// The unit an `integer` variable declared in the time unit `declared`, with `min`, `max` and
+/// `step` (in milliseconds), is typed in, the one place that decides it. From `declared` down to
+/// milliseconds ([`TimeUnit::LADDER`]), the first (largest) unit that is a whole number of steps,
+/// of which `min` is a whole number, and one of which on from `min` is not above `max`: each whole
+/// number `n` typed in it is then `n` such units, on a step from `min` (`min = m·u`, `u = s·step`,
+/// so `n·u − min` is a whole number of steps), more than `min` alone can be typed, and a value
+/// declared without a step (one millisecond) is typed in the unit declared where its range holds
+/// one of it. Failing every unit (a step of 7 milliseconds, say, or a unit declared that is longer
+/// than the range, as the Runtime's own test has, 945727d4
+/// `crates/actingcommand-contract/src/package_variables_tests.rs:156-178`: minutes from 0 to 200
+/// milliseconds), the first of which both `min` and the step are whole numbers, which milliseconds
+/// always are. A value that is no whole number of the unit typed in is not set here.
+pub fn entry_unit(declared: TimeUnit, min: i64, max: i64, step: i64) -> TimeUnit {
+    let step = step.max(1);
+    let below = || TimeUnit::LADDER.into_iter().skip_while(move |unit| *unit != declared);
+    below()
+        .find(|unit| {
+            let size = unit.milliseconds();
+            size.rem_euclid(step) == 0
+                && min.rem_euclid(size) == 0
+                && min.checked_add(size).is_some_and(|next| next <= max)
+        })
+        .or_else(|| {
+            below().find(|unit| {
+                let size = unit.milliseconds();
+                min.rem_euclid(size) == 0 && step.rem_euclid(size) == 0
+            })
+        })
+        .unwrap_or(TimeUnit::Millisecond)
+}
+
+/// An `ordered` variable's rule, as the Runtime reads it (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:786-916`): its options in the
+/// declaration's order, and how many of them a value names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderRule {
+    pub options: Vec<OrderOption>,
+    pub min_count: u64,
+    pub max_count: u64,
+}
+
+/// One option of an `ordered` variable: its value, which a write names (never shown); its title in
+/// the language shown (its value when it has none); and its titles in every language, in lower
+/// case, which a search looks in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderOption {
+    pub value: String,
+    pub title: String,
+    pub words: Vec<String>,
+}
+
+impl OrderRule {
+    /// The option of `value`, when it is one.
+    pub fn option(&self, value: &str) -> Option<&OrderOption> {
+        self.options.iter().find(|option| option.value == value)
+    }
+
+    /// How many keys a list can hold: `max_count`, but never more than there are options (the
+    /// Runtime does not refuse a `max_count` above them, 945727d4
+    /// `crates/actingcommand-contract/src/package_variables.rs:841-863`).
+    pub fn cap(&self) -> u64 {
+        self.max_count.min(count_of(self.options.len()))
+    }
+}
+
+/// `len` as a count.
+fn count_of(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
 }
 
 /// One option of a `choice`: its value, which a write names, and its title in the language shown
@@ -1348,7 +1524,7 @@ fn tier_option(declared: Option<&Value>, value: &str, tongue: Tongue) -> String 
 
 /// A variable's line; `shared` whether another line has its name.
 fn variable_line(entry: &GoalViewEntry, shared: bool, tongue: Tongue) -> VariableLine {
-    let declaration = Declared::of(entry.variable.as_ref());
+    let declaration = Declared::of(entry.variable.as_ref(), tongue);
     let title = text_of(entry.entry.as_ref(), "title", tongue)
         .or_else(|| text_of(entry.variable.as_ref(), "title", tongue));
     let state = match entry.state {
@@ -1376,6 +1552,12 @@ fn variable_line(entry: &GoalViewEntry, shared: bool, tongue: Tongue) -> Variabl
         }
         Some(GoalValueSource::Default) | None => None,
     };
+    let gone = match (&declaration, &state, entry.value_json.as_deref()) {
+        (Declared::Ordered(rule), VariableState::NotApplied { .. }, Some(json)) => {
+            gone_keys(rule, json)
+        }
+        _ => Vec::new(),
+    };
     VariableLine {
         name: entry.name.clone(),
         title,
@@ -1384,35 +1566,47 @@ fn variable_line(entry: &GoalViewEntry, shared: bool, tongue: Tongue) -> Variabl
         set: entry.set.as_ref().map(set_by),
         state,
         left_out: entry.removed_keys.clone(),
+        gone,
         control: declaration.control(entry.effective_json.as_deref(), tongue),
         stored: entry.value_json.is_some(),
         shared,
     }
 }
 
+/// The keys of the `ordered` value stored `json` that `rule` no longer offers, each once, in their
+/// stored order; none of a value that is no list.
+fn gone_keys(rule: &OrderRule, json: &str) -> Vec<String> {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json) else {
+        return Vec::new();
+    };
+    let mut gone: Vec<String> = Vec::new();
+    for key in items.iter().filter_map(Value::as_str) {
+        if rule.option(key).is_none() && !gone.iter().any(|seen| seen == key) {
+            gone.push(key.to_owned());
+        }
+    }
+    gone
+}
+
 /// A declaration's options: each value with its title per locale.
 type Options = Vec<(String, Vec<(String, String)>)>;
 
-/// What a variable's declaration says of how its values read, as leniently as it can be read: a
-/// declaration of a newer form, or one with a block this console does not know, still shows its
-/// values by its type's base control, which on a read-only page is the value alone.
+/// What a variable's declaration says of how its values read. A `choice` and a `switch` are read
+/// as leniently as they can be; an `integer` and an `ordered` variable as the Runtime reads them,
+/// which writes them, so that what is checked here is what it checks: one it would refuse is
+/// `Unknown`, shown and never written. Its `block` is never read: a block this console does not
+/// know shows the type's base control (945727d4 `contracts/standard-pack-goals.md:139-141`).
 enum Declared {
     Choice(Options),
-    Integer(Option<Unit>),
+    Integer(NumberRule),
     Switch,
-    Ordered(Options),
-    /// No declaration, or one of a type this console does not know.
+    Ordered(OrderRule),
+    /// No declaration, one of a type this console does not know, or one the Runtime would refuse.
     Unknown,
 }
 
-/// An `integer` variable's unit.
-enum Unit {
-    Time(TimeUnit),
-    Text(Vec<(String, String)>),
-}
-
 impl Declared {
-    fn of(variable: Option<&Value>) -> Self {
+    fn of(variable: Option<&Value>, tongue: Tongue) -> Self {
         let Some(variable) = variable else {
             return Self::Unknown;
         };
@@ -1428,17 +1622,14 @@ impl Declared {
                 })
                 .collect()
         };
-        match variable.get("type").and_then(Value::as_str) {
-            Some("choice") => Self::Choice(options()),
-            Some("integer") => Self::Integer(match variable.get("unit") {
-                Some(Value::String(word)) => TimeUnit::of(word).map(Unit::Time),
-                Some(text @ Value::Object(_)) => Some(Unit::Text(texts(Some(text)))),
-                Some(_) | None => None,
-            }),
-            Some("switch") => Self::Switch,
-            Some("ordered") => Self::Ordered(options()),
-            Some(_) | None => Self::Unknown,
-        }
+        let read = match variable.get("type").and_then(Value::as_str) {
+            Some("choice") => Some(Self::Choice(options())),
+            Some("integer") => number_rule(variable, tongue).map(Self::Integer),
+            Some("switch") => Some(Self::Switch),
+            Some("ordered") => order_rule(variable, tongue).map(Self::Ordered),
+            Some(_) | None => None,
+        };
+        read.unwrap_or(Self::Unknown)
     }
 
     /// The value of `json` in words; `display` the Runtime's words of it in `tongue`, when it
@@ -1456,25 +1647,26 @@ impl Declared {
                 }),
                 None => raw(),
             },
-            Self::Integer(unit) => match (value.as_i64(), unit) {
-                (Some(number), Some(Unit::Time(unit))) => {
-                    let (amount, unit) = whole_time(number, *unit);
+            Self::Integer(rule) => match (value.as_i64(), &rule.unit) {
+                (Some(number), NumberUnit::Time { declared, .. }) => {
+                    let (amount, unit) = whole_time(number, *declared);
                     Shown::Time { amount, unit }
                 }
-                (Some(number), Some(Unit::Text(text))) => match display {
-                    Some(display) => Shown::Words(display.to_owned()),
-                    None => match in_language(text, tongue) {
-                        Some(unit) => Shown::Words(format!("{number} {unit}")),
-                        None => Shown::Number(number),
-                    },
-                },
-                (Some(number), None) => Shown::Number(number),
+                (Some(number), NumberUnit::Text(unit)) => Shown::Words(match display {
+                    Some(display) => display.to_owned(),
+                    None => format!("{number} {unit}"),
+                }),
+                (Some(number), NumberUnit::Plain) => Shown::Number(number),
                 (None, _) => raw(),
             },
             Self::Switch => value.as_bool().map_or_else(raw, Shown::Switch),
-            Self::Ordered(options) => match keys(&value) {
+            Self::Ordered(rule) => match keys(&value) {
                 Some(keys) => Shown::List(
-                    keys.into_iter().map(|key| option_title(options, key, tongue)).collect(),
+                    keys.into_iter()
+                        .map(|key| {
+                            rule.option(key).map_or(key, |option| option.title.as_str()).to_owned()
+                        })
+                        .collect(),
                 ),
                 None => raw(),
             },
@@ -1484,7 +1676,9 @@ impl Declared {
 
     /// What a press changes of a variable of this declaration here, at `effective`, the value the
     /// next run reads: a `choice`'s options, titled in `tongue`, with the one chosen when it is
-    /// one of them; a `switch`, on when it reads as `true`. Nothing of the other types (G3's).
+    /// one of them; a `switch`, on when it reads as `true`; an `integer`'s rule with the number
+    /// now; an `ordered` variable's rule with its keys now. Nothing of a declaration this console
+    /// does not read (`Unknown`).
     fn control(&self, effective: Option<&str>, tongue: Tongue) -> ValueControl {
         let value = effective.and_then(|json| serde_json::from_str::<Value>(json).ok());
         match self {
@@ -1504,9 +1698,97 @@ impl Declared {
                 ValueControl::Choice { options, chosen }
             }
             Self::Switch => ValueControl::Switch { on: value.as_ref().and_then(Value::as_bool) },
-            Self::Integer(_) | Self::Ordered(_) | Self::Unknown => ValueControl::None,
+            Self::Integer(rule) => ValueControl::Number {
+                rule: rule.clone(),
+                now: value.as_ref().and_then(Value::as_i64),
+            },
+            Self::Ordered(rule) => ValueControl::Ordered {
+                rule: rule.clone(),
+                chosen: value
+                    .as_ref()
+                    .and_then(keys)
+                    .map(|found| found.into_iter().map(str::to_owned).collect::<Vec<String>>())
+                    .unwrap_or_default(),
+            },
+            Self::Unknown => ValueControl::Unknown,
         }
     }
+}
+
+/// An `integer` variable's rule, read as the Runtime reads it (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:708-784`): `min` and `max` safe integers
+/// (`crates/actingcommand-contract/src/standard_pack_goals.rs:983-995`), `step` one too, 1 when
+/// none is written, at least 1, `min` not above `max`; `unit` none, one of the four time words, or
+/// a text, taken in `tongue`. None of anything else: a missing bound, a `unit` of another word or
+/// JSON type, a text with no text in it.
+fn number_rule(variable: &Value, tongue: Tongue) -> Option<NumberRule> {
+    let safe = |member: &str| -> Option<i64> {
+        variable
+            .get(member)?
+            .as_i64()
+            .filter(|number| (-MAX_GOAL_SAFE_INTEGER..=MAX_GOAL_SAFE_INTEGER).contains(number))
+    };
+    let min = safe("min")?;
+    let max = safe("max")?;
+    let step = match variable.get("step") {
+        None => 1,
+        Some(_) => safe("step")?,
+    };
+    if min > max || step < 1 {
+        return None;
+    }
+    let unit = match variable.get("unit") {
+        None => NumberUnit::Plain,
+        Some(Value::String(word)) => {
+            let declared = TimeUnit::of(word)?;
+            NumberUnit::Time { declared, entry: entry_unit(declared, min, max, step) }
+        }
+        Some(text @ Value::Object(_)) => {
+            NumberUnit::Text(in_language(&texts(Some(text)), tongue)?.to_owned())
+        }
+        Some(_) => return None,
+    };
+    Some(NumberRule { min, max, step, unit })
+}
+
+/// An `ordered` variable's rule, read as the Runtime reads it (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:786-877`): 1 to 1024 options
+/// (`standard_pack_goals.rs:91`), each a `value` of `^[a-z][a-z0-9_]{0,63}$`
+/// (`crates/actingcommand-contract/src/event/payload/remedies.rs:29-36`) written once, titled in
+/// `tongue` (its value when it has no title); `max_count` 1 to 32 (`standard_pack_goals.rs:93`),
+/// `min_count` neither above it nor above the number of options. None of anything else. Only of
+/// option values of that form is the compact JSON of a list its canonical text, by which the
+/// Runtime counts a value's bytes ([`order_fits`]).
+fn order_rule(variable: &Value, tongue: Tongue) -> Option<OrderRule> {
+    let items = variable.get("options")?.as_array()?;
+    if !(1..=MAX_GOAL_LIST_VALUES).contains(&items.len()) {
+        return None;
+    }
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut options = Vec::with_capacity(items.len());
+    for item in items {
+        let value = item.get("value")?.as_str()?;
+        if !remedy_token_valid(value) || !seen.insert(value) {
+            return None;
+        }
+        let titles = texts(item.get("title"));
+        let title = in_language(&titles, tongue).unwrap_or(value).to_owned();
+        let mut words: Vec<String> = titles.iter().map(|(_, text)| text.to_lowercase()).collect();
+        if words.is_empty() {
+            words.push(title.to_lowercase());
+        }
+        options.push(OrderOption { value: value.to_owned(), title, words });
+    }
+    let min_count = variable.get("min_count")?.as_u64()?;
+    let max_count = variable.get("max_count")?.as_u64()?;
+    if max_count == 0
+        || max_count > MAX_GOAL_ORDERED_COUNT
+        || min_count > max_count
+        || min_count > count_of(options.len())
+    {
+        return None;
+    }
+    Some(OrderRule { options, min_count, max_count })
 }
 
 /// A list of strings' items.
@@ -1786,14 +2068,256 @@ pub fn amount(text: &str) -> Result<u64, AmountProblem> {
     }
 }
 
-/// What a press on a line does: set an amount (as typed), clear, pick a `choice`'s option (by its
-/// place among the options), turn a `switch`.
+/// Why the number typed for an `integer` variable is not sent: what the Runtime would refuse, as it
+/// judges a value it is to write, the range before the step (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:336-347`); and the number the next run
+/// reads already, which would write nothing new.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberProblem {
+    /// Nothing typed.
+    Empty,
+    /// Not a whole number in digits.
+    NotWhole,
+    /// Outside `min..=max`, or too large to be a number at all.
+    OutOfRange,
+    /// Not on a step from `min`.
+    OffStep,
+    /// The number the next run reads already.
+    Same,
+}
+
+/// The number `text` types for an `integer` variable of `rule` whose number in effect is `now`,
+/// around spaces: a whole number of the unit typed in, in ASCII digits after one sign of `+` or `-`
+/// at most (a full-width digit, a point, a space inside or a digit group is no whole number, as of
+/// an [`amount`]), in milliseconds for a time unit; within `min..=max`, then on a step from `min`,
+/// as the Runtime judges it; and not `now`, which of a value stored and not used is the default, so
+/// that typing the default writes nothing either (the value stored is replaced by another number,
+/// or put back to the default).
+pub fn number(text: &str, rule: &NumberRule, now: Option<i64>) -> Result<i64, NumberProblem> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(NumberProblem::Empty);
+    }
+    let digits = text.strip_prefix(|sign: char| sign == '+' || sign == '-').unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(NumberProblem::NotWhole);
+    }
+    let typed = text.parse::<i64>().map_err(|_| NumberProblem::OutOfRange)?;
+    let value =
+        typed.checked_mul(rule.entry_milliseconds()).ok_or(NumberProblem::OutOfRange)?;
+    if !(rule.min..=rule.max).contains(&value) {
+        return Err(NumberProblem::OutOfRange);
+    }
+    if (i128::from(value) - i128::from(rule.min)) % i128::from(rule.step.max(1)) != 0 {
+        return Err(NumberProblem::OffStep);
+    }
+    if now == Some(value) {
+        return Err(NumberProblem::Same);
+    }
+    Ok(value)
+}
+
+/// The largest number that can be set on `rule` here: `max` need be neither on a step (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:727-740`) nor a whole number of the unit
+/// typed in, so the last number at most `max` that is `min` and a whole number of
+/// [`NumberRule::interval`] on. The reader keeps `min` and `max` safe integers, so it does not
+/// overflow.
+pub fn largest(rule: &NumberRule) -> i64 {
+    let interval = rule.interval();
+    rule.min + (rule.max - rule.min) / interval * interval
+}
+
+/// An `integer` variable's value: the number, spelled as the Runtime spells one (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:286-297`, `:440-445`).
+pub fn integer_json(value: i64) -> String {
+    Value::from(value).to_string()
+}
+
+/// One edit of an `ordered` variable's draft: an option's value added at the end, the key at a
+/// place moved to another, the key at a place removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrderEdit {
+    Add(String),
+    Move { from: usize, to: usize },
+    Remove(usize),
+}
+
+/// The draft `keys` of an `ordered` variable of `rule` after `edit`; none when it cannot be made:
+/// an added value that is none of the options, is in the draft already, would make more keys than
+/// the list holds ([`OrderRule::cap`]) or would not fit in a value ([`order_fits`]); a move from or
+/// to a place outside the draft, or to where it is; a removal outside it. Fewer keys than
+/// `min_count` is no reason, which [`order_problem`] says.
+pub fn order_edit(rule: &OrderRule, keys: &[String], edit: &OrderEdit) -> Option<Vec<String>> {
+    let mut edited = keys.to_vec();
+    match edit {
+        OrderEdit::Add(value) => {
+            let room = count_of(keys.len()) < rule.cap();
+            let offered = rule.option(value).is_some() && !keys.contains(value);
+            if !(offered && room && order_fits(keys, Some(value.as_str()))) {
+                return None;
+            }
+            edited.push(value.clone());
+        }
+        OrderEdit::Move { from, to } => {
+            if *from >= keys.len() || *to >= keys.len() || from == to {
+                return None;
+            }
+            let key = edited.remove(*from);
+            edited.insert(*to, key);
+        }
+        OrderEdit::Remove(place) => {
+            if *place >= keys.len() {
+                return None;
+            }
+            edited.remove(*place);
+        }
+    }
+    Some(edited)
+}
+
+/// An `ordered` variable's value: the compact JSON list of `keys`, `["a","b"]`.
+pub fn ordered_json(keys: &[String]) -> String {
+    Value::Array(keys.iter().cloned().map(Value::String).collect()).to_string()
+}
+
+/// The most bytes of a value's canonical text the Runtime stores (945727d4
+/// `crates/policy/src/resource_targets/v3.rs:48`, `:486-497`); above it a write is refused
+/// `value_too_large` (`crates/runtime-host/src/goals.rs:183-185`).
+pub const VALUE_BYTES: usize = 1024;
+
+/// Whether the list `keys`, with `extra` added at its end, fits in a value: its compact JSON, which
+/// of option values of `[a-z0-9_]` only (as the reader holds them, [`order_rule`]) is its canonical
+/// text (945727d4 `crates/policy/src/canonical.rs:37-96`: no whitespace, and a list of strings has
+/// no member to sort), at most [`VALUE_BYTES`] long.
+pub fn order_fits(keys: &[String], extra: Option<&str>) -> bool {
+    fits_with(ordered_json(keys).len(), keys.is_empty(), extra)
+}
+
+/// Whether any option of `rule` that the draft `keys` does not hold would still fit in a value
+/// added at their end ([`order_fits`]), however many keys the list holds.
+pub fn order_room(rule: &OrderRule, keys: &[String]) -> bool {
+    let bytes = ordered_json(keys).len();
+    rule.options.iter().any(|option| {
+        !keys.contains(&option.value)
+            && fits_with(bytes, keys.is_empty(), Some(option.value.as_str()))
+    })
+}
+
+/// Whether a list whose compact JSON is `bytes` long (`empty`: none in it) fits in a value with
+/// `extra` added at its end.
+fn fits_with(bytes: usize, empty: bool, extra: Option<&str>) -> bool {
+    let added = extra.map_or(0, |key| usize::from(!empty) + Value::from(key).to_string().len());
+    bytes + added <= VALUE_BYTES
+}
+
+/// Why a draft of an `ordered` variable is not saved, in this order: a key named twice; keys its
+/// declaration no longer offers (how many), which a draft should not hold at all; fewer keys than
+/// `min_count`, or more than `max_count` (that count); a text longer than a value holds (its
+/// bytes). The order is this console's, not the Runtime's, which counts the keys still offered,
+/// then refuses the keys it leaves out, then the bytes (945727d4
+/// `crates/actingcommand-contract/src/package_variables.rs:358-385`;
+/// `crates/runtime-host/src/goals.rs:315-327`, `:396-401`, `:409-423`): the keys no longer offered
+/// come first, so that what is counted after them is the keys still offered, as the Runtime counts
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderProblem {
+    Repeated,
+    Gone(usize),
+    TooFew(u64),
+    TooMany(u64),
+    TooLong(usize),
+}
+
+/// What keeps the draft `keys` of an `ordered` variable of `rule` from being saved, when anything
+/// does ([`OrderProblem`]).
+pub fn order_problem(rule: &OrderRule, keys: &[String]) -> Option<OrderProblem> {
+    if keys.iter().enumerate().any(|(at, key)| keys[..at].contains(key)) {
+        return Some(OrderProblem::Repeated);
+    }
+    let gone = keys.iter().filter(|key| rule.option(key).is_none()).count();
+    if gone > 0 {
+        return Some(OrderProblem::Gone(gone));
+    }
+    let count = count_of(keys.len());
+    if count < rule.min_count {
+        return Some(OrderProblem::TooFew(rule.min_count));
+    }
+    if count > rule.max_count {
+        return Some(OrderProblem::TooMany(rule.max_count));
+    }
+    let bytes = ordered_json(keys).len();
+    (bytes > VALUE_BYTES).then_some(OrderProblem::TooLong(bytes))
+}
+
+/// How many options a list of an `ordered` variable's options shows at most ([`order_matches`]).
+pub const ORDER_SHOWN: usize = 100;
+/// The fewest options of an `ordered` variable that has a search field: more than eight.
+pub const ORDER_SEARCH_FROM: usize = 9;
+
+/// One option a list of options shows: its value (never shown), its title in the language shown,
+/// whether the draft has it, and whether it can be added now (not in the draft, room for another,
+/// and it fits in a value).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderMatch {
+    pub value: String,
+    pub title: String,
+    pub chosen: bool,
+    pub fits: bool,
+}
+
+/// The options of `rule` that `query` finds, around spaces and in any case, in the title of any
+/// language (never by the option's value, which is not shown), all of them for none; in the
+/// declaration's order, the first [`ORDER_SHOWN`] of them, and how many more it finds; each marked
+/// against the draft `keys`.
+pub fn order_matches(rule: &OrderRule, keys: &[String], query: &str) -> (Vec<OrderMatch>, usize) {
+    let query = query.trim().to_lowercase();
+    let room = count_of(keys.len()) < rule.cap();
+    let bytes = ordered_json(keys).len();
+    let mut found: Vec<OrderMatch> = Vec::new();
+    let mut more = 0;
+    let finds = |option: &&OrderOption| {
+        query.is_empty() || option.words.iter().any(|word| word.contains(query.as_str()))
+    };
+    for option in rule.options.iter().filter(finds) {
+        if found.len() == ORDER_SHOWN {
+            more += 1;
+            continue;
+        }
+        let chosen = keys.contains(&option.value);
+        found.push(OrderMatch {
+            value: option.value.clone(),
+            title: option.title.clone(),
+            chosen,
+            fits: !chosen && room && fits_with(bytes, keys.is_empty(), Some(option.value.as_str())),
+        });
+    }
+    (found, more)
+}
+
+/// The key that a refusal's JSON pointer `pointer` names in the list `value_json` that was sent: an
+/// `ordered` value's item at fault is named `/i` (945727d4
+/// `crates/runtime-host/src/goals.rs:469-495`); the string at that place, none of another pointer,
+/// place or item.
+pub fn pointed_key(value_json: &str, pointer: &str) -> Option<String> {
+    let place = pointer.strip_prefix('/')?;
+    if place.is_empty() || !place.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let place: usize = place.parse().ok()?;
+    let value: Value = serde_json::from_str(value_json).ok()?;
+    Some(value.as_array()?.get(place)?.as_str()?.to_owned())
+}
+
+/// What a press on a line does: set an amount or a number (as typed), clear, pick a `choice`'s
+/// option (by its place among the options), turn a `switch`, save an `ordered` variable's list (its
+/// keys in order).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalAct {
     Amount(String),
     Clear,
     Pick(usize),
     Switch(bool),
+    Order(Vec<String>),
 }
 
 /// What one press writes, and what it loses that this page cannot set back, which it asks about
@@ -1811,9 +2335,14 @@ pub enum Loses {
     /// longer offered, of a placement no bound package offers, of a variable whose value stored
     /// the next run does not take. The value.
     Value(Shown),
-    /// A value stored that the next run does not take, replaced by an option or a switch set
-    /// here: the value ([`VariableLine::unused`]).
+    /// A value stored that the next run does not take, replaced by an option, a switch, a number
+    /// or a list set here: the value ([`VariableLine::unused`]).
     Replaced(Shown),
+    /// The keys of an `ordered` value in effect that its declaration no longer offers, which the
+    /// run leaves out (`keys_left_out`, [`VariableLine::left_out`]), as stored: lost as another
+    /// list is saved, or as the value is put back to the default (`cleared`). No list set here
+    /// holds them again.
+    LeftOut { keys: Vec<String>, cleared: bool },
     /// An other target, with its pool and amount when it reads.
     Target(Held),
     /// A declared resource's goal set elsewhere, cleared (`cleared`) or replaced by a goal set
@@ -1832,12 +2361,14 @@ pub enum Loses {
 }
 
 /// What a press `act` on `line` writes, the one place that decides it: none when it writes nothing
-/// (the line takes no such press, the value is as pressed already, the amount typed is not one).
-/// A resource entry's amount only on a pool that takes a goal here, a variable's value only while
-/// one can be set on it; a clear wherever something is stored to clear, but of a value no longer
-/// offered, an other target or a variable's value whose name another line of the page has. See
-/// the module's words for what asks first; what of the page that depends on is on the line already
-/// (`shared`, `same_name`).
+/// (the line takes no such press, the value is as pressed already, the amount or number typed is
+/// not one, the list is not one to save). A resource entry's amount only on a pool that takes a
+/// goal here, a variable's value only while one can be set on it, and only of a declaration this
+/// console reads; a clear wherever something is stored to clear, but of a value no longer offered,
+/// an other target or a variable's value whose name another line of the page has, or a value of a
+/// declaration this console does not read but where no bound package offers it. See the module's
+/// words for what asks first; what of the page that depends on is on the line already (`shared`,
+/// `same_name`, `left_out`).
 pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
     match (line, act) {
         (GoalLine::Resource(line), GoalAct::Amount(text)) if line.settable() => {
@@ -1885,13 +2416,40 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
             let write = GoalWrite::set(&line.name, switch_json(*on));
             Some(Press { write, asks: line.unused().cloned().map(Loses::Replaced) })
         }
-        // Back to the default asks nothing while the value stored is in effect; one the next run
-        // does not take, for any reason (of a variable the game root does not apply too, on which
-        // no value is set here, `variable_not_applying`), is lost as a value not offered is. A
-        // name another line has is not cleared here.
+        // The number typed, checked as the Runtime checks it; the number in effect writes nothing.
+        (GoalLine::Variable(line), GoalAct::Amount(text)) if line.settable() => {
+            let ValueControl::Number { rule, now } = &line.control else {
+                return None;
+            };
+            let value = number(text, rule, *now).ok()?;
+            let write = GoalWrite::set(&line.name, integer_json(value));
+            Some(Press { write, asks: line.unused().cloned().map(Loses::Replaced) })
+        }
+        // A list saved: not the one in effect, and none the Runtime would refuse. A value stored
+        // that the next run does not take is lost as another is set, and so are the keys of one in
+        // effect that the run leaves out: asked.
+        (GoalLine::Variable(line), GoalAct::Order(keys)) if line.settable() => {
+            let ValueControl::Ordered { rule, chosen } = &line.control else {
+                return None;
+            };
+            if keys == chosen || order_problem(rule, keys).is_some() {
+                return None;
+            }
+            let write = GoalWrite::set(&line.name, ordered_json(keys));
+            let asks = match line.unused() {
+                Some(stored) => Some(Loses::Replaced(stored.clone())),
+                None => line.left_out_lost(false),
+            };
+            Some(Press { write, asks })
+        }
+        // Back to the default asks nothing while the value stored is in effect, but for the keys
+        // of an `ordered` one that the run leaves out, which no list set here holds again; one the
+        // next run does not take, for any reason (of a variable the game root does not apply too,
+        // on which no value is set here, `variable_not_applying`), is lost as a value not offered
+        // is. A name another line has is not cleared here.
         (GoalLine::Variable(line), GoalAct::Clear) => {
             let asks = match line.clearable()? {
-                ClearOffer::Restore if line.unused().is_none() => None,
+                ClearOffer::Restore if line.unused().is_none() => line.left_out_lost(true),
                 ClearOffer::Restore | ClearOffer::Clear => Some(Loses::Value(line.stored_value())),
             };
             Some(Press { write: GoalWrite::clear(&line.name), asks })
@@ -1940,6 +2498,23 @@ pub enum WriteProblem {
 }
 
 impl WriteProblem {
+    /// Whether it is one of the words a variable's value is refused with by its declaration's rule
+    /// (945727d4 `crates/runtime-host/src/goals.rs:432-473`): out of range, off its step, not an
+    /// option, a count out of range, a key named twice, of the wrong type. What this page sends is
+    /// checked here by the same rules, so only a rule the Runtime holds newer than the page's says
+    /// one: the page is read again at once.
+    pub fn of_the_rule(&self) -> bool {
+        matches!(
+            self,
+            Self::OutOfRange
+                | Self::OffStep
+                | Self::NotAnOption
+                | Self::CountOutOfRange
+                | Self::KeyRepeated
+                | Self::WrongType
+        )
+    }
+
     /// The word `word`, by the pinned contract's own vocabulary.
     pub fn of(word: &str) -> Self {
         match GoalProblem::ALL.iter().find(|problem| problem.as_str() == word) {
@@ -2157,13 +2732,16 @@ fn failed(error: RuntimeClientError) -> WriteOutcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        amount, answered, choice_json, failure_of, in_language, newer_than_this_console, page,
-        press, resource_json, switch_json, whole_time, AmountProblem, Answered, Carried,
-        ChoiceOption, ClearOffer, Closed, Declaration, Document, Failed, Form, GoalAct, GoalChange,
-        GoalLine, GoalWrite, GoalsPage, Group, LabEntry, Loses, OrphanLine, OtherGoal, OtherTarget,
-        PageState, Pending, PoolState, Press, Progress, Reading, Removed, ResourceLine, SetBy,
-        Setter, Shown, Stored, StoredGoal, TierLine, TimeUnit, Unapplied, ValueControl,
-        VariableLine, VariableState, WriteInvalid, WriteProblem, RECEIPT_DECODE_FAILED,
+        amount, answered, choice_json, entry_unit, failure_of, in_language, integer_json, largest,
+        newer_than_this_console, number, order_edit, order_fits, order_matches, order_problem,
+        order_room, ordered_json, page, pointed_key, press, resource_json, switch_json, whole_time,
+        AmountProblem, Answered, Carried, ChoiceOption, ClearOffer, Closed, Declaration, Document,
+        Failed, Form, GoalAct, GoalChange, GoalLine, GoalWrite, GoalsPage, Group, LabEntry, Loses,
+        NumberProblem, NumberRule, NumberUnit, OrderEdit, OrderOption, OrderProblem, OrderRule,
+        OrphanLine, OtherGoal, OtherTarget, PageState, Pending, PoolState, Press, Progress, Reading,
+        Removed, ResourceLine, SetBy, Setter, Shown, Stored, StoredGoal, TierLine, TimeUnit,
+        Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid, WriteProblem,
+        ORDER_SHOWN, RECEIPT_DECODE_FAILED, VALUE_BYTES,
     };
     use acui_rows::outcome::Tongue;
     use actingcommand_contract::{GoalProblem, GoalView};
@@ -2470,10 +3048,38 @@ mod tests {
             set: None,
             state: VariableState::InEffect,
             left_out: Vec::new(),
+            gone: Vec::new(),
             control: ValueControl::Switch { on: Some(false) },
             stored: false,
             shared: false,
         })
+    }
+
+    /// An option of an `ordered` rule titled in one language.
+    fn order_option(value: &str, title: &str) -> OrderOption {
+        OrderOption {
+            value: value.to_owned(),
+            title: title.to_owned(),
+            words: vec![title.to_lowercase()],
+        }
+    }
+
+    /// The `ordered` declaration's rule in English.
+    fn item_rule() -> OrderRule {
+        OrderRule {
+            options: vec![order_option("item_a", "Item A"), order_option("item_b", "Item B")],
+            min_count: 0,
+            max_count: 2,
+        }
+    }
+
+    /// The `integer` declaration's rule, of `unit`.
+    fn rounds_rule(unit: NumberUnit) -> NumberRule {
+        NumberRule { min: 0, max: 864_000_000, step: 1, unit }
+    }
+
+    fn strings(keys: &[&str]) -> Vec<String> {
+        keys.iter().map(|key| (*key).to_owned()).collect()
     }
 
     fn goal(amount: u64, progress: Progress) -> StoredGoal {
@@ -2587,6 +3193,7 @@ mod tests {
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Console }),
                     state: VariableState::InEffect,
                     left_out: Vec::new(),
+                    gone: Vec::new(),
                     control: ValueControl::Choice {
                         options: item_options(),
                         chosen: Some("item_a".to_owned()),
@@ -2930,7 +3537,11 @@ mod tests {
                         why: Some(Unapplied::OutOfRange),
                     },
                     left_out: Vec::new(),
-                    control: ValueControl::None,
+                    gone: Vec::new(),
+                    control: ValueControl::Number {
+                        rule: rounds_rule(NumberUnit::Plain),
+                        now: Some(0),
+                    },
                     stored: true,
                     shared: false,
                 }),
@@ -2945,6 +3556,7 @@ mod tests {
                         why: Some(Unapplied::IrreversibleByRoot),
                     },
                     left_out: Vec::new(),
+                    gone: Vec::new(),
                     control: ValueControl::Switch { on: Some(false) },
                     stored: false,
                     shared: false,
@@ -2960,6 +3572,7 @@ mod tests {
                         why: Some(Unapplied::Other("a_newer_word".to_owned())),
                     },
                     left_out: Vec::new(),
+                    gone: Vec::new(),
                     control: ValueControl::Switch { on: Some(false) },
                     stored: true,
                     shared: false,
@@ -2972,10 +3585,13 @@ mod tests {
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::CommandLine }),
                     state: VariableState::NotOffered,
                     left_out: Vec::new(),
+                    gone: Vec::new(),
                     control: ValueControl::Choice { options: item_options(), chosen: None },
                     stored: true,
                     shared: false,
                 }),
+                // G3: applied in part, the keys left out are the Runtime's; the keys the next run
+                // reads, without them, are what the list is edited from.
                 GoalLine::Variable(VariableLine {
                     name: "order".to_owned(),
                     title: Some("Order".to_owned()),
@@ -2984,14 +3600,19 @@ mod tests {
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Mcp)) }),
                     state: VariableState::InEffect,
                     left_out: vec!["item_c".to_owned()],
-                    control: ValueControl::None,
+                    gone: Vec::new(),
+                    control: ValueControl::Ordered {
+                        rule: item_rule(),
+                        chosen: vec!["item_a".to_owned()],
+                    },
                     stored: true,
                     shared: false,
                 }),
             ]
         );
         // What can be set and cleared of each: not of a variable the root does not apply, nor of
-        // one no bound package offers, whose stored value is cleared; an `ordered` one only shows.
+        // one no bound package offers, whose stored value is cleared; G3: a number and a list are
+        // put back to the default as a choice or a switch is.
         let variables: Vec<&VariableLine> = lines
             .iter()
             .map(|line| match line {
@@ -3003,7 +3624,16 @@ mod tests {
         assert_eq!(settable, vec![true, false, true, false, true]);
         let offers: Vec<Option<ClearOffer>> =
             variables.iter().map(|line| line.clear_offer()).collect();
-        assert_eq!(offers, vec![None, None, Some(ClearOffer::Restore), Some(ClearOffer::Clear), None]);
+        assert_eq!(
+            offers,
+            vec![
+                Some(ClearOffer::Restore),
+                None,
+                Some(ClearOffer::Restore),
+                Some(ClearOffer::Clear),
+                Some(ClearOffer::Restore),
+            ]
+        );
     }
 
     /// G1's follow-up: a value stored that is not used reads by its declaration, a number with its
@@ -3541,7 +4171,15 @@ mod tests {
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Rescue)) }),
                     state: VariableState::InEffect,
                     left_out: Vec::new(),
-                    control: ValueControl::None,
+                    gone: Vec::new(),
+                    // G3: declared in hours without a step, it is typed in hours.
+                    control: ValueControl::Number {
+                        rule: rounds_rule(NumberUnit::Time {
+                            declared: TimeUnit::Hour,
+                            entry: TimeUnit::Hour,
+                        }),
+                        now: Some(5_400_000),
+                    },
                     stored: true,
                     shared: false,
                 }),
@@ -3553,7 +4191,11 @@ mod tests {
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Watchdog)) }),
                     state: VariableState::InEffect,
                     left_out: Vec::new(),
-                    control: ValueControl::None,
+                    gone: Vec::new(),
+                    control: ValueControl::Number {
+                        rule: rounds_rule(NumberUnit::Text("rounds".to_owned())),
+                        now: Some(3),
+                    },
                     stored: true,
                     shared: false,
                 }),
@@ -3563,6 +4205,14 @@ mod tests {
             GoalLine::Variable(line) => {
                 assert_eq!(line.value, Some(Shown::Words("3 轮".to_owned())));
                 assert_eq!(line.default, Some(Shown::Words("0 轮".to_owned())));
+                // A text unit in the language shown.
+                assert_eq!(
+                    line.control,
+                    ValueControl::Number {
+                        rule: rounds_rule(NumberUnit::Text("轮".to_owned())),
+                        now: Some(3),
+                    }
+                );
             }
             line => panic!("{line:?}"),
         }
@@ -4104,9 +4754,12 @@ mod tests {
         assert_eq!(on("variable:extra", GoalAct::Switch(true)), goes(set_of("extra", "true")));
         assert_eq!(on("variable:extra", GoalAct::Switch(false)), None);
         assert_eq!(on("variable:extra", GoalAct::Pick(0)), None);
-        // An `integer` is only shown in this version: nothing set, nothing cleared.
-        assert_eq!(on("variable:rounds", typed("5")), None);
-        assert_eq!(on("variable:rounds", GoalAct::Clear), None);
+        // G3: an `integer` in effect: another number set, and back to the default, at once; the
+        // number in effect, or none, writes nothing.
+        assert_eq!(on("variable:rounds", typed("5")), goes(set_of("rounds", "5")));
+        assert_eq!(on("variable:rounds", typed("3")), None);
+        assert_eq!(on("variable:rounds", typed("x")), None);
+        assert_eq!(on("variable:rounds", GoalAct::Clear), goes(clear_of("rounds")));
         // Not offered: nothing set; its stored value cleared, asked.
         assert_eq!(on("variable:route", GoalAct::Pick(1)), None);
         assert_eq!(
@@ -5025,6 +5678,789 @@ mod tests {
             "a_newer_word",
         ] {
             assert!(!Unapplied::of(word).by_root(), "{word}");
+        }
+    }
+
+    /// G3: the control a variable of `declaration` comes with, in `tongue`, at the value in effect
+    /// `effective`.
+    fn control_in(declaration: Value, effective: &str, tongue: Tongue) -> ValueControl {
+        let view = view(
+            state("accepted"),
+            json!([variable("v", true, declaration, &["pack.a"], json!({
+                "effective_json": effective,
+                "source": "default",
+                "state": "in_effect",
+            }))]),
+            json!({}),
+            no_targets(),
+        );
+        match page(&view, tongue, &|_| None).lines.into_iter().next() {
+            Some(GoalLine::Variable(line)) => line.control,
+            line => panic!("{line:?}"),
+        }
+    }
+
+    fn control_of(declaration: Value, effective: &str) -> ValueControl {
+        control_in(declaration, effective, Tongue::En)
+    }
+
+    /// G3 (the UI channel's ruling of 11-21, option B with A as its fallback): a time is typed in
+    /// the largest unit at most the declared one that is a whole number of steps, of which `min`
+    /// is a whole number, and one of which on from `min` is not above `max`; failing every unit,
+    /// the largest of which both `min` and the step are whole numbers.
+    #[test]
+    fn a_time_is_typed_in_the_largest_unit_on_a_step_from_min() {
+        for (declared, min, max, step, expected) in [
+            (TimeUnit::Minute, 0, 7_200_000, 60_000, TimeUnit::Minute),
+            // No unit is a whole number of 30-second steps of which 30 seconds is a whole number:
+            // the fallback takes seconds.
+            (TimeUnit::Minute, 30_000, 3_645_000, 30_000, TimeUnit::Second),
+            // The Runtime's own test's (945727d4
+            // `crates/actingcommand-contract/src/package_variables_tests.rs:156-178`), whose range
+            // holds no minute: milliseconds, so that every value on its step can be typed.
+            (TimeUnit::Minute, 0, 200, 10, TimeUnit::Millisecond),
+            // The same step on a range that holds minutes: minutes.
+            (TimeUnit::Minute, 0, 7_200_000, 10, TimeUnit::Minute),
+            (TimeUnit::Minute, 0, 7_200_000, 30_000, TimeUnit::Minute),
+            (TimeUnit::Hour, 1_800_000, 86_400_000, 3_600_000, TimeUnit::Minute),
+            (TimeUnit::Day, 0, 604_800_000, 3_600_000, TimeUnit::Day),
+            // A unit declared longer than the range: down to one the range holds.
+            (TimeUnit::Day, 0, 43_200_000, 3_600_000, TimeUnit::Hour),
+            (TimeUnit::Hour, 0, 1_800_000, 60_000, TimeUnit::Minute),
+            (TimeUnit::Second, 0, 60_000, 1, TimeUnit::Second),
+            // No step (1 millisecond): the unit declared.
+            (TimeUnit::Hour, 0, 86_400_000, 1, TimeUnit::Hour),
+            // A `min` that is no whole number of minutes: down to seconds.
+            (TimeUnit::Minute, 30_000, 3_600_000, 1, TimeUnit::Second),
+            // A step of 7 milliseconds: no unit is a whole number of it; the fallback,
+            // milliseconds.
+            (TimeUnit::Minute, 0, 7_200_000, 7, TimeUnit::Millisecond),
+            // A negative `min`.
+            (TimeUnit::Minute, -60_000, 60_000, 60_000, TimeUnit::Minute),
+            (TimeUnit::Minute, -30_000, 30_000, 1, TimeUnit::Second),
+            (TimeUnit::Hour, -5_400_000, 5_400_000, 60_000, TimeUnit::Minute),
+        ] {
+            assert_eq!(
+                entry_unit(declared, min, max, step),
+                expected,
+                "{declared:?} {min} {max} {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_is_in_the_unit_typed_in_only_when_it_is_a_whole_number_of_it() {
+        let minutes = NumberRule {
+            min: 0,
+            max: 7_200_000,
+            step: 60_000,
+            unit: NumberUnit::Time { declared: TimeUnit::Hour, entry: TimeUnit::Minute },
+        };
+        assert_eq!(minutes.in_entry(120_000), Some(2));
+        assert_eq!(minutes.in_entry(-60_000), Some(-1));
+        assert_eq!(minutes.in_entry(0), Some(0));
+        assert_eq!(minutes.in_entry(90_000), None);
+        let plain = NumberRule { min: -50, max: 50, step: 5, unit: NumberUnit::Plain };
+        assert_eq!(plain.in_entry(-45), Some(-45));
+    }
+
+    /// G3: an `integer` and an `ordered` variable are read as the Runtime reads them; whatever it
+    /// would refuse, or a type this console does not know, is shown only. A block is not read.
+    #[test]
+    fn numbers_and_lists_are_read_as_the_runtime_reads_them() {
+        let integer_of = |members: Value| {
+            let mut declaration = json!({
+                "name": "v",
+                "type": "integer",
+                "title": {"en": "Wait"},
+                "min": 0,
+                "max": 7_200_000,
+                "default": 0,
+            });
+            if let Value::Object(members) = members {
+                for (member, value) in members {
+                    declaration[member.as_str()] = value;
+                }
+            }
+            declaration
+        };
+        assert_eq!(
+            control_of(integer_of(json!({"step": 60_000, "unit": "minute"})), "1800000"),
+            ValueControl::Number {
+                rule: NumberRule {
+                    min: 0,
+                    max: 7_200_000,
+                    step: 60_000,
+                    unit: NumberUnit::Time { declared: TimeUnit::Minute, entry: TimeUnit::Minute },
+                },
+                now: Some(1_800_000),
+            }
+        );
+        // No step: 1. Another block than the base one is not read.
+        assert_eq!(
+            control_of(integer_of(json!({"block": "slider"})), "5"),
+            ValueControl::Number {
+                rule: NumberRule { min: 0, max: 7_200_000, step: 1, unit: NumberUnit::Plain },
+                now: Some(5),
+            }
+        );
+        let max_safe = 9_007_199_254_740_991_i64;
+        for broken in [
+            json!({"name": "v", "type": "integer", "title": {"en": "Wait"}, "min": 0, "default": 0}),
+            integer_of(json!({"step": 0})),
+            integer_of(json!({"step": -5})),
+            integer_of(json!({"min": 10, "max": 5})),
+            integer_of(json!({"unit": "week"})),
+            integer_of(json!({"unit": 5})),
+            integer_of(json!({"unit": {}})),
+            integer_of(json!({"min": -max_safe - 1})),
+            integer_of(json!({"max": max_safe + 1})),
+            integer_of(json!({"min": 1.5})),
+        ] {
+            assert_eq!(control_of(broken.clone(), "0"), ValueControl::Unknown, "{broken}");
+        }
+        // The safe integers themselves read.
+        assert!(matches!(
+            control_of(integer_of(json!({"min": -max_safe, "max": max_safe})), "0"),
+            ValueControl::Number { .. }
+        ));
+
+        let ordered_with = |options: Value, min_count: Value, max_count: Value| {
+            json!({
+                "name": "v",
+                "type": "ordered",
+                "title": {"en": "Order"},
+                "options": options,
+                "min_count": min_count,
+                "max_count": max_count,
+                "default": [],
+            })
+        };
+        let two = json!([
+            {"value": "item_a", "title": {"en": "Item A", "zh-Hans": "甲"}},
+            {"value": "item_b", "title": {"en": "Item B"}},
+        ]);
+        // Titled in the language shown, each searched in every language's title.
+        assert_eq!(
+            control_in(ordered_with(two.clone(), json!(0), json!(2)), "[\"item_b\"]", Tongue::ZhHans),
+            ValueControl::Ordered {
+                rule: OrderRule {
+                    options: vec![
+                        OrderOption {
+                            value: "item_a".to_owned(),
+                            title: "甲".to_owned(),
+                            words: strings(&["item a", "甲"]),
+                        },
+                        OrderOption {
+                            value: "item_b".to_owned(),
+                            title: "Item B".to_owned(),
+                            words: strings(&["item b"]),
+                        },
+                    ],
+                    min_count: 0,
+                    max_count: 2,
+                },
+                chosen: strings(&["item_b"]),
+            }
+        );
+        // A value in effect that is no list of strings: none chosen. `ordered_list` is its block.
+        let mut listed = ordered_with(two.clone(), json!(0), json!(2));
+        listed["block"] = json!("ordered_list");
+        match control_of(listed, "7") {
+            ValueControl::Ordered { chosen, .. } => assert!(chosen.is_empty()),
+            control => panic!("{control:?}"),
+        }
+        let many = |count: usize| -> Value {
+            (0..count)
+                .map(|at| {
+                    json!({"value": format!("crew_{at:04}"), "title": {"en": format!("Crew {at}")}})
+                })
+                .collect()
+        };
+        let long_value = "a".repeat(65);
+        for broken in [
+            ordered_with(json!([]), json!(0), json!(1)),
+            ordered_with(many(1025), json!(0), json!(1)),
+            ordered_with(two.clone(), json!(0), json!(0)),
+            ordered_with(two.clone(), json!(0), json!(33)),
+            ordered_with(two.clone(), json!(3), json!(3)),
+            ordered_with(two.clone(), json!(2), json!(1)),
+            ordered_with(two.clone(), json!(-1), json!(1)),
+            ordered_with(json!([{"title": {"en": "No value"}}]), json!(0), json!(1)),
+            ordered_with(json!([{"value": "Bad-Value", "title": {"en": "Bad"}}]), json!(0), json!(1)),
+            ordered_with(json!([{"value": long_value, "title": {"en": "Long"}}]), json!(0), json!(1)),
+            ordered_with(
+                json!([
+                    {"value": "item_a", "title": {"en": "A"}},
+                    {"value": "item_a", "title": {"en": "A again"}},
+                ]),
+                json!(0),
+                json!(2),
+            ),
+            json!({"name": "v", "type": "table", "title": {"en": "Table"}}),
+            json!({"name": "v", "title": {"en": "No type"}}),
+        ] {
+            assert_eq!(control_of(broken.clone(), "[]"), ValueControl::Unknown, "{broken}");
+        }
+        // 1024 options and a `max_count` above the number of options read.
+        assert!(matches!(
+            control_of(ordered_with(many(1024), json!(0), json!(32)), "[]"),
+            ValueControl::Ordered { .. }
+        ));
+        match control_of(ordered_with(two, json!(0), json!(32)), "[]") {
+            ValueControl::Ordered { rule, .. } => assert_eq!(rule.cap(), 2),
+            control => panic!("{control:?}"),
+        }
+    }
+
+    /// The rules of the walk's `wait` (minutes), `pause` (typed in seconds, `max` off its step),
+    /// `offset` (negative) and `keep` (a text unit).
+    fn wait_rule() -> NumberRule {
+        NumberRule {
+            min: 0,
+            max: 7_200_000,
+            step: 60_000,
+            unit: NumberUnit::Time {
+                declared: TimeUnit::Minute,
+                entry: entry_unit(TimeUnit::Minute, 0, 7_200_000, 60_000),
+            },
+        }
+    }
+
+    fn pause_rule() -> NumberRule {
+        NumberRule {
+            min: 30_000,
+            max: 3_645_000,
+            step: 30_000,
+            unit: NumberUnit::Time {
+                declared: TimeUnit::Minute,
+                entry: entry_unit(TimeUnit::Minute, 30_000, 3_645_000, 30_000),
+            },
+        }
+    }
+
+    #[test]
+    fn a_number_is_checked_as_the_runtime_checks_it() {
+        let wait = wait_rule();
+        assert_eq!(wait.unit, NumberUnit::Time { declared: TimeUnit::Minute, entry: TimeUnit::Minute });
+        let now = Some(1_800_000);
+        for (text, expected) in [
+            ("45", Ok::<i64, NumberProblem>(2_700_000)),
+            (" +45 ", Ok(2_700_000)),
+            ("0", Ok(0)),
+            ("120", Ok(7_200_000)),
+            ("30", Err(NumberProblem::Same)),
+            ("", Err(NumberProblem::Empty)),
+            ("  ", Err(NumberProblem::Empty)),
+            ("abc", Err(NumberProblem::NotWhole)),
+            ("1.5", Err(NumberProblem::NotWhole)),
+            ("４５", Err(NumberProblem::NotWhole)),
+            ("4 5", Err(NumberProblem::NotWhole)),
+            ("1,000", Err(NumberProblem::NotWhole)),
+            ("+-5", Err(NumberProblem::NotWhole)),
+            ("-", Err(NumberProblem::NotWhole)),
+            ("121", Err(NumberProblem::OutOfRange)),
+            ("-1", Err(NumberProblem::OutOfRange)),
+            // Beyond what parses, and beyond what is a number of milliseconds.
+            ("99999999999999999999", Err(NumberProblem::OutOfRange)),
+            ("999999999999999999", Err(NumberProblem::OutOfRange)),
+        ] {
+            assert_eq!(number(text, &wait, now), expected, "{text:?}");
+        }
+        assert_eq!(largest(&wait), 7_200_000);
+
+        let pause = pause_rule();
+        assert_eq!(pause.unit, NumberUnit::Time { declared: TimeUnit::Minute, entry: TimeUnit::Second });
+        for (text, expected) in [
+            ("45", Err::<i64, NumberProblem>(NumberProblem::OffStep)),
+            // Not above `max`, but off its step.
+            ("3645", Err(NumberProblem::OffStep)),
+            ("3660", Err(NumberProblem::OutOfRange)),
+            ("90", Ok(90_000)),
+            ("3630", Ok(3_630_000)),
+        ] {
+            assert_eq!(number(text, &pause, Some(60_000)), expected, "{text:?}");
+        }
+        assert_eq!(largest(&pause), 3_630_000);
+        assert_eq!(pause.interval(), 30_000);
+
+        let offset = NumberRule { min: -50, max: 50, step: 5, unit: NumberUnit::Plain };
+        for (text, expected) in [
+            ("-45", Ok::<i64, NumberProblem>(-45)),
+            ("-47", Err(NumberProblem::OffStep)),
+            ("-55", Err(NumberProblem::OutOfRange)),
+            ("15", Err(NumberProblem::Same)),
+        ] {
+            assert_eq!(number(text, &offset, Some(15)), expected, "{text:?}");
+        }
+        assert_eq!(largest(&offset), 50);
+
+        let keep =
+            NumberRule { min: 0, max: 100, step: 10, unit: NumberUnit::Text("points".to_owned()) };
+        assert_eq!(number("40", &keep, Some(50)), Ok(40));
+        assert_eq!(number("45", &keep, Some(50)), Err(NumberProblem::OffStep));
+
+        // Declared in hours without a step: typed in whole hours, so the largest is the last whole
+        // hour at most `max`.
+        let hours = NumberRule {
+            min: 0,
+            max: 5_400_000,
+            step: 1,
+            unit: NumberUnit::Time {
+                declared: TimeUnit::Hour,
+                entry: entry_unit(TimeUnit::Hour, 0, 5_400_000, 1),
+            },
+        };
+        assert_eq!(hours.interval(), 3_600_000);
+        assert_eq!(largest(&hours), 3_600_000);
+        assert_eq!(number("1", &hours, Some(5_400_000)), Ok(3_600_000));
+        assert_eq!(number("2", &hours, Some(5_400_000)), Err(NumberProblem::OutOfRange));
+
+        assert_eq!(integer_json(-45), "-45");
+        assert_eq!(integer_json(2_700_000), "2700000");
+    }
+
+    /// A rule of three options `item_a` to `item_c`.
+    fn three_rule(min_count: u64, max_count: u64) -> OrderRule {
+        OrderRule {
+            options: vec![
+                order_option("item_a", "Item A"),
+                order_option("item_b", "Item B"),
+                order_option("item_c", "Item C"),
+            ],
+            min_count,
+            max_count,
+        }
+    }
+
+    /// The value of the `at`th option 64 bytes long.
+    fn long_key(at: usize) -> String {
+        format!("long_{at:02}_{}", "x".repeat(56))
+    }
+
+    /// A rule of `count` options of values 64 bytes long, and a short one, `short`.
+    fn long_rule(count: usize) -> OrderRule {
+        let mut options: Vec<OrderOption> = (0..count)
+            .map(|at| order_option(&long_key(at), &format!("Long crew {at:02}")))
+            .collect();
+        options.push(order_option("short", "Short"));
+        OrderRule { options, min_count: 0, max_count: 32 }
+    }
+
+    #[test]
+    fn a_list_is_edited_within_its_rule() {
+        assert_eq!(ordered_json(&[]), "[]");
+        assert_eq!(ordered_json(&strings(&["a", "b"])), "[\"a\",\"b\"]");
+        let rule = three_rule(0, 2);
+        let add = |keys: &[&str], value: &str| {
+            order_edit(&rule, &strings(keys), &OrderEdit::Add(value.to_owned()))
+        };
+        // At the end.
+        assert_eq!(add(&["item_b"], "item_a"), Some(strings(&["item_b", "item_a"])));
+        assert_eq!(add(&[], "item_c"), Some(strings(&["item_c"])));
+        // In it already, none of the options, the list full.
+        assert_eq!(add(&["item_b"], "item_b"), None);
+        assert_eq!(add(&["item_b"], "item_x"), None);
+        assert_eq!(add(&["item_b", "item_a"], "item_c"), None);
+        // A `max_count` of 32 over two options: two at most.
+        let two = OrderRule {
+            options: vec![order_option("item_a", "Item A"), order_option("item_b", "Item B")],
+            min_count: 0,
+            max_count: 32,
+        };
+        assert_eq!(two.cap(), 2);
+        let both = order_edit(&two, &strings(&["item_a"]), &OrderEdit::Add("item_b".to_owned()));
+        assert_eq!(both, Some(strings(&["item_a", "item_b"])));
+        let (offered, more) = order_matches(&two, &strings(&["item_a", "item_b"]), "");
+        assert_eq!(more, 0);
+        assert!(offered.iter().all(|option| option.chosen && !option.fits));
+
+        // Fifteen keys of 64 bytes take 1006 bytes and fit; a sixteenth would make 1073.
+        let long = long_rule(16);
+        let fifteen: Vec<String> = (0..15).map(long_key).collect();
+        assert_eq!(long_key(0).len(), 64);
+        assert_eq!(ordered_json(&fifteen).len(), 1006);
+        assert!(order_fits(&fifteen, None));
+        assert!(!order_fits(&fifteen, Some(long_key(15).as_str())));
+        let sixteen: Vec<String> = (0..16).map(long_key).collect();
+        assert_eq!(ordered_json(&sixteen).len(), 1073);
+        assert!(ordered_json(&sixteen).len() > VALUE_BYTES);
+        assert_eq!(order_edit(&long, &fifteen, &OrderEdit::Add(long_key(15))), None);
+        // A short one still fits; without it, no option left fits.
+        let mut with_short = fifteen.clone();
+        with_short.push("short".to_owned());
+        assert_eq!(order_edit(&long, &fifteen, &OrderEdit::Add("short".to_owned())), Some(with_short));
+        assert!(order_room(&long, &fifteen));
+        let only_long = OrderRule { options: long.options[..16].to_vec(), ..long.clone() };
+        assert!(!order_room(&only_long, &fifteen));
+        assert!(order_room(&only_long, &fifteen[..14]));
+
+        let keys = strings(&["item_a", "item_b", "item_c"]);
+        let edit = |change: OrderEdit| order_edit(&three_rule(0, 3), &keys, &change);
+        // The first moved up (the window's place -1 is never a place) and the last down: none.
+        assert_eq!(edit(OrderEdit::Move { from: 0, to: usize::MAX }), None);
+        assert_eq!(edit(OrderEdit::Move { from: 2, to: 3 }), None);
+        assert_eq!(edit(OrderEdit::Move { from: 3, to: 2 }), None);
+        assert_eq!(edit(OrderEdit::Move { from: 1, to: 1 }), None);
+        assert_eq!(
+            edit(OrderEdit::Move { from: 0, to: 1 }),
+            Some(strings(&["item_b", "item_a", "item_c"]))
+        );
+        assert_eq!(
+            edit(OrderEdit::Move { from: 2, to: 1 }),
+            Some(strings(&["item_a", "item_c", "item_b"]))
+        );
+        assert_eq!(edit(OrderEdit::Remove(3)), None);
+        assert_eq!(edit(OrderEdit::Remove(1)), Some(strings(&["item_a", "item_c"])));
+        // Below `min_count` is no reason not to remove.
+        let one = order_edit(&three_rule(1, 3), &strings(&["item_a"]), &OrderEdit::Remove(0));
+        assert_eq!(one, Some(Vec::new()));
+    }
+
+    #[test]
+    fn what_keeps_a_list_from_being_saved_is_said_in_one_order() {
+        let rule = three_rule(1, 2);
+        let problem = |keys: &[&str]| order_problem(&rule, &strings(keys));
+        assert_eq!(problem(&["item_a", "item_a", "item_x", "item_y"]), Some(OrderProblem::Repeated));
+        assert_eq!(problem(&["item_a", "item_x", "item_y"]), Some(OrderProblem::Gone(2)));
+        assert_eq!(problem(&[]), Some(OrderProblem::TooFew(1)));
+        assert_eq!(problem(&["item_a", "item_b", "item_c"]), Some(OrderProblem::TooMany(2)));
+        assert_eq!(problem(&["item_a"]), None);
+        assert_eq!(problem(&["item_c", "item_a"]), None);
+        let sixteen: Vec<String> = (0..16).map(long_key).collect();
+        assert_eq!(order_problem(&long_rule(16), &sixteen), Some(OrderProblem::TooLong(1073)));
+        assert_eq!(order_problem(&long_rule(16), &sixteen[..15]), None);
+    }
+
+    #[test]
+    fn options_are_found_by_their_titles_in_any_language() {
+        let crew = |at: usize| {
+            json!({"value": format!("crew_{at:03}"), "title": {"en": format!("Crew {at:03}"), "zh-Hans": format!("队员 {at:03}")}})
+        };
+        let mut options: Vec<Value> = (1..=12).map(crew).collect();
+        options.push(json!({"value": "reserve_01", "title": {"en": "Reserve 01"}}));
+        let declaration = json!({
+            "name": "v",
+            "type": "ordered",
+            "title": {"en": "Crew"},
+            "options": options,
+            "min_count": 1,
+            "max_count": 32,
+            "default": ["crew_001"],
+        });
+        let rule = match control_in(declaration, "[\"crew_001\"]", Tongue::ZhHans) {
+            ValueControl::Ordered { rule, .. } => rule,
+            control => panic!("{control:?}"),
+        };
+        let titles = |query: &str| -> Vec<String> {
+            let (found, more) = order_matches(&rule, &strings(&["crew_001"]), query);
+            assert_eq!(more, 0, "{query}");
+            found.into_iter().map(|option| option.title).collect()
+        };
+        // An English title on a Chinese page, in any case.
+        assert_eq!(titles("Reserve"), strings(&["Reserve 01"]));
+        assert_eq!(titles("  RESERVE "), strings(&["Reserve 01"]));
+        assert_eq!(titles("crew 007"), strings(&["队员 007"]));
+        assert_eq!(titles("队员 01"), strings(&["队员 010", "队员 011", "队员 012"]));
+        // Never by the option's value.
+        assert!(titles("crew_").is_empty());
+        assert!(titles("reserve_01").is_empty());
+        assert_eq!(titles("").len(), 13);
+        // The one in the draft is marked, and does not fit again.
+        let (found, _) = order_matches(&rule, &strings(&["crew_001"]), "队员 001");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].chosen && !found[0].fits);
+
+        // At most the first hundred, and how many more.
+        for (count, more) in [(400, 300), (1024, 924)] {
+            let rule = OrderRule {
+                options: (0..count).map(|at| order_option(&format!("crew_{at:04}"), &format!("Crew {at:04}"))).collect(),
+                min_count: 0,
+                max_count: 32,
+            };
+            let (found, left) = order_matches(&rule, &[], "");
+            assert_eq!(found.len(), ORDER_SHOWN);
+            assert_eq!(left, more);
+            assert_eq!(found[0].value, "crew_0000");
+            assert_eq!(found[99].value, "crew_0099");
+        }
+
+        // A long value that no longer fits does not; a short one still does.
+        let long = long_rule(16);
+        let fifteen: Vec<String> = (0..15).map(long_key).collect();
+        let (found, _) = order_matches(&long, &fifteen, "");
+        let fits: Vec<(String, bool, bool)> =
+            found.into_iter().map(|option| (option.value, option.chosen, option.fits)).collect();
+        assert_eq!(fits[0], (long_key(0), true, false));
+        assert_eq!(fits[15], (long_key(15), false, false));
+        assert_eq!(fits[16], ("short".to_owned(), false, true));
+        // Full: nothing fits.
+        let (found, _) = order_matches(&three_rule(0, 2), &strings(&["item_a", "item_c"]), "");
+        assert!(found.iter().all(|option| !option.fits));
+        assert_eq!(
+            found.iter().map(|option| option.chosen).collect::<Vec<bool>>(),
+            vec![true, false, true]
+        );
+        // A key no longer offered in the draft is no fault here.
+        let (found, more) = order_matches(&three_rule(0, 3), &strings(&["item_x"]), "item");
+        assert_eq!(more, 0);
+        assert!(found.iter().all(|option| !option.chosen && option.fits));
+    }
+
+    #[test]
+    fn a_refusals_pointer_names_the_key_sent_at_its_place() {
+        let sent = "[\"item_a\",\"item_b\",3]";
+        assert_eq!(pointed_key(sent, "/1"), Some("item_b".to_owned()));
+        assert_eq!(pointed_key(sent, "/0"), Some("item_a".to_owned()));
+        assert_eq!(pointed_key(sent, "/2"), None);
+        assert_eq!(pointed_key(sent, "/3"), None);
+        assert_eq!(pointed_key(sent, "/x"), None);
+        assert_eq!(pointed_key(sent, "/-1"), None);
+        assert_eq!(pointed_key(sent, "/"), None);
+        assert_eq!(pointed_key(sent, ""), None);
+        assert_eq!(pointed_key("\"item_a\"", "/0"), None);
+        assert_eq!(pointed_key("not json", "/0"), None);
+    }
+
+    /// An `ordered` declaration of `item_a` to `item_c`.
+    fn ordered_of(name: &str, min_count: u64, max_count: u64, default: &[&str]) -> Value {
+        json!({
+            "name": name,
+            "type": "ordered",
+            "title": {"en": "Order"},
+            "options": [
+                {"value": "item_a", "title": {"en": "Item A"}},
+                {"value": "item_b", "title": {"en": "Item B"}},
+                {"value": "item_c", "title": {"en": "Item C"}},
+            ],
+            "min_count": min_count,
+            "max_count": max_count,
+            "default": default,
+        })
+    }
+
+    /// G3: a page of numbers and lists to press on: a number stored and not used; a list in
+    /// effect, one in effect with a key left out, one not used whose keys are partly gone, one not
+    /// used with a key named twice, one not used of another type; a type this console does not
+    /// know, in effect and not used; and a
+    /// placement not offered, with a value and no declaration.
+    fn numbers_and_lists_page() -> GoalsPage {
+        let keep = json!({
+            "name": "keep",
+            "type": "integer",
+            "title": {"en": "Keep"},
+            "min": 0,
+            "max": 100,
+            "step": 10,
+            "unit": {"en": "points"},
+            "default": 50,
+        });
+        read(&view(
+            state("accepted"),
+            json!([
+                variable("keep", true, keep, &["pack.a"], json!({
+                    "default_json": "50",
+                    "value_json": "120",
+                    "effective_json": "50",
+                    "source": "default",
+                    "set": set("ui", None),
+                    "state": "not_applied",
+                    "variable_problem": "out_of_range",
+                    "display": {"en": "50 points"},
+                })),
+                variable("order", true, ordered_of("order", 1, 3, &["item_b"]), &["pack.a"], json!({
+                    "default_json": "[\"item_b\"]",
+                    "value_json": "[\"item_a\",\"item_b\"]",
+                    "effective_json": "[\"item_a\",\"item_b\"]",
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+                variable("kept", true, ordered_of("kept", 1, 3, &["item_b"]), &["pack.a"], json!({
+                    "default_json": "[\"item_b\"]",
+                    "value_json": "[\"item_x\",\"item_a\"]",
+                    "effective_json": "[\"item_a\"]",
+                    "removed_keys": ["item_x"],
+                    "source": "set",
+                    "set": set("lab", Some("Lab-CLI")),
+                    "state": "in_effect",
+                    "variable_problem": "keys_left_out",
+                })),
+                variable("squad", true, ordered_of("squad", 2, 3, &["item_b", "item_c"]), &["pack.a"], json!({
+                    "default_json": "[\"item_b\",\"item_c\"]",
+                    "value_json": "[\"item_a\",\"item_x\",\"item_y\"]",
+                    "effective_json": "[\"item_b\",\"item_c\"]",
+                    "source": "default",
+                    "set": set("lab", Some("Lab-CLI")),
+                    "state": "not_applied",
+                    "variable_problem": "keys_removed",
+                })),
+                variable("twice", true, ordered_of("twice", 1, 3, &["item_b"]), &["pack.a"], json!({
+                    "default_json": "[\"item_b\"]",
+                    "value_json": "[\"item_x\",\"item_a\",\"item_x\"]",
+                    "effective_json": "[\"item_b\"]",
+                    "source": "default",
+                    "set": set("cli", None),
+                    "state": "not_applied",
+                    "variable_problem": "key_repeated",
+                })),
+                variable("typed", true, ordered_of("typed", 1, 3, &["item_b"]), &["pack.a"], json!({
+                    "default_json": "[\"item_b\"]",
+                    "value_json": "\"item_a\"",
+                    "effective_json": "[\"item_b\"]",
+                    "source": "default",
+                    "set": set("cli", None),
+                    "state": "not_applied",
+                    "variable_problem": "type_changed",
+                })),
+                variable("odd", true, json!({"name": "odd", "type": "table", "title": {"en": "Odd"}}), &["pack.a"], json!({
+                    "value_json": "[1]",
+                    "effective_json": "[1]",
+                    "source": "set",
+                    "set": set("lab", None),
+                    "state": "in_effect",
+                })),
+                variable("weekly", true, json!({"name": "weekly", "type": "integer", "title": {"en": "Weekly"}, "min": 0, "max": 9, "unit": "week", "default": 1}), &["pack.a"], json!({
+                    "value_json": "12",
+                    "effective_json": "1",
+                    "source": "default",
+                    "set": set("cli", None),
+                    "state": "not_applied",
+                    "variable_problem": "out_of_range",
+                })),
+                {
+                    "name": "lost",
+                    "entry_type": "variable",
+                    "placed": true,
+                    "entry": {"name": "lost", "type": "variable"},
+                    "value_json": "3",
+                    "set": set("cli", None),
+                    "state": "not_offered",
+                },
+            ]),
+            json!({}),
+            no_targets(),
+        ))
+    }
+
+    /// G3: what a number or a list set, and back to the default, write, and what they ask: only
+    /// what cannot be set back from here, a value stored and not used, or the keys of a list in
+    /// effect that the run leaves out. A type this console does not know is never written, but
+    /// cleared where no bound package offers it.
+    #[test]
+    fn numbers_and_lists_ask_only_for_what_cannot_be_set_back() {
+        let page = numbers_and_lists_page();
+        let presses = Presses(&page);
+        let order = |keys: &[&str]| GoalAct::Order(strings(keys));
+
+        // A number stored and not used: another number, or the default again, loses it; the
+        // default typed is the number in effect, which writes nothing.
+        let stored = Shown::Words("120 points".to_owned());
+        assert_eq!(
+            presses.on("variable:keep", typed("40")),
+            asks(set_of("keep", "40"), Loses::Replaced(stored.clone()))
+        );
+        assert_eq!(presses.on("variable:keep", typed("50")), None);
+        assert_eq!(presses.on("variable:keep", typed("45")), None);
+        assert_eq!(presses.on("variable:keep", GoalAct::Clear), asks(clear_of("keep"), Loses::Value(stored)));
+        assert_eq!(presses.on("variable:keep", order(&["item_a"])), None);
+
+        // A list in effect with nothing left out: saved and put back at once.
+        assert_eq!(
+            presses.on("variable:order", order(&["item_b", "item_a"])),
+            goes(set_of("order", "[\"item_b\",\"item_a\"]"))
+        );
+        assert_eq!(presses.on("variable:order", order(&["item_a", "item_b"])), None);
+        assert_eq!(presses.on("variable:order", order(&["item_a", "item_x"])), None);
+        assert_eq!(presses.on("variable:order", order(&[])), None);
+        assert_eq!(presses.on("variable:order", order(&["item_a", "item_a"])), None);
+        assert_eq!(presses.on("variable:order", typed("5")), None);
+        assert_eq!(presses.on("variable:order", GoalAct::Clear), goes(clear_of("order")));
+
+        // In effect with a key left out: saving another list, or the default again, loses it.
+        let left_out = strings(&["item_x"]);
+        assert_eq!(
+            presses.on("variable:kept", order(&["item_a", "item_b"])),
+            asks(
+                set_of("kept", "[\"item_a\",\"item_b\"]"),
+                Loses::LeftOut { keys: left_out.clone(), cleared: false }
+            )
+        );
+        assert_eq!(presses.on("variable:kept", order(&["item_a"])), None);
+        assert_eq!(
+            presses.on("variable:kept", GoalAct::Clear),
+            asks(clear_of("kept"), Loses::LeftOut { keys: left_out, cleared: true })
+        );
+
+        // Not used: the value stored is replaced, asked; the default as it is writes nothing.
+        let squad = Shown::List(strings(&["Item A", "item_x", "item_y"]));
+        assert_eq!(
+            presses.on("variable:squad", order(&["item_a", "item_b"])),
+            asks(set_of("squad", "[\"item_a\",\"item_b\"]"), Loses::Replaced(squad.clone()))
+        );
+        assert_eq!(presses.on("variable:squad", order(&["item_b", "item_c"])), None);
+        assert_eq!(presses.on("variable:squad", GoalAct::Clear), asks(clear_of("squad"), Loses::Value(squad)));
+
+        // A type this console does not know, in effect or not used: nothing set, nothing cleared.
+        for key in ["variable:odd", "variable:weekly"] {
+            assert_eq!(presses.on(key, typed("5")), None, "{key}");
+            assert_eq!(presses.on(key, order(&["item_a"])), None, "{key}");
+            assert_eq!(presses.on(key, GoalAct::Clear), None, "{key}");
+            match page.line(key) {
+                Some(GoalLine::Variable(line)) => {
+                    assert_eq!(line.control, ValueControl::Unknown, "{key}");
+                    assert_eq!(line.clear_offer(), None, "{key}");
+                    assert!(line.settable(), "{key}");
+                }
+                line => panic!("{line:?}"),
+            }
+        }
+        // Not offered, with a value and no declaration: cleared, asked, as G2's.
+        assert_eq!(
+            presses.on("variable:lost", GoalAct::Clear),
+            asks(clear_of("lost"), Loses::Value(Shown::Number(3)))
+        );
+        match page.line("variable:lost") {
+            Some(GoalLine::Variable(line)) => {
+                assert_eq!(line.control, ValueControl::Unknown);
+                assert_eq!(line.clear_offer(), Some(ClearOffer::Clear));
+            }
+            line => panic!("{line:?}"),
+        }
+    }
+
+    /// G3: the keys of a list stored and not used that its declaration no longer offers are found
+    /// here, each once, in their order: the Runtime names none of them then (`removed_keys` is
+    /// only of a value in effect). None of a value in effect, nor of one that is no list.
+    #[test]
+    fn the_keys_no_longer_offered_of_a_list_not_used_are_found_here() {
+        let page = numbers_and_lists_page();
+        let line = |key: &str| match page.line(key) {
+            Some(GoalLine::Variable(line)) => line.clone(),
+            line => panic!("{line:?}"),
+        };
+        // `keys_removed`: the Runtime names none of them.
+        let squad = line("variable:squad");
+        assert!(squad.left_out.is_empty());
+        assert_eq!(squad.gone, strings(&["item_x", "item_y"]));
+        // Named twice, said once.
+        assert_eq!(line("variable:twice").gone, strings(&["item_x"]));
+        let kept = line("variable:kept");
+        assert_eq!(kept.left_out, strings(&["item_x"]));
+        assert!(kept.gone.is_empty());
+        assert!(line("variable:typed").gone.is_empty());
+        assert!(line("variable:order").gone.is_empty());
+        // Of a type this console does not know, none either.
+        assert!(line("variable:weekly").gone.is_empty());
+    }
+
+    #[test]
+    fn only_the_words_of_a_rule_say_the_page_is_older_than_the_runtime() {
+        for word in ["out_of_range", "off_step", "not_an_option", "count_out_of_range", "key_repeated", "wrong_type"] {
+            assert!(WriteProblem::of(word).of_the_rule(), "{word}");
+        }
+        for word in ["value_too_large", "variable_not_applying", "not_offered", "name_unknown", "a_newer_word"] {
+            assert!(!WriteProblem::of(word).of_the_rule(), "{word}");
         }
     }
 }
