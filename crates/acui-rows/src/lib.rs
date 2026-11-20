@@ -16,7 +16,7 @@ pub use display::{event_type_names, format_bytes, module_names};
 pub use actingcommand_contract::{
     ArtifactEvictionObservation, ArtifactKind, CaptureExtent, ClientActionKind,
     ClientActionRecord, DisplayArea, DisplayMapKind, DisplayScaleBy, EventActor, EventLinks,
-    EventQuery, EventSeverity, EventSource, EventType, InputAction, InstanceId,
+    EventQuery, EventSeverity, EventSource, EventType, InputAction, InputPathPoint, InstanceId,
     LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
     LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule,
     PolicyExecutionOutcome, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,

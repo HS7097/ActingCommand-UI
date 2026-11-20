@@ -3500,7 +3500,10 @@ export component WorkbenchWindow inherits Window {
                                         spacing: 6px;
                                         HorizontalLayout {
                                             alignment: start;
-                                            // Off until the Runtime can add an instance itself.
+                                            // Off: an emulator instance is added with the Lab's
+                                            // `instance add` (Runtime 945727d4
+                                            // `contracts/install-cli.md:758-765`); the console's
+                                            // own button comes later.
                                             SkinButton {
                                                 text: Strings.add-instance;
                                                 enabled: false;

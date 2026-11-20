@@ -787,7 +787,7 @@ pub fn busy_text(labels: &Labels, state: &LedgerState) -> String {
         BusyKind::Polling => labels.busy_polling.to_owned(),
         BusyKind::Instances => labels.busy_instances.to_owned(),
         BusyKind::FrameEvents => labels.frame_events_reading.to_owned(),
-        BusyKind::RunMaps => labels.effect_points_reading.to_owned(),
+        BusyKind::RunMaps => labels.busy_run_maps.to_owned(),
         BusyKind::Reconnecting => labels.busy_reconnecting.to_owned(),
     };
     let template = if busy.per_page { labels.busy_waited_page } else { labels.busy_waited };
@@ -1519,7 +1519,10 @@ fn page_text(labels: &Labels, group: &FrameGroup) -> String {
 /// One sentence per input meant on the frame — its step, what was recognized,
 /// what was done where — then how the frame was found when the event does not
 /// name it. Where is where the input lands on the device frame, as drawn
-/// (`mark_text`).
+/// (`mark_text`). A sentence that ends in its run's failed read's own words,
+/// often a whole sentence with its full stop, comes last, after how the frame
+/// was found, and each such sentence after the first on a line of its own, so
+/// nothing is joined on after those words (UI-PT1b).
 fn explain_text(labels: &Labels, frame: &FrameView, runs: &RunMapsSlot) -> String {
     let recognition = frame.group.recognition.as_ref().map(|(page, candidates)| {
         let seen = match page {
@@ -1533,21 +1536,22 @@ fn explain_text(labels: &Labels, frame: &FrameView, runs: &RunMapsSlot) -> Strin
             }
         }
     });
-    let mut parts: Vec<String> = frame
-        .group
-        .marks
-        .iter()
-        .map(|mark| {
-            let step =
-                fill(labels.frame_step, &[&mark.step_index.to_string(), &mark.operation_label]);
-            let done = mark_text(labels, mark, runs);
-            match &recognition {
-                Some(seen) => fill(labels.frame_explain_full, &[&step, seen, &done]),
-                None => fill(labels.frame_explain_short, &[&step, &done]),
-            }
-        })
-        .collect();
-    if parts.is_empty() {
+    let mut parts: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for mark in &frame.group.marks {
+        let step = fill(labels.frame_step, &[&mark.step_index.to_string(), &mark.operation_label]);
+        let done = mark_text(labels, mark, runs);
+        let part = match &recognition {
+            Some(seen) => fill(labels.frame_explain_full, &[&step, seen, &done]),
+            None => fill(labels.frame_explain_short, &[&step, &done]),
+        };
+        if read_failed(mark, runs) {
+            failed.push(part);
+        } else {
+            parts.push(part);
+        }
+    }
+    if parts.is_empty() && failed.is_empty() {
         parts.extend(recognition);
     }
     let sequence = frame.basis_sequence.to_string();
@@ -1556,7 +1560,26 @@ fn explain_text(labels: &Labels, frame: &FrameView, runs: &RunMapsSlot) -> Strin
         BasisVia::Step => parts.push(fill(labels.frame_via_step, &[&sequence])),
         BasisVia::Input => parts.push(fill(labels.frame_via_input, &[&sequence])),
     }
-    parts.join(labels.join)
+    let mut text = parts.join(labels.join);
+    for (index, part) in failed.iter().enumerate() {
+        if index > 0 {
+            text.push('\n');
+        } else if !text.is_empty() {
+            text.push_str(labels.join);
+        }
+        text.push_str(part);
+    }
+    text
+}
+
+/// Whether `mark`'s sentence ends in its run's failed read's own words
+/// (`run_map_text`).
+fn read_failed(mark: &Mark, runs: &RunMapsSlot) -> bool {
+    matches!(mark.conversion, MarkConversion::Unknown)
+        && matches!(
+            mark.run.as_deref().and_then(|run| runs.failure(run)),
+            Some(FrameLookupError::Read { .. })
+        )
 }
 
 /// The sentence of an effect intent of no frame, selected (UI-PT1): its step,
@@ -1567,10 +1590,12 @@ fn own_mark_text(labels: &Labels, mark: &Mark, runs: &RunMapsSlot) -> String {
 }
 
 /// What an input did where: its name, and its points in order, in the device
-/// frame's pixels, as drawn (UI-PT1). An input not converted says so, and one
-/// whose run's display map is not known says why: being read, not read whole,
-/// or not read, the read's own words then how to read it again. The payload's
-/// JSON keeps the base pixels the effect intent recorded.
+/// frame's pixels, as drawn (UI-PT1). An input not converted says so after its
+/// name, and one whose run's display map is not known says why: being read, not
+/// read whole, or not read, then the read's own words and how to read it again.
+/// The name and why are joined by `effect_points_explain`, not by a colon, as
+/// the sentence round them already has one. The payload's JSON keeps the base
+/// pixels the effect intent recorded.
 fn mark_text(labels: &Labels, mark: &Mark, runs: &RunMapsSlot) -> String {
     let name = labels
         .action_kinds
@@ -1583,7 +1608,7 @@ fn mark_text(labels: &Labels, mark: &Mark, runs: &RunMapsSlot) -> String {
         MarkConversion::Unknown => Some(run_map_text(labels, runs, mark.run.as_deref())),
     };
     if let Some(why) = unplaced {
-        return fill(labels.frame_explain_short, &[name, &why]);
+        return fill(labels.effect_points_explain, &[name, &why]);
     }
     let points: Vec<String> =
         mark.points.iter().map(|(x, y)| format!("({}, {})", x.round(), y.round())).collect();

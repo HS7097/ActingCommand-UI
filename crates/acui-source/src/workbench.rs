@@ -149,6 +149,16 @@ pub const SETUP_FIRST_START: &str = "first-start";
 /// account's card with one press. As a name the Runtime takes it is 21 bytes of `[a-z_]`.
 pub const CONSOLE_PAUSE_ACCOUNT: &str = "console_pause_account";
 
+/// The reason of the pause that holds a newly added instance until a person has looked it over
+/// and resumes it, the contract's own (Runtime 945727d4
+/// `crates/actingcommand-contract/src/runtime.rs:2477`): the Runtime's first start that sees an
+/// `instances[]` entry declaring `start_paused` holds that instance with it
+/// (`crates/runtime-host/src/host/start_pause.rs:3-9, 110-119`), and the Lab's `instance add`
+/// pauses the instance it has just added with it (`crates/lab-rescue/src/rescue.rs:1739-1823`).
+/// Another tool's pause like any other in who lifts it and where; only the words for it are its
+/// own.
+pub use actingcommand_contract::INSTANCE_ADDED_PAUSE_REASON;
+
 /// Whether `reason` is a name the Runtime takes as a pause's reason, by the contract's own
 /// check (`SchedulingPauseReason::new`: 1 to 64 bytes of `[a-z0-9_.-]`). The console's
 /// settings name reasons it offers no resume for, and one no pause can carry names none.

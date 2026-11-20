@@ -67,8 +67,8 @@ pub fn basis<'a>(
 /// it, the package's; the run it was meant in, by its id as `code` writes it;
 /// how its points were put on the device frame; and those points, in order, in
 /// device-frame pixels, read from the input as converted (`x`/`y`, then `x1`/`y1`
-/// through `x3`/`y3`). No point is given of an input that was not converted, or
-/// whose run's map is not known yet.
+/// through `x3`/`y3`, then a path drag's `points`). No point is given of an input
+/// that was not converted, or whose run's map is not known yet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mark {
     pub step_index: u32,
@@ -268,15 +268,20 @@ pub(crate) fn is_effect_intent(event: &ProjectedEvent) -> bool {
     matches!(task_fact(event), Some(TaskSemanticFact::EffectIntent { .. }))
 }
 
-/// `x`/`y`, then `x1`/`y1` through `x3`/`y3`, as the input names them. A path
-/// drag names none of them, and gives no point.
+/// `x`/`y`, then `x1`/`y1` through `x3`/`y3`, then each `{x, y}` of `points` in
+/// order, as the input names them. A path drag names only `points`, the points
+/// it passes through, beside its box (Runtime 945727d4
+/// `crates/actingcommand-contract/src/runtime.rs:795-803, 834-837`); converted,
+/// they are the device points the product sends (`crates/display-adapter/src/lib.rs:1204-1249`).
 pub(crate) fn points(action: &InputAction) -> Vec<(f32, f32)> {
     let action = serde_json::to_value(action).unwrap_or(Value::Null);
-    let pair = |x: &str, y: &str| {
-        Some((action.get(x)?.as_f64()? as f32, action.get(y)?.as_f64()? as f32))
+    let pair = |at: &Value, x: &str, y: &str| {
+        Some((at.get(x)?.as_f64()? as f32, at.get(y)?.as_f64()? as f32))
     };
-    std::iter::once(pair("x", "y"))
-        .chain((1..=3).map(|index| pair(&format!("x{index}"), &format!("y{index}"))))
+    let path = action.get("points").and_then(Value::as_array).into_iter().flatten();
+    std::iter::once(pair(&action, "x", "y"))
+        .chain((1..=3).map(|index| pair(&action, &format!("x{index}"), &format!("y{index}"))))
+        .chain(path.map(|point| pair(point, "x", "y")))
         .flatten()
         .collect()
 }

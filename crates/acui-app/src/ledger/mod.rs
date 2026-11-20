@@ -674,8 +674,9 @@ fn wanted_frame_events(
 /// bounds what it reads to the run's own records, back to its start, its link
 /// index driving the Runtime's statement (945727d4
 /// `crates/ledger/src/global/sqlite.rs:4777-4790, 4856`; `acui_source`'s
-/// `check_online_page`). Offline it is the run id and the type, as a frame's
-/// lookup reads by frame id alone there.
+/// `check_online_page`, which lets a page that wide past only in exactly this
+/// query's shape). Offline it is the run id and the type, as a frame's lookup
+/// reads by frame id alone there.
 fn wanted_run_maps(state: &mut LedgerState) -> Vec<(String, EventQuery, u64)> {
     let online = match &state.phase {
         Phase::Open(facts) => facts.follows,

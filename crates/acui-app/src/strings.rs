@@ -233,10 +233,13 @@ pub struct Labels {
     /// A frame's lookup read its window and found no capture there: from, to.
     pub frame_capture_not_in_range: &'static str,
     pub frame_events_failed: &'static str,
-    /// UI-PT1, an effect intent's points on its device frame, after the input's name: the
-    /// product refuses the input under its run's display map, so none is drawn (the live view
-    /// says it under the frame too); its run's map is being read (also the busy line); it could
-    /// not be read (the read's words, then how to read again); it was not read whole.
+    /// UI-PT1, why an effect intent's points are not drawn on its device frame, after the
+    /// input's name and joined to it by `effect_points_explain` (name, why), so in the middle of
+    /// the frame's sentence, its English lower-case: the product refuses the input under its
+    /// run's display map; its run's map is being read; it could not be read (then, last, the
+    /// read's words and how to read again); it was not read whole. The live view's lines under
+    /// the frame are `picture_points_*`, and the busy line is `busy_run_maps`.
+    pub effect_points_explain: &'static str,
     pub effect_points_unconverted: &'static str,
     pub effect_points_reading: &'static str,
     pub effect_points_failed: &'static str,
@@ -315,6 +318,9 @@ pub struct Labels {
     pub busy_polling: &'static str,
     pub busy_instances: &'static str,
     pub busy_reconnecting: &'static str,
+    /// UI-PT1: the display map of a run whose inputs the frame pane draws is
+    /// being read (the frame pane's own words are `effect_points_reading`).
+    pub busy_run_maps: &'static str,
     /// The selected frame's own events are being read: the busy line and the
     /// frame pane.
     pub frame_events_reading: &'static str,
@@ -447,6 +453,9 @@ pub struct Labels {
     pub pause_instance: &'static str,
     pub pause_other_tool: &'static str,
     pub pause_console: &'static str,
+    /// An instance's pause of a newly added instance (`instance.added`), which this window
+    /// resumes as another tool's: its own words, the same values.
+    pub pause_instance_added: &'static str,
     pub pause_draining: &'static str,
     pub pause_releasing: &'static str,
     pub pause_in_the_way: &'static str,
@@ -1051,6 +1060,12 @@ pub struct Labels {
     /// The setup wizard's first-start pause of all accounts.
     pub card_paused_first_start: &'static str,
     pub card_paused_account: &'static str,
+    /// The pause of a newly added instance (`instance.added`: the Runtime's first-start hold of
+    /// an entry that declares `start_paused`, or its hold at the release of another pause that
+    /// stood there first, Runtime 945727d4 `crates/runtime-host/src/host/start_pause.rs:3-9,
+    /// 15-20`; or the Lab's `instance add`, `crates/lab-rescue/src/rescue.rs:1739-1823`), when the
+    /// ledger window resumes it: said as what it is, not as another tool's with its raw reason.
+    pub card_paused_instance_added: &'static str,
     pub card_all_accounts: &'static str,
     pub card_running: &'static str,
     pub card_finishing: &'static str,
@@ -1166,6 +1181,9 @@ pub struct Labels {
     pub tasks_paused_first_start: &'static str,
     pub tasks_paused_other: &'static str,
     pub tasks_paused_other_all: &'static str,
+    /// A newly added instance's pause (`instance.added`), below the task list, when the ledger
+    /// window resumes it.
+    pub tasks_paused_instance_added: &'static str,
     pub tasks_evaluated: &'static str,
     pub tasks_names_unreadable: &'static str,
     pub tasks_cut_short: &'static str,
@@ -1519,10 +1537,13 @@ pub struct Labels {
     pub picture_overlays: &'static str,
     pub picture_marks_none: &'static str,
     pub picture_marks_mismatch: &'static str,
-    /// UI-PT1, under the frame: an input's run's display map was not read, or not whole, so its
-    /// points are not drawn; why is in the technical log. One that was not converted says
-    /// `effect_points_unconverted`.
-    pub picture_points_unread: &'static str,
+    /// UI-PT1, under the frame, each on its own line: the product refuses an input under its
+    /// run's display map, so its points are not drawn; an input's run's display map was read but
+    /// not whole, so its points are not drawn, and the technical log, which then shows where it
+    /// is, says which run. A read of the map that failed draws no such line: the picture's
+    /// following stops and is retried, as a poll that failed (`picture_interrupted`).
+    pub picture_points_unconverted: &'static str,
+    pub picture_points_incomplete: &'static str,
     pub picture_aspect_undeclared: &'static str,
     /// Under the live view, its refresh: the button, and in grey what a refresh costs. Beside
     /// the button why it cannot be pressed now: no Runtime online; the device is being handed
@@ -2098,9 +2119,10 @@ pub const ZH: Labels = Labels {
     frame_capture_missing: "账本里没有这一帧的截图产物",
     frame_capture_not_in_range: "在序号 {}–{} 内没找到这一帧的截图产物",
     frame_events_failed: "读取这一帧的事件失败：{}",
+    effect_points_explain: "{}，{}",
     effect_points_unconverted: "这一步的输入没有换算",
     effect_points_reading: "正在读这次运行的显示换算…",
-    effect_points_failed: "读不到这次运行的显示换算：{}；这一步的点没画",
+    effect_points_failed: "这次运行的显示换算读不到，这一步的点没画：{}",
     effect_points_incomplete: "这次运行的显示换算没读全；这一步的点没画",
     action_kinds: &[
         ("tap", "点击"),
@@ -2151,6 +2173,7 @@ pub const ZH: Labels = Labels {
     busy_polling: "正在询问账本最新位置…",
     busy_instances: "正在读取实例状态…",
     busy_reconnecting: "正在重建素材连接…",
+    busy_run_maps: "正在读这次运行的显示换算…",
     frame_events_reading: "正在读取这一帧的事件…",
     launcher_title: "启动器",
     launcher_checking: "正在检查 Runtime…",
@@ -2219,6 +2242,7 @@ pub const ZH: Labels = Labels {
     pause_instance: "实例 {} 的调度",
     pause_other_tool: "{}：被其他工具暂停（理由 {}，修订 {}，自 {}）",
     pause_console: "{}：被这个监控台暂停（理由 {}，修订 {}，自 {}）",
+    pause_instance_added: "{}：新加实例的暂停（理由 {}，修订 {}，自 {}）",
     pause_draining: "正在等进行中的任务收尾",
     pause_releasing: "正在交还设备",
     pause_in_the_way: "；上次检查时挡着：{}",
@@ -2295,7 +2319,7 @@ pub const ZH: Labels = Labels {
     install_issue: "这次运行没有可用的状态根：「启动」「请求关闭」和「排障与账本」暂时不能用，语言、字号和主题仍可在「设置」里修改。\n原因：{}",
     open_ledger: "排障与账本",
     add_instance: "+ 添加实例",
-    add_instance_note: "实例：一台模拟器或一部手机，上面是登录好的游戏。添加实例要等 Runtime 支持；现在请按安装说明手工编辑配置文件",
+    add_instance_note: "实例：一台模拟器或一部手机，上面是登录好的游戏。现在可以用 Lab 的 instance add 添加模拟器实例（Runtime 0.12.52 起）；监控台里的这个按钮以后再做",
     config_file: "配置文件",
     config_path_missing: "还没有配置 Runtime 的配置文件：请按安装说明填写设置文件，或从安装文件夹里的 ui\\acui.exe 启动",
     config_see_issue: "这次运行用不了 Runtime 的配置文件：原因见上方红条",
@@ -2622,6 +2646,7 @@ pub const ZH: Labels = Labels {
     card_paused_console: "已暂停，可用「全部开始执勤」恢复",
     card_paused_first_start: "装好后先暂停着；看过没问题就按「全部开始执勤」",
     card_paused_account: "已用「暂停这个实例的调度」暂停，可用下面的「恢复这个实例的调度」恢复",
+    card_paused_instance_added: "新加的实例，调度先暂停着；看过没问题后，可在「排障与账本」里恢复",
     card_all_accounts: "全部实例{}",
     card_running: "正在运行：{}",
     card_finishing: "正在收尾：{}",
@@ -2708,6 +2733,7 @@ pub const ZH: Labels = Labels {
     tasks_paused_first_start: "装好后先暂停着，可用「全部开始执勤」恢复",
     tasks_paused_other: "已被其他工具暂停，可在「排障与账本」里恢复",
     tasks_paused_other_all: "已被其他工具暂停，可用「全部开始执勤」恢复",
+    tasks_paused_instance_added: "新加的实例，调度先暂停着，可在「排障与账本」里恢复",
     tasks_evaluated: "按 {} 那一轮评估",
     tasks_names_unreadable: "任务名称读不到，下面按编号显示",
     tasks_cut_short: "还有任务没列出（超过一次能读的上限）",
@@ -2964,7 +2990,8 @@ pub const ZH: Labels = Labels {
     picture_overlays: "识别框和点击点",
     picture_marks_none: "这张画面没有识别记录",
     picture_marks_mismatch: "识别记录的尺寸与画面不符，没有画识别框",
-    picture_points_unread: "读不到这次运行的显示换算（详情见技术日志），这一步的点没画",
+    picture_points_unconverted: "这一步的输入没有换算",
+    picture_points_incomplete: "这次运行的显示换算没读全（详情见技术日志），这一步的点没画",
     picture_aspect_undeclared: "这个标准包没有声明支持 {} 的画面，任务可能跑不准",
     refresh_frame: "刷新一帧",
     refresh_cost: "每次刷新会截一张图存进账本（约 1–3 MB），按留存规则自动清理；截图时会短暂占用设备",
@@ -3418,10 +3445,11 @@ pub const EN: Labels = Labels {
     frame_capture_missing: "The ledger holds no capture of this frame",
     frame_capture_not_in_range: "No capture of this frame between positions {} and {}",
     frame_events_failed: "Reading this frame's events failed: {}",
-    effect_points_unconverted: "This step's input was not converted",
-    effect_points_reading: "Reading this run's display map…",
-    effect_points_failed: "This run's display map could not be read: {}; this step's points are not drawn",
-    effect_points_incomplete: "This run's display map was not read whole; this step's points are not drawn",
+    effect_points_explain: "{}, {}",
+    effect_points_unconverted: "this step's input was not converted",
+    effect_points_reading: "reading this run's display map…",
+    effect_points_failed: "this run's display map could not be read, so this step's points are not drawn: {}",
+    effect_points_incomplete: "this run's display map was not read whole; this step's points are not drawn",
     action_kinds: &[
         ("tap", "tap"),
         ("long_tap", "long tap"),
@@ -3471,6 +3499,7 @@ pub const EN: Labels = Labels {
     busy_polling: "Asking for the Ledger's Latest Position…",
     busy_instances: "Reading the Instances' Status…",
     busy_reconnecting: "Rebuilding the Material Connection…",
+    busy_run_maps: "Reading This Run's Display Map…",
     frame_events_reading: "Reading This Frame's Events…",
     launcher_title: "Launcher",
     launcher_checking: "Checking the Runtime…",
@@ -3539,6 +3568,7 @@ pub const EN: Labels = Labels {
     pause_instance: "Scheduling of Instance {}",
     pause_other_tool: "{}: Paused by Another Tool (Reason {}, Revision {}, Since {})",
     pause_console: "{}: Paused by This Console (Reason {}, Revision {}, Since {})",
+    pause_instance_added: "{}: Pause of a Newly Added Instance (Reason {}, Revision {}, Since {})",
     pause_draining: "Waiting for the Running Tasks to Finish",
     pause_releasing: "Handing the Device Back",
     pause_in_the_way: "; in the way at the last check: {}",
@@ -3615,7 +3645,7 @@ pub const EN: Labels = Labels {
     install_issue: "This run has no state root to use: Start, Request Shutdown and Troubleshooting and Ledger are off for now, and the language, the text size and the theme can still be changed under Settings.\nWhy: {}",
     open_ledger: "Troubleshooting and Ledger",
     add_instance: "+ Add Instance",
-    add_instance_note: "An instance is one emulator or one phone, with the games signed in on it. Adding one waits for Runtime support; for now, edit the configuration file by hand as the installation guide says",
+    add_instance_note: "An instance is one emulator or one phone, with the games signed in on it. An emulator instance can be added now with the Lab's instance add (Runtime 0.12.52 on); this button in the console comes later",
     config_file: "Configuration File",
     config_path_missing: "No Runtime configuration file is set: fill in the settings file as the installation guide says, or start ui\\acui.exe inside the installation folder",
     config_see_issue: "This run cannot use the Runtime's configuration file; the red bar above says why",
@@ -3942,6 +3972,7 @@ pub const EN: Labels = Labels {
     card_paused_console: "Paused; Put All on Duty resumes it",
     card_paused_first_start: "Paused after setup; press Put All on Duty once all looks right",
     card_paused_account: "Paused with Pause This Instance's Scheduling; Resume This Instance's Scheduling below resumes it",
+    card_paused_instance_added: "Newly added instance: its scheduling is held until you resume it in Troubleshooting and Ledger",
     card_all_accounts: "All instances: {}",
     card_running: "Running: {}",
     card_finishing: "Finishing up: {}",
@@ -4028,6 +4059,7 @@ pub const EN: Labels = Labels {
     tasks_paused_first_start: "Paused after setup; Put All on Duty resumes it",
     tasks_paused_other: "Paused by another tool; it can be resumed in Troubleshooting and Ledger",
     tasks_paused_other_all: "Paused by another tool; Put All on Duty resumes it",
+    tasks_paused_instance_added: "Newly added instance: its scheduling is held until it is resumed in Troubleshooting and Ledger",
     tasks_evaluated: "As evaluated in the round of {}",
     tasks_names_unreadable: "Task names cannot be read; the tasks below show their IDs",
     tasks_cut_short: "Some tasks are not listed (more than one read can hold)",
@@ -4284,7 +4316,8 @@ pub const EN: Labels = Labels {
     picture_overlays: "Recognition boxes and taps",
     picture_marks_none: "No recognition was recorded on this picture",
     picture_marks_mismatch: "The recognition's size differs from the picture's; no boxes drawn",
-    picture_points_unread: "This run's display map could not be read (see the technical log); this step's points are not drawn",
+    picture_points_unconverted: "This step's input was not converted",
+    picture_points_incomplete: "This run's display map was not read whole (see the technical log); this step's points are not drawn",
     picture_aspect_undeclared: "This standard pack does not declare {} pictures; tasks may misread them",
     refresh_frame: "Capture One Frame",
     refresh_cost: "Each refresh saves a screenshot in the ledger (about 1–3 MB), cleaned up by the retention rules; taking it briefly occupies the device",
