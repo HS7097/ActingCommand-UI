@@ -19,7 +19,7 @@ use acui_rows::{
     seconds_since, short_id, ArtifactEvictionObservation, EventSeverity, LedgerCount,
     OriginModule, ProjectedEvent, Sensitivity, WriterFacts,
 };
-use acui_source::workbench::{pause_moment, PauseMoment};
+use acui_source::workbench::{pause_moment, runtime_notice, PauseMoment, RuntimeNotice};
 use acui_source::{
     MaterialOutcome, OfflineFacts, OfflineReason, PauseStage, RuntimeInstance, SourceMode,
     MAX_FRAME_BYTES, UNANSWERED_PAGE_CODES, WRITER_RESPONSE_TIMEOUT,
@@ -364,13 +364,14 @@ pub fn refresh(
                 // A run a person stopped (UI-3e3): no failure, so not in a failure's red, its
                 // level the Runtime's still.
                 let stopped = stop_marked(event);
-                // A record of a pause's life (#480 PG-2d) says which moment after its name.
-                let event_name = match pause_moment(event) {
-                    Some(moment) => format!(
-                        "{} · {}",
-                        event_text(labels, &raw_type),
-                        pause_life_short(labels, &moment)
-                    ),
+                // A record of a pause's life (#480 PG-2d) says which moment after its name, and a
+                // record of an unavailable instance's probes or of its facts nearing their bound
+                // (Runtime 0.12.76) which notice; its name and level stay the Runtime's.
+                let short = pause_moment(event)
+                    .map(|moment| pause_life_short(labels, &moment))
+                    .or_else(|| runtime_notice(event).map(|notice| notice_short(labels, &notice)));
+                let event_name = match short {
+                    Some(short) => format!("{} · {}", event_text(labels, &raw_type), short),
                     None => event_text(labels, &raw_type),
                 };
                 RowItem {
@@ -884,6 +885,8 @@ fn detail_lines(labels: &Labels, event: &ProjectedEvent) -> Vec<FieldLine> {
     ];
     if let Some(moment) = pause_moment(event) {
         lines.extend(pause_life_lines(labels, &moment));
+    } else if let Some(notice) = runtime_notice(event) {
+        lines.extend(notice_lines(labels, &notice));
     }
     lines.extend(
         links_named(&event.links)
@@ -965,6 +968,50 @@ fn pause_life_lines(labels: &Labels, moment: &PauseMoment) -> Vec<FieldLine> {
         };
         lines.push(field(labels, "in_the_way", value, raw));
     }
+    if let Some(code) = cause {
+        let words = outcome_short(labels, code).unwrap_or_else(|| code.to_owned());
+        lines.push(field(labels, "cause_code", words, code.to_owned()));
+    }
+    lines
+}
+
+/// A record of an unavailable instance's probes or of an instance's facts nearing their bound
+/// (`runtime_notice`; Runtime 0.12.76, #489 AVAIL-1 and #498; the Runtime's lines are at
+/// [`RuntimeNotice`]), in a few words after its row's event name, which stays `runtime.failed`'s.
+/// Its level is the record's own, its outcome's category, as every row's (contract
+/// `event/envelope.rs` 586-594 at f6e2cd26): a passed probe is an info, the other three are
+/// warnings, and so in the Errors tab (contract `event/views.rs` 111).
+fn notice_short(labels: &Labels, notice: &RuntimeNotice) -> &'static str {
+    match notice {
+        RuntimeNotice::ProbeFailed { .. } => labels.notice_probe_failed,
+        RuntimeNotice::ProbePassed { .. } => labels.notice_probe_passed,
+        RuntimeNotice::AwaitingPerson { .. } => labels.notice_awaiting_person,
+        RuntimeNotice::ProbesStopped => labels.notice_probes_stopped,
+        RuntimeNotice::FactShareReached => labels.notice_fact_share_reached,
+    }
+}
+
+/// The detail's lines of such a record, the console's own words for what the Runtime recorded:
+/// its outcome in a sentence, with its code; and, when the record names one, the code its
+/// `failure_code` names, with its short words: why the instance is or was unavailable, or why a
+/// probe did not pass, `panic_caught` for the probes a panic stopped. A record of facts nearing
+/// their bound names none. Which probe, how long and when the next one is due, the record's public
+/// projection does not say (contract `outcome.rs` 931-939 and 1278-1308 at f6e2cd26).
+fn notice_lines(labels: &Labels, notice: &RuntimeNotice) -> Vec<FieldLine> {
+    let (detail, cause) = match notice {
+        RuntimeNotice::ProbeFailed { cause } => {
+            (labels.notice_probe_failed_detail, cause.as_deref())
+        }
+        RuntimeNotice::ProbePassed { cause } => {
+            (labels.notice_probe_passed_detail, cause.as_deref())
+        }
+        RuntimeNotice::AwaitingPerson { cause } => {
+            (labels.notice_awaiting_person_detail, cause.as_deref())
+        }
+        RuntimeNotice::ProbesStopped => (labels.notice_probes_stopped_detail, Some("panic_caught")),
+        RuntimeNotice::FactShareReached => (labels.notice_fact_share_reached_detail, None),
+    };
+    let mut lines = vec![field(labels, "pause_outcome", detail.to_owned(), notice.code())];
     if let Some(code) = cause {
         let words = outcome_short(labels, code).unwrap_or_else(|| code.to_owned());
         lines.push(field(labels, "cause_code", words, code.to_owned()));
