@@ -1245,8 +1245,9 @@ pub struct Labels {
     /// The right column's third tab, the instance's goal page (Workflow #455, #463 V3), and what it
     /// says instead of its lines: no Runtime answers (the lamp's words); it is being read; it
     /// cannot be read (its codes); nothing new came of it for a while; this Runtime has no such
-    /// read (its code). Always, in grey: what can be changed here, and what still needs the Lab.
-    /// Above the lines: in grey when it was read (time).
+    /// read (its code). In grey, only on a page with something to set (Workflow #455 G0): what can
+    /// be changed here, and what still needs the Lab. Above the lines: in grey when it was read
+    /// (time).
     pub goals_tab: &'static str,
     pub goals_down: &'static str,
     pub goals_reading: &'static str,
@@ -1261,8 +1262,10 @@ pub struct Labels {
     /// How the page stands, above its lines: in amber the game's goal declaration not applied; in
     /// grey not read by this Runtime; a page that lists nothing: not checked yet, in grey; the
     /// game root failing, in amber, with the file at fault or without; no schedule, in grey; in
-    /// grey nothing to set. In amber the targets stored in a newer form, or read as none; in grey
-    /// no task catalog active.
+    /// grey nothing to set; in body text, not the small grey print, instead of that, the game's
+    /// standard pack offers no goals to set here yet (Workflow #455 G0: no `goals.json`, no
+    /// targetable pool). In amber the targets stored in a newer form, or read as none; in grey no
+    /// task catalog active.
     pub goals_not_taken: &'static str,
     pub goals_not_read: &'static str,
     pub goals_not_checked_yet: &'static str,
@@ -1270,6 +1273,7 @@ pub struct Labels {
     pub goals_root_failing_unnamed: &'static str,
     pub goals_no_schedule: &'static str,
     pub goals_nothing: &'static str,
+    pub goals_none_offered: &'static str,
     pub goals_form_newer: &'static str,
     pub goals_stale: &'static str,
     pub goals_no_catalog: &'static str,
@@ -2796,6 +2800,7 @@ pub const ZH: Labels = Labels {
     goals_root_failing_unnamed: "这个游戏的标准包读不了，要先修好",
     goals_no_schedule: "这个游戏的标准包没有排程文件，这里没有可设的项",
     goals_nothing: "这个实例现在没有可设的项",
+    goals_none_offered: "这个游戏的标准包还没有提供可以在这里设的目标",
     goals_form_newer: "这个实例的资源目标是用更新的格式存的，这一版监控台读不全，需要更新版的监控台；下面不显示其他资源目标的数量",
     goals_stale: "Runtime 把这个实例存着的目标当作没有：它们是用它不再读的格式存的",
     goals_no_catalog: "Runtime 现在没有生效的任务目录：有任务目录生效以后，这里才有可设的项",
@@ -2926,7 +2931,7 @@ pub const ZH: Labels = Labels {
     goals_problem_name_unknown: "这个页面上已经没有这一项（可能刚被包的更新去掉了），等这一页重新读到后再看",
     goals_problem_holds_no_value: "这是组标题或说明，不存值",
     goals_problem_tier_not_built: "这一版 Runtime 还不用档位，不能设",
-    goals_problem_remedy_parameter: "这是补救参数，要在补救设置里改，这里只能看",
+    goals_problem_remedy_parameter: "这是补救参数，这一页改不了；请用 Lab 修改",
     goals_problem_variable_not_applying: "这一项在这个游戏里不起作用，存不了值",
     goals_problem_not_offered: "这个实例的包没有提供这一项，存不了值；要先给这个实例绑定声明它的包",
     goals_problem_value_not_json: "发出去的值不是 JSON：程序的问题，已记入日志",
@@ -4122,6 +4127,7 @@ pub const EN: Labels = Labels {
     goals_root_failing_unnamed: "This game's standard pack cannot be read and must be repaired first",
     goals_no_schedule: "This game's standard pack has no schedule file, so there is nothing to set here",
     goals_nothing: "This instance has nothing to set now",
+    goals_none_offered: "This game's standard pack offers no goals to set here yet",
     goals_form_newer: "This instance's resource goals are stored in a newer form this console cannot fully read, which needs a newer console; the other resource goals' amounts are not shown below",
     goals_stale: "The Runtime reads the goals stored for this instance as none: they were saved in a form it no longer reads",
     goals_no_catalog: "The Runtime has no active task catalog now: this page has something to set once one is in effect",
@@ -4252,7 +4258,7 @@ pub const EN: Labels = Labels {
     goals_problem_name_unknown: "This page no longer has this entry (a pack update may have just removed it); look again once the page is read anew",
     goals_problem_holds_no_value: "This is a heading or a note, which holds no value",
     goals_problem_tier_not_built: "This version of the Runtime does not use tiers yet, so none can be set",
-    goals_problem_remedy_parameter: "This is a remedy parameter, changed in the remedy settings; it is only shown here",
+    goals_problem_remedy_parameter: "This is a remedy parameter, which this page cannot change; change it with the Lab",
     goals_problem_variable_not_applying: "This does not apply in this game, so no value is stored for it",
     goals_problem_not_offered: "No pack of this instance offers this, so no value is stored for it; bind a pack that declares it to this instance first",
     goals_problem_value_not_json: "The value sent is no JSON: a fault of this program, written to the technical log",

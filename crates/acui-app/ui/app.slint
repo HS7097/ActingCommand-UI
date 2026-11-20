@@ -238,16 +238,20 @@ export struct GoalRowData {
     confirm: string,
 }
 
-// Around the Goals tab's lines, in words: what it says instead of them, red or amber when that says
-// a failure; in amber how the page stands where something is wrong (the game's goal declaration not
+// Around the Goals tab's lines, in words: whether it says what can be changed here (only on a page
+// with something to set); what it says instead of them, red or amber when that says a failure; in
+// body text, not the small grey print, that the game's standard pack offers no goals to set here
+// yet; in amber how the page stands where something is wrong (the game's goal declaration not
 // applied, the game root failing, targets stored in a form this console cannot read); when it was
 // read; in grey how it stands otherwise (not checked yet, no schedule, nothing to set); under the
 // lines, in grey, the old form's note, and whether the resource goals stored hold and until when,
 // amber once they expired.
 export struct GoalListData {
+    controls: bool,
     instead: string,
     instead-failed: bool,
     instead-warning: bool,
+    plain: string,
     notice: string,
     read-at: string,
     said: string,
@@ -2705,11 +2709,12 @@ component GoalLineView {
 }
 
 // The account's Goals tab on the workbench (Workflow #455, #463 V3), under its own tab in the right
-// column. Always, in grey, what can be changed here and what still needs the Lab. What it says
-// instead of its lines; else above them in amber how the page stands where something is wrong,
-// when it was read, and in grey how it stands otherwise; the lines, each press naming its line by
-// its key (G2); under them, in grey, the old form's note, and whether the resource goals stored
-// hold and until when. All of it wraps; the whole card scrolls when it is too short for it.
+// column. In grey, what can be changed here and what still needs the Lab, only on a page with
+// something to set (G0). What it says instead of its lines; else above them that the game's
+// standard pack offers no goals to set here yet, in amber how the page stands where something is
+// wrong, when it was read, and in grey how it stands otherwise; the lines, each press naming its
+// line by its key (G2); under them, in grey, the old form's note, and whether the resource goals
+// stored hold and until when. All of it wraps; the whole card scrolls when it is too short for it.
 component GoalList {
     in property <GoalListData> data;
     in property <[GoalRowData]> rows;
@@ -2723,7 +2728,7 @@ component GoalList {
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 6px;
-        Text {
+        if root.data.controls: Text {
             text: Strings.goals-later;
             font-size: Scale.grey-font;
             color: Look.text-caption;
@@ -2735,6 +2740,9 @@ component GoalList {
             text: root.data.instead;
             failed: root.data.instead-failed;
             warning: root.data.instead-warning;
+        }
+        if root.data.plain != "": Notice {
+            text: root.data.plain;
         }
         if root.data.notice != "": Notice {
             text: root.data.notice;
