@@ -16,11 +16,11 @@
 //! an entry name's form (`goal_name`, `[a-z0-9][a-z0-9_]*` of at most 64 bytes, the only names
 //! `EditGoal` takes) are cleared, but for a name two lines share (below). `integer` and `ordered`
 //! variables (neither set nor put back to their default: no control of them here could set one
-//! again, G3's), tiers (`tier_not_built`) and
-//! remedy parameters are only shown. One press is one `EditGoal`, of one name, naming the page's
-//! version (`GoalView.version`) as its `expected_version`. Nothing of a page is pressed while the
-//! stored record is of the old form (`v1`), against which the Runtime refuses every write
-//! `record_unreadable` ([`GoalsPage::writable`]).
+//! again, G3's) and tiers (`tier_not_built`) are only shown; the bound packages' remedy parameters
+//! (`GoalView.remedy_parameters`) are not read here at all. One press is one `EditGoal`, of one
+//! name, naming the page's version (`GoalView.version`) as its `expected_version`. Nothing of a
+//! page is pressed while the stored record is of the old form (`v1`), against which the Runtime
+//! refuses every write `record_unreadable` ([`GoalsPage::writable`]).
 //!
 //! A press asks first only where what it loses cannot be set back from here ([`Loses`]): a value no
 //! run reads (no longer offered, or of a placement not offered); a value stored that the next run
@@ -59,7 +59,7 @@
 //! alone ([`answered`]): a version conflict (`current_version`), a Runtime without the write, the
 //! goal refused with its `goal_problem` word and the values that locate it, or another refusal.
 //!
-//! What the page says, all at the pinned Runtime (v0.12.74, 1067dfaf;
+//! What the page says, all at the pinned Runtime (0.12.75, 945727d4;
 //! `contracts/runtime-interface.md`, "Goal request kinds";
 //! `crates/actingcommand-contract/src/runtime/goals.rs`):
 //!
@@ -85,7 +85,18 @@
 //!   text, `:1017-1038`). A placement no bound package declares is `not_offered`.
 //! - `orphans`, each stored value no entry shows any more; `other_targets`, the ids of the stored
 //!   targets on no declared resource entry's pool, whose targets are read from `targets.active`;
-//!   and `targets`, the whole `ResourceTargetView`, whose `not_targetable` pools close the page.
+//!   and `targets`, the whole `ResourceTargetView`, whose `not_targetable` pools close the page
+//!   (Workflow #455 G0: not those out of the instance's scope, and none on a page with nothing to
+//!   set, [`Group::NotTargetable`]).
+//!
+//! A page that lists nothing to set (no entry, no value no longer offered, no other target) of a
+//! game whose root has no `goals.json` (`absent`), with no pool targetable either
+//! (`targets.targetable` empty), says that the game's standard pack offers no goals to set here
+//! yet ([`PageState::Listed`]'s `none_offered`), as Workflow #455 G0 rules. A pool targetable may
+//! take an other target `{resource, at_least}` (945727d4
+//! `crates/runtime-host/src/goals.rs:288-289`, `:334-343`, `:540-546`), but for one without the
+//! pack's step or importance, which is refused `pool_unvalued` (`:547-549`). Only a page with
+//! something to set says what can be changed here ([`GoalsPage::something_to_set`]).
 //!
 //! Texts are written per locale; the contract gives no fallback, so the console's own is taken
 //! ([`in_language`], the one the display titles of `pack-catalog.json` go by, `ui.json`'s before
@@ -107,7 +118,7 @@
 //! document; `v3`, the record `EditGoal` writes, each target with a lifetime of its own or none and
 //! the document with none (`contracts/resource-targets.md:1054-1059`); `v1`, an agent's old form,
 //! read only, which no `EditGoal` writes against (`record_unreadable`, "neither a v2 nor a v3
-//! record", `contracts/outcome-codes/catalog.json:11095-11097`); any other, a form newer than this
+//! record", `contracts/outcome-codes/catalog.json:11273-11275`); any other, a form newer than this
 //! console, whose targets it does not interpret. A
 //! target lapsed (the document expired, or its own lifetime is before the view's time) counts no
 //! more, so it is never shown as met.
@@ -230,10 +241,17 @@ impl GoalsPage {
     /// old form. One that does not list (`not_checked_yet`, `root_failing`, `no_schedule`) refuses
     /// every `EditGoal` with its word; against a `v1` record every one is refused
     /// `record_unreadable`, the record being "neither a v2 nor a v3 record the readers read"
-    /// (`contracts/outcome-codes/catalog.json:11095-11097`), so that page only shows.
+    /// (`contracts/outcome-codes/catalog.json:11273-11275`), so that page only shows.
     pub fn writable(&self) -> bool {
         let old = matches!(&self.stored, Stored::Document(Document { form: Form::Old, .. }));
         matches!(self.state, PageState::Listed { .. }) && !old
+    }
+
+    /// Whether the page has something to set: it lists, and lists an entry, a value no longer
+    /// offered or an other target (not `nothing`). Only then does the tab say what can be changed
+    /// here and what still needs the Lab.
+    pub fn something_to_set(&self) -> bool {
+        matches!(self.state, PageState::Listed { nothing: false, .. })
     }
 
     /// The line of `key` ([`GoalLine::key`]).
@@ -246,8 +264,11 @@ impl GoalsPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageState {
     /// It does, and how the game's `goals.json` stands. `nothing`: it lists no entry, no value
-    /// no longer offered and no other target, so this instance has nothing to set now.
-    Listed { declaration: Declaration, nothing: bool },
+    /// no longer offered and no other target, so this instance has nothing to set now (and no
+    /// line at all). `none_offered`: besides, the game has no `goals.json` (`absent`) and no pool
+    /// is targetable, so the game's standard pack offers no goals to set here yet; said instead
+    /// of `nothing`'s words.
+    Listed { declaration: Declaration, nothing: bool, none_offered: bool },
     /// `not_checked_yet`: not in the Runtime's memory yet; it passes by itself.
     NotCheckedYet,
     /// `root_failing`: the game root cannot be read and must be repaired; the file it failed on,
@@ -289,7 +310,8 @@ pub enum GoalLine {
     Group(Group),
     Orphan(OrphanLine),
     OtherTarget(OtherTarget),
-    /// A pool no goal can name, and why: neither a declared entry's nor an other target's.
+    /// A pool no goal can name, and why: neither a declared entry's nor an other target's, nor one
+    /// out of the instance's scope.
     Closed { pool: String, why: Closed },
 }
 
@@ -322,7 +344,8 @@ pub enum Group {
     NoLongerOffered,
     /// Stored targets on no declared resource entry's pool (`other_targets`).
     OtherTargets,
-    /// Pools no goal can name (`targets.not_targetable`).
+    /// Pools no goal can name (`targets.not_targetable`), but those out of the instance's scope;
+    /// never on a page with nothing to set.
     NotTargetable,
 }
 
@@ -617,7 +640,7 @@ pub enum VariableState {
 }
 
 /// Why a run does not read a variable's value: the `variable_problem` vocabulary (Runtime
-/// `contracts/outcome-codes/catalog.json:10518-10578`), one word each.
+/// `contracts/outcome-codes/catalog.json:10696-10756`), one word each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unapplied {
     NotAnOption,
@@ -963,9 +986,20 @@ pub fn page(view: &GoalView, tongue: Tongue, pack_title: &dyn Fn(&str) -> Option
 }
 
 fn listed(view: &GoalView, declaration: Declaration) -> PageState {
-    let nothing =
-        view.entries.is_empty() && view.orphans.is_empty() && view.other_targets.is_empty();
-    PageState::Listed { declaration, nothing }
+    let nothing = nothing_to_set(view);
+    // Workflow #455 G0's rule: no `goals.json`, and `targets.targetable` empty. A pool targetable
+    // may take an other target `{resource, at_least}` (945727d4
+    // `crates/runtime-host/src/goals.rs:288-289`, `:334-343`, `:540-546`), but for one without the
+    // pack's step or importance, which is refused `pool_unvalued` (`:547-549`).
+    let none_offered = nothing
+        && view.targets.targetable.is_empty()
+        && matches!(declaration, Declaration::Absent);
+    PageState::Listed { declaration, nothing, none_offered }
+}
+
+/// Whether `view` lists nothing to set: no entry, no value no longer offered and no other target.
+fn nothing_to_set(view: &GoalView) -> bool {
+    view.entries.is_empty() && view.orphans.is_empty() && view.other_targets.is_empty()
 }
 
 /// What the lines read of the resource target view.
@@ -1067,6 +1101,8 @@ fn reading_beside(reading: Option<Reading>, goal: Option<&StoredGoal>) -> Option
 
 /// The lines of a page that lists: its entries in their order, each group of the variables no
 /// entry places, then the three groups that close it, each under its title while it has a line.
+/// The pools no goal can name close only a page with something to set, and never with one out of
+/// the instance's scope (Workflow #455 G0).
 fn lines(
     view: &GoalView,
     targets: &Targets<'_>,
@@ -1128,16 +1164,32 @@ fn lines(
     named.extend(
         others.iter().filter_map(|other| other.target.as_ref()).map(|goal| goal.pool.as_str()),
     );
-    let closed: Vec<GoalLine> = targets
-        .view
-        .not_targetable
-        .iter()
-        .filter(|closed| !named.contains(closed.resource.as_str()))
-        .map(|closed| GoalLine::Closed {
-            pool: closed.resource.clone(),
-            why: closed_of(closed.reason),
-        })
-        .collect();
+    // Workflow #455 G0. The Runtime judges every pool of the active catalog for the instance, and
+    // each one this instance cannot target goes in `not_targetable`, other games' pools too
+    // (945727d4 `crates/policy/src/resource_targets.rs:1790-1817`). A pool out of the instance's
+    // scope (`:834-835`) is never one this instance sets a goal on (`EditGoal` refuses a pool not
+    // targetable, `crates/runtime-host/src/goals.rs:540-546`), so it is not listed. Whether a
+    // fact reads a pool's amount is judged before its scope
+    // (`crates/policy/src/resource_targets.rs:828-835`), so a pool of another game that nothing
+    // reads is `resource_not_observable` and stays listed: a pool no goal can name carries only
+    // its id and its reason, not its game
+    // (`crates/actingcommand-contract/src/resource_targets.rs:179-182`). A page with nothing to
+    // set lists none of them, the game's own included: it would be a table of pool ids alone.
+    let closed: Vec<GoalLine> = if nothing_to_set(view) {
+        Vec::new()
+    } else {
+        targets
+            .view
+            .not_targetable
+            .iter()
+            .filter(|closed| closed.reason != ResourceTargetsRejectionReason::ResourceOutOfScope)
+            .filter(|closed| !named.contains(closed.resource.as_str()))
+            .map(|closed| GoalLine::Closed {
+                pool: closed.resource.clone(),
+                why: closed_of(closed.reason),
+            })
+            .collect()
+    };
     if !others.is_empty() {
         lines.push(GoalLine::Group(Group::OtherTargets));
         lines.extend(others.into_iter().map(GoalLine::OtherTarget));
@@ -1857,7 +1909,7 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
 }
 
 /// Why the Runtime refused a write `goal_value_invalid`: the `goal_problem` vocabulary (Runtime
-/// `contracts/outcome-codes/catalog.json:11033-11111`), one word each.
+/// `contracts/outcome-codes/catalog.json:11211-11289`), one word each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteProblem {
     NameUnknown,
@@ -2492,8 +2544,13 @@ mod tests {
         let english = read(&view);
         assert_eq!(
             english.state,
-            PageState::Listed { declaration: Declaration::Accepted, nothing: false }
+            PageState::Listed {
+                declaration: Declaration::Accepted,
+                nothing: false,
+                none_offered: false,
+            }
         );
+        assert!(english.something_to_set());
         assert_eq!(
             english.lines,
             vec![
@@ -2617,6 +2674,7 @@ mod tests {
             assert_eq!(page.state, expected);
             assert!(page.lines.is_empty(), "{:?}", page.lines);
             assert!(!page.writable());
+            assert!(!page.something_to_set());
         }
     }
 
@@ -2639,11 +2697,15 @@ mod tests {
             (state("accepted"), Declaration::Accepted),
         ] {
             let page = read(&view(declaration, entries.clone(), json!({}), no_targets()));
-            assert_eq!(page.state, PageState::Listed { declaration: expected, nothing: false });
+            assert_eq!(
+                page.state,
+                PageState::Listed { declaration: expected, nothing: false, none_offered: false }
+            );
             assert_eq!(
                 page.lines,
                 vec![GoalLine::Package(None), switch_line("extra", "Also the extra")]
             );
+            assert!(page.something_to_set());
         }
     }
 
@@ -2652,19 +2714,143 @@ mod tests {
         let page = read(&view(state("accepted"), json!([]), json!({}), no_targets()));
         assert_eq!(
             page.state,
-            PageState::Listed { declaration: Declaration::Accepted, nothing: true }
+            PageState::Listed {
+                declaration: Declaration::Accepted,
+                nothing: true,
+                none_offered: false,
+            }
         );
         assert!(page.lines.is_empty(), "{:?}", page.lines);
         assert_eq!(page.stored, Stored::None);
-        // Pools no goal can name still close it: nothing is there to set all the same.
-        let closed = targets(json!([]), json!([closed_pool("pool.gems", "unmapped_task")]), None);
+        assert!(!page.something_to_set());
+        // G0: pools no goal can name no longer close it, the game's own (`unmapped_task`) as little
+        // as another game's: nothing is there to set all the same, and the page says only that.
+        let closed = targets(
+            json!([]),
+            json!([
+                closed_pool("pool.gems", "unmapped_task"),
+                closed_pool("pool.keys", "resource_not_observable"),
+                closed_pool("pool.relics", "resource_out_of_scope"),
+            ]),
+            None,
+        );
         let page = read(&view(state("absent"), json!([]), json!({}), closed));
-        assert_eq!(page.state, PageState::Listed { declaration: Declaration::Absent, nothing: true });
+        assert_eq!(
+            page.state,
+            PageState::Listed { declaration: Declaration::Absent, nothing: true, none_offered: true }
+        );
+        assert!(page.lines.is_empty(), "{:?}", page.lines);
+        assert!(!page.something_to_set());
+    }
+
+    /// Workflow #455 G0: "this game's standard pack offers no goals to set here yet" only while
+    /// all three hold: the page lists nothing to set, no pool is targetable, and the game has no
+    /// `goals.json` (`absent`). Without any one of them the page stands as before.
+    #[test]
+    fn a_pack_offering_no_goals_is_said_only_when_all_three_hold() {
+        let closed = json!([closed_pool("pool.gems", "unmapped_task")]);
+        let no_pool = || targets(json!([]), closed.clone(), None);
+        let stands = |declaration: Declaration, nothing: bool, none_offered: bool| {
+            PageState::Listed { declaration, nothing, none_offered }
+        };
+        let page = read(&view(state("absent"), json!([]), json!({}), no_pool()));
+        assert_eq!(page.state, stands(Declaration::Absent, true, true));
+        assert!(page.lines.is_empty(), "{:?}", page.lines);
+        assert!(!page.something_to_set());
+
+        // Something to set: an entry, a value no longer offered, an other target.
+        let entry = json!([unplaced_switch("extra", "Also the extra", &["pack.a"])]);
+        let page = read(&view(state("absent"), entry, json!({}), no_pool()));
+        assert_eq!(page.state, stands(Declaration::Absent, false, false));
+        assert!(page.something_to_set());
+        for rest in [
+            json!({"orphans": [{"name": "old_route", "value_json": "\"a\""}]}),
+            json!({"other_targets": ["wood"]}),
+        ] {
+            let page = read(&view(state("absent"), json!([]), rest.clone(), no_pool()));
+            assert_eq!(page.state, stands(Declaration::Absent, false, false), "{rest}");
+            assert!(page.something_to_set(), "{rest}");
+        }
+
+        // A targetable pool: still nothing on the page, but an other target could be set on it.
+        // Its pools no goal can name are not listed either.
+        let open = targets(json!([pool("pool.wood", true, true, None)]), closed.clone(), None);
+        let page = read(&view(state("absent"), json!([]), json!({}), open));
+        assert_eq!(page.state, stands(Declaration::Absent, true, false));
+        assert!(page.lines.is_empty(), "{:?}", page.lines);
+        assert!(!page.something_to_set());
+
+        // Another declaration's state: nothing to set, as before.
+        for (declaration, expected) in [
+            (state("accepted"), Declaration::Accepted),
+            (state("refused"), Declaration::NotTaken),
+            (state("unreadable"), Declaration::NotTaken),
+            (state("not_read"), Declaration::NotRead),
+        ] {
+            let page = read(&view(declaration, json!([]), json!({}), no_pool()));
+            assert_eq!(page.state, stands(expected, true, false));
+            assert!(page.lines.is_empty(), "{:?}", page.lines);
+        }
+    }
+
+    /// Workflow #455 G0: a pool out of the instance's scope (`resource_out_of_scope`) is never
+    /// listed among the pools no goal can name, even on a page with something to set; a pool
+    /// nothing reads (`resource_not_observable`, another game's or not) and the game's own pool no
+    /// task produces still are. A resource entry on a pool out of scope says so on its own line.
+    #[test]
+    fn pools_out_of_scope_are_never_listed_and_the_others_still_are() {
+        let closed = targets(
+            json!([pool("pool.wood", true, true, Some(3))]),
+            json!([
+                closed_pool("pool.ap", "unmapped_task"),
+                closed_pool("pool.keys", "resource_out_of_scope"),
+                closed_pool("pool.gems", "resource_not_observable"),
+                closed_pool("pool.coins", "resource_out_of_scope"),
+            ]),
+            None,
+        );
+        let entry = json!([unplaced_switch("extra", "Also the extra", &["pack.a"])]);
+        for declaration in [state("absent"), state("accepted")] {
+            let page = read(&view(declaration, entry.clone(), json!({}), closed.clone()));
+            assert!(page.something_to_set());
+            assert_eq!(
+                page.lines,
+                vec![
+                    GoalLine::Package(None),
+                    switch_line("extra", "Also the extra"),
+                    GoalLine::Group(Group::NotTargetable),
+                    GoalLine::Closed { pool: "pool.ap".to_owned(), why: Closed::UnmappedTask },
+                    GoalLine::Closed { pool: "pool.gems".to_owned(), why: Closed::NotObservable },
+                ]
+            );
+        }
+        // Only pools out of scope: the group has no line, so no title either.
+        let out = targets(json!([]), json!([closed_pool("pool.keys", "resource_out_of_scope")]), None);
+        let page = read(&view(state("accepted"), entry, json!({}), out));
+        assert_eq!(
+            page.lines,
+            vec![GoalLine::Package(None), switch_line("extra", "Also the extra")]
+        );
+        // A line that names a pool out of scope still says why on that line, and the pool still
+        // has no line of its own.
+        let keys = json!([resource("keys", "pool.keys", None, None)]);
+        let page = read(&view(state("accepted"), keys, json!({}), closed));
         assert_eq!(
             page.lines,
             vec![
+                GoalLine::Resource(ResourceLine {
+                    name: "keys".to_owned(),
+                    title: Some("keys".to_owned()),
+                    pool: PoolState::Closed(Closed::OutOfScope),
+                    reading: None,
+                    goal: None,
+                    set: None,
+                    elsewhere: None,
+                    same_name: None,
+                }),
                 GoalLine::Group(Group::NotTargetable),
-                GoalLine::Closed { pool: "pool.gems".to_owned(), why: Closed::UnmappedTask },
+                GoalLine::Closed { pool: "pool.ap".to_owned(), why: Closed::UnmappedTask },
+                GoalLine::Closed { pool: "pool.gems".to_owned(), why: Closed::NotObservable },
             ]
         );
     }
@@ -3004,7 +3190,7 @@ mod tests {
                     json!([
                         target("gold", "pool.gold", json!(50)),
                         target("wood", "pool.wood", json!(80)),
-                        {"id": "odd", "resource": "pool.keys", "condition": {"kind": "at_most", "amount": 5}},
+                        {"id": "odd", "resource": "pool.gems", "condition": {"kind": "at_most", "amount": 5}},
                     ]),
                     json!([computed("wood", "pool.wood", 10, 70)]),
                     false,
@@ -3069,9 +3255,9 @@ mod tests {
                     by_name: true,
                     shared: false,
                 }),
+                // G0: a pool out of the instance's scope (`pool.keys`) is not listed.
                 GoalLine::Group(Group::NotTargetable),
                 GoalLine::Closed { pool: "pool.gems".to_owned(), why: Closed::NotObservable },
-                GoalLine::Closed { pool: "pool.keys".to_owned(), why: Closed::OutOfScope },
                 GoalLine::Closed {
                     pool: "pool.relics".to_owned(),
                     why: Closed::Other("unknown_resource".to_owned()),
@@ -4612,7 +4798,11 @@ mod tests {
         let old = of(document(V1));
         assert_eq!(
             old.state,
-            PageState::Listed { declaration: Declaration::Accepted, nothing: false }
+            PageState::Listed {
+                declaration: Declaration::Accepted,
+                nothing: false,
+                none_offered: false,
+            }
         );
         assert!(matches!(&old.stored, Stored::Document(Document { form: Form::Old, .. })));
         assert!(!old.writable());

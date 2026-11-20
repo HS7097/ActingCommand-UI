@@ -3073,14 +3073,16 @@ fn failure_codes_text(failure: &ClientFailure) -> String {
     codes.join(", ")
 }
 
-/// One read page of the Goals tab. Above its lines: how it stands (in amber the game's goal
-/// declaration not applied, the game root failing, targets stored in a newer form or read as none;
-/// in grey not read by this Runtime, not checked yet, no schedule, nothing to set, no task catalog),
-/// and when it was read. Its lines, but on a page that lists nothing. Under them, while the page
-/// lists: the old form's note, and the stored targets' validity (for a per-target record only
-/// once every target expired, each target's own being on its line; "none set" only while the page
-/// has a resource line). In amber, once, a Runtime that takes no writes of goals: the page only
-/// shows.
+/// One read page of the Goals tab. What can be changed here, only on a page with something to set
+/// (Workflow #455 G0, [`GoalsPage::something_to_set`]). Above its lines: how it stands (in body
+/// text, not the small grey print, that the game's standard pack offers no goals to set here yet,
+/// instead of "nothing to set"; in amber the game's goal declaration not applied, the game root
+/// failing, targets stored in a newer form or read as none; in grey not read by this Runtime, not
+/// checked yet, no schedule, nothing to set, no task catalog), and when it was read. Its lines,
+/// but on a page that lists nothing. Under them, while the page lists: the old form's note, and
+/// the stored targets' validity (for a per-target record only once every target expired, each
+/// target's own being on its line; "none set" only while the page has a resource line). In amber,
+/// once, a Runtime that takes no writes of goals: the page only shows.
 fn goals_page(
     ui: &Ui,
     labels: &Labels,
@@ -3093,16 +3095,19 @@ fn goals_page(
         Stored::None => None,
     };
     let form = document.map(|document| &document.form);
+    let mut plain = SharedString::new();
     let mut notice: Vec<String> = Vec::new();
     let mut said: Vec<String> = Vec::new();
     let listed = match &page.state {
-        PageState::Listed { declaration, nothing } => {
+        PageState::Listed { declaration, nothing, none_offered } => {
             match declaration {
                 Declaration::NotTaken => notice.push(labels.goals_not_taken.to_owned()),
                 Declaration::NotRead => said.push(labels.goals_not_read.to_owned()),
                 Declaration::Accepted | Declaration::Absent => {}
             }
-            if *nothing {
+            if *none_offered {
+                plain = labels.goals_none_offered.into();
+            } else if *nothing {
                 said.push(labels.goals_nothing.to_owned());
             }
             true
@@ -3163,9 +3168,11 @@ fn goals_page(
         },
     };
     let data = GoalListData {
+        controls: page.something_to_set(),
         instead: SharedString::new(),
         instead_failed: false,
         instead_warning: false,
+        plain,
         notice: notice.join("\n").into(),
         read_at: fill(labels.goals_read_at, &[&format_minute(page.evaluated_at_ms)]).into(),
         said: said.join("\n").into(),

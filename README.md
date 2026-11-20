@@ -1071,11 +1071,12 @@ withdrawn here. Once a package turned off reaches the deferral step, the card an
 is turned off".
 
 **Goals** (#455, the goal page) is that instance's goal page, drawn from its `GoalView` alone (#463 V3,
-Runtime 0.12.61), the very read the Lab's `goals` answers, and some of it can be changed there (below). A
-line at its top says what can be changed there (resource goal amounts, switches and choices, each put back
-to its default or cleared, and values no longer offered and other resource goals cleared) and that number
-and order settings, putting them back to their defaults included, need the Lab (command line or MCP) until
-the next version. Its
+Runtime 0.12.61), the very read the Lab's `goals` answers, and some of it can be changed there (below). On
+a page with something to set (an entry, a value no longer offered or an other resource goal), a line at its
+top says what can be changed there (resource goal amounts, switches and choices, each put back to its
+default or cleared, and values no longer offered and other resource goals cleared) and that number and
+order settings, putting them back to their defaults included, need the Lab (command line or MCP) until the
+next version; any other page leaves that line out. Its
 lines go in the Runtime's order: first the entries of the game's `goals.json`, then each package variable
 no entry places, in groups under the display name of its first package (the `pack-catalog.json` title the
 task names come from, `ui.json`'s before Runtime 0.12.68; every variable whose package has none goes in one
@@ -1109,16 +1110,20 @@ of once); a variable that does not apply in the game says "This does not apply i
 no root check judges now (`root_unchecked`) "Whether this applies in this game is not known now: …"; a
 placement no pack of the instance offers is greyed with "No pack of this instance offers this"; an
 `ordered` value applied in part lists in grey the items skipped. The packages' remedy parameters, which
-`remedy set` writes, are not shown.
+`remedy set` writes, are not on this page: it does not read them from the `GoalView`.
 
 Three groups close the page. **No longer offered**: each value stored under a name nothing offers any more,
 in amber, with who set it. **Other resource goals**: each stored target on no declared resource's pool, by
 its pool's id, with its amount and how far it is as the stored record holds them; one that does not read
 (no `at_least` target with a resource and a whole amount) is named by its target id and says so in amber,
 and the technical log hears of it once. **Resources no goal can be set on**: greyed, with why, "no task produces it" (`unmapped_task`),
-"nothing reads its amount" (`resource_not_observable`), "it is outside this instance's scope"
-(`resource_out_of_scope`), any other reason by its code; a pool a line above names says why on that line
-instead.
+"nothing reads its amount" (`resource_not_observable`), any other reason by its code; a pool a line above
+names says why on that line instead (there also "it is outside this instance's scope",
+`resource_out_of_scope`). A pool outside the instance's scope is never listed in this group: the Runtime
+judges every pool of the active task catalog for the instance, other games' pools included, and no goal of
+this instance can name one of those. Another game's pool that nothing reads is `resource_not_observable`
+for the Runtime, which does not say which game a pool is of, so it stays listed. The group is left out
+whole on a page with nothing else to set, the game's own pools included.
 
 Above the lines: in amber "The standard pack's goal declaration is not applied" when the game's
 `goals.json` is refused or cannot be read (its packs' variables are still listed), in grey that this
@@ -1127,7 +1132,9 @@ nothing on says only why: in grey "The Runtime has not checked this game's stand
 again by itself), or, while the Runtime has no active task catalog (which does not pass by itself), that it
 has none; in amber that the game's standard pack cannot be read and must be repaired first (with the file
 at fault); in grey that it has no schedule file, so nothing is there to set. A page with no entry, no value no
-longer offered and no other target says "This instance has nothing to set now". Under the lines: for a v2
+longer offered and no other target says "This instance has nothing to set now"; when, besides, the game has
+no `goals.json` and no resource takes a goal of the instance, it says instead, in body text rather than the
+small grey print, "This game's standard pack offers no goals to set here yet". Under the lines: for a v2
 record, "These resource goals are valid until yyyy-mm-dd hh:mm" (local time; the Runtime's document holds
 for at most a year), or in amber "These resource goals expired at … and no longer count" once it has
 passed; a v3 record, what goals set by name are stored in, has no validity of its own: a goal's own
@@ -1184,7 +1191,7 @@ another other resource goal; when the game's goal declaration has a resource ent
 of one name, the Runtime's `goal_name_conflict`, both lines are listed, each told apart by its kind) has
 no **Clear** or **Back to Default**, and says in grey "Another line on this page has the same name, so it
 cannot be cleared reliably here; change it with the Lab"; a resource entry's own **Clear** stays (the
-Runtime takes its pool's goal first). Tiers and remedy parameters are only shown. Every control is off
+Runtime takes its pool's goal first). Tiers are only shown; remedy parameters are not on this page. Every control is off
 while the page lists nothing (`not_checked_yet`, `root_failing`, `no_schedule`), while the record stored
 is of the old form (v1), while a write of the instance is out, and after an answer until the page read
 again has come.
