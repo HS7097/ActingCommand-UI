@@ -12,7 +12,9 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::device::DeviceOp;
-use acui_source::workbench::goals::{self, GoalAct, GoalsAnswer, GoalsPage, GoalsRead};
+use acui_source::workbench::goals::{
+    self, GoalAct, GoalLine, GoalsAnswer, GoalsPage, GoalsRead, OrderEdit, OrderRule, ValueControl,
+};
 use acui_source::workbench::pack::{self, PacksAnswer, PacksRead};
 use acui_source::workbench::{
     ActivityKind, ConfigRead, ExplainRead, FenceFact, InstanceLive, LiveRead, LiveSnapshot,
@@ -22,7 +24,7 @@ use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, AccountEntry, Actions, ActionsView, PresetView, RulesView};
 use super::card::{self, CardView, Down, Schedule};
-use super::goals::{GoalPressed, GoalRequest, GoalsView, WriteTarget, Writes};
+use super::goals::{GoalPressed, GoalRequest, GoalsView, OrderDraft, WriteTarget, Writes};
 use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
 };
@@ -1242,8 +1244,9 @@ impl Model {
     /// The question on the Goals tab confirmed, shown in `language`: the account and the request to
     /// send, none when there is none to send now (`Writes::confirm`). Its press is reckoned again
     /// here on the newest page read, made as a press reads it, of the same line: none while that
-    /// page does not show or takes no writes, else what `goals::press` says of it now, with that
-    /// page's version.
+    /// page does not show or takes no writes, nor of a list's save whose draft was begun on other
+    /// keys than the next run reads now (changed elsewhere since, `goal_order_draft`), else what
+    /// `goals::press` says of it now, with that page's version.
     pub fn goal_confirmed(&mut self, language: Language) -> Option<(String, GoalRequest)> {
         let alias = self.goals_wanted()?;
         let epoch = self.online_epoch()?.to_owned();
@@ -1252,7 +1255,20 @@ impl Model {
                 return None;
             }
             let (key, act) = self.goal_writes.question(&alias)?;
-            let press = goals::press(page.line(key)?, act)?;
+            let line = page.line(key)?;
+            if matches!(act, GoalAct::Order(_)) {
+                let fresh = match (line, self.goal_writes.order(&alias, key)) {
+                    (GoalLine::Variable(variable), Some(draft)) => matches!(
+                        &variable.control,
+                        ValueControl::Ordered { chosen, .. } if *chosen == draft.from
+                    ),
+                    _ => false,
+                };
+                if !fresh {
+                    return None;
+                }
+            }
+            let press = goals::press(line, act)?;
             Some((press, page.version))
         });
         let request = self.goal_writes.confirm(&alias, &epoch, again)?;
@@ -1266,15 +1282,97 @@ impl Model {
         }
     }
 
-    /// The amount typed on the resource line `key` of the Goals tab.
+    /// The amount or number typed on the resource or `integer` line `key` of the Goals tab.
     pub fn goal_amount(&self, key: &str) -> String {
         self.goals_wanted().map_or_else(String::new, |alias| self.goal_writes.amount(&alias, key))
     }
 
-    /// The amount on the resource line `key` of the Goals tab typed as `text`.
+    /// The amount or number on the resource or `integer` line `key` of the Goals tab typed as
+    /// `text`.
     pub fn goal_amount_edited(&mut self, key: &str, text: &str) {
         if let Some(alias) = self.goals_wanted() {
             self.goal_writes.amount_edited(&alias, key, text);
+        }
+    }
+
+    /// The `ordered` line `key` of the page the Goals tab shows now, shown in `language`, while
+    /// its controls can be pressed (`Writes::now`) and it does not ask to confirm a press: the
+    /// account, its rule and the keys the next run reads, and its draft. None of a line that is no
+    /// such list, or no list a value can be set on now.
+    fn goal_order_line(
+        &self,
+        key: &str,
+        language: Language,
+    ) -> Option<(String, OrderRule, Vec<String>, Option<OrderDraft>)> {
+        let (alias, epoch, page) = self.goals_page_now(Instant::now(), language)?;
+        let now = self.goal_writes.now(&alias, &epoch, page.writable());
+        let asking = now.asking.as_ref().is_some_and(|(asking, _)| asking == key);
+        if !now.enabled || asking {
+            return None;
+        }
+        let Some(GoalLine::Variable(line)) = page.line(key) else {
+            return None;
+        };
+        if !line.settable() {
+            return None;
+        }
+        let ValueControl::Ordered { rule, chosen } = &line.control else {
+            return None;
+        };
+        let draft = self.goal_writes.order(&alias, key);
+        Some((alias, rule.clone(), chosen.clone(), draft))
+    }
+
+    /// One edit of the draft of the `ordered` line `key` of the Goals tab (Workflow #455 G3), shown
+    /// in `language`: whether it was made. Only while the line takes a value now and does not ask
+    /// to confirm a press (`goal_order_line`), and only of a draft not begun on other keys than
+    /// the next run reads now (changed elsewhere since), which is only discarded. A draft whose
+    /// keys are those the next run reads is none: the edit starts from those keys, and a draft
+    /// that comes back to them is let go.
+    pub fn goal_order_edit(&mut self, key: &str, edit: &OrderEdit, language: Language) -> bool {
+        let Some((alias, rule, chosen, draft)) = self.goal_order_line(key, language) else {
+            return false;
+        };
+        let start = match draft {
+            Some(draft) if draft.keys == chosen => chosen.clone(),
+            Some(draft) if draft.from != chosen => return false,
+            Some(draft) => draft.keys,
+            None => chosen.clone(),
+        };
+        let Some(keys) = goals::order_edit(&rule, &start, edit) else {
+            return false;
+        };
+        let next = (keys != chosen).then(|| OrderDraft { from: chosen, keys });
+        self.goal_writes.set_order(&alias, key, next);
+        true
+    }
+
+    /// The draft of the `ordered` line `key` of the Goals tab discarded, shown in `language`,
+    /// stale or not: whether there was one. Not while the line asks to confirm a press (a save,
+    /// whose question holds the draft it asked about and is reckoned again by it as it is
+    /// confirmed, or a back to the default).
+    pub fn goal_order_discard(&mut self, key: &str, language: Language) -> bool {
+        let Some((alias, _, _, draft)) = self.goal_order_line(key, language) else {
+            return false;
+        };
+        self.goal_writes.set_order(&alias, key, None);
+        draft.is_some()
+    }
+
+    /// The keys of the draft of the `ordered` line `key` of the Goals tab to save, shown in
+    /// `language`: none without a draft, of one begun on other keys than the next run reads now,
+    /// or of one that is those keys.
+    pub fn goal_order_draft(&self, key: &str, language: Language) -> Option<Vec<String>> {
+        let (_, _, chosen, draft) = self.goal_order_line(key, language)?;
+        let draft = draft?;
+        (draft.from == chosen && draft.keys != chosen).then_some(draft.keys)
+    }
+
+    /// The search field of the `ordered` line `key` of the Goals tab typed as `text`: it writes
+    /// nothing, so it is kept whatever the page's writes are doing.
+    pub fn goal_searched(&mut self, key: &str, text: &str) {
+        if let Some(alias) = self.goals_wanted() {
+            self.goal_writes.searched(&alias, key, text);
         }
     }
 

@@ -7,25 +7,39 @@
 //!
 //! A press writes what `acui_source::workbench::goals::press` says, the one place that decides it,
 //! of the newest page read and only while that shows and takes writes (not of a record in the old
-//! form, `GoalsPage::writable`): a resource entry's amount (typed, then "set"), a `choice`'s
-//! option, a `switch`, or a clear. One that loses what the page cannot set back asks first, on its
-//! line, with what it loses; only the confirmation sends it, and a press anywhere else, another
-//! account or a restart lets go of the question. The confirmation reckons the press again on the
-//! newest page read, of the same line: one that no longer writes the same, or no longer asks the
-//! same, is not sent, and its line says so; one that does goes naming that page's version.
-//! `integer` and `ordered` variables are only shown in this version (G3's).
+//! form, `GoalsPage::writable`): a resource entry's amount or an `integer` variable's number
+//! (typed, then "set"), a `choice`'s option, a `switch`, an `ordered` variable's list ("save
+//! order"), or a clear. One that loses what the page cannot set back asks first, on its line, with
+//! what it loses; only the confirmation sends it, and a press anywhere else, another account or a
+//! restart lets go of the question. The confirmation reckons the press again on the newest page
+//! read, of the same line: one that no longer writes the same, or no longer asks the same, is not
+//! sent, and its line says so; one that does goes naming that page's version. A variable whose
+//! declaration this console does not read is only shown, never set: only a value of it that no
+//! bound package offers is cleared, which writes no value.
+//!
+//! An `ordered` variable's list is edited as a draft first (G3), kept here per line, never written
+//! by an edit: added to, moved, removed from, as `goals::order_edit` allows, from the keys the next
+//! run reads when there is no draft yet, and let go as it comes back to them, as it is discarded,
+//! once its save took, or as the tab shows another account or the Runtime starts again. A draft
+//! begun on keys the page no longer reads (changed elsewhere since) is not edited further or saved,
+//! nor sent by confirming a save asked before, only discarded; nor is the line's draft edited or
+//! discarded while its line asks to confirm a press (a save, whose question holds the draft it
+//! asked about, or a back to the default). What is typed in a list's search field is kept the same
+//! way and writes nothing. A refusal by a variable's rule (`WriteProblem::of_the_rule`) means the
+//! page's rule is older than the Runtime's, so the page is read again at once; the item a refusal
+//! points at is kept by its key, as sent.
 //!
 //! The write goes out on a thread of its own (`THREAD`), over a fresh person's connection, once
 //! (`goals::edit`, which sends a `fact_observation_not_newer` once more itself), naming the version
 //! of the page it was pressed on. One write of an account is out at a time: the record has one
 //! version, so a second out at once would only meet the first's. Every control of the page stays
-//! off while one is out, and after an answer that may have changed the page, or that says another
-//! tool did, until a read of the page begun after it has come: until then it shows what was read
-//! before. Such an answer counts as a write for the reads (`super::wrote`), which are let go and
-//! read again at once. A conflict of versions is not sent again: what to press depends on what the
-//! other tool wrote. A refusal of the value is said on its line and nothing is read again. A
-//! Runtime that has no such write is kept for its owner epoch: the page is only shown in it, which
-//! it says once.
+//! off while one is out, and after an answer that may have changed the page, that says another
+//! tool did, or that refuses a variable's value by its rule, until a read of the page begun after
+//! it has come: until then it shows what was read before. Such an answer counts as a write for the
+//! reads (`super::wrote`), which are let go and read again at once. A conflict of versions is not
+//! sent again: what to press depends on what the other tool wrote. Any other refusal of the value
+//! is said on its line and nothing is read again. A Runtime that has no such write is kept for its
+//! owner epoch: the page is only shown in it, which it says once.
 //!
 //! What a press came to is said on its line, with when it landed (not that it is out, nor of a
 //! conflict, a thread refused, a restart or a confirmation the page read again no longer bears
@@ -42,8 +56,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use acui_source::workbench::goals::{
-    edit, GoalAct, GoalWrite, GoalsPage, Loses, Press, WriteAnswer, WriteInvalid, WriteOutcome,
-    WriteRefusal,
+    edit, pointed_key, GoalAct, GoalChange, GoalWrite, GoalsPage, Loses, OrderEdit, Press,
+    WriteAnswer, WriteInvalid, WriteOutcome, WriteRefusal, VARIABLE_KEY,
 };
 use acui_source::ClientFailure;
 
@@ -92,8 +106,20 @@ pub struct WritesNow {
     pub said: BTreeMap<String, GoalSaid>,
     /// The line that asks to confirm a press, by its key, and what the press loses.
     pub asking: Option<(String, Loses)>,
-    /// The amount typed on each resource line, by its key.
+    /// The amount or number typed on each resource or `integer` line, by its key.
     pub amounts: BTreeMap<String, String>,
+    /// The draft of each `ordered` line, by its key (G3).
+    pub orders: BTreeMap<String, OrderDraft>,
+    /// What is typed in each `ordered` line's search field, by its key.
+    pub searches: BTreeMap<String, String>,
+}
+
+/// A draft of an `ordered` variable's list (G3): the keys the next run read when it was begun
+/// (`from`), by which a draft begun before the value changed elsewhere is told, and its keys now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderDraft {
+    pub from: Vec<String>,
+    pub keys: Vec<String>,
 }
 
 /// What a line's last press came to, before its words; each that landed and is said with when, in
@@ -106,8 +132,9 @@ pub enum GoalSaid {
     Conflict,
     /// Another write of the account's goals landed in the same millisecond, the second time too.
     NotNewer { at_ms: u64 },
-    /// The Runtime did not take the value, and why.
-    Invalid { at_ms: u64, invalid: WriteInvalid },
+    /// The Runtime did not take the value, and why; of a list, the key of the item its pointer
+    /// names in the list sent, so that it names the same item however the draft moves after.
+    Invalid { at_ms: u64, invalid: WriteInvalid, item: Option<String> },
     /// Any other refusal: its codes, the host's before the Runtime's.
     Refused { at_ms: u64, codes: Vec<String> },
     /// No connection: nothing was sent. In root mode, because the Runtime up is not the
@@ -140,13 +167,15 @@ pub struct Writes {
 }
 
 /// One account's: where its one write stands, what each line's last press came to, the press that
-/// asks to be confirmed, and the amounts typed.
+/// asks to be confirmed, the amounts typed, the lists' drafts and what their search fields hold.
 #[derive(Default)]
 struct Slot {
     stage: Stage,
     said: BTreeMap<String, GoalSaid>,
     asking: Option<Question>,
     amounts: BTreeMap<String, String>,
+    orders: BTreeMap<String, OrderDraft>,
+    searches: BTreeMap<String, String>,
 }
 
 /// A press that asks to be confirmed: what it writes, the press itself, reckoned again as it is
@@ -226,6 +255,8 @@ impl Writes {
                 .and_then(|slot| slot.asking.as_ref())
                 .map(|question| (question.target.key.clone(), question.loses.clone())),
             amounts: slot.map(|slot| slot.amounts.clone()).unwrap_or_default(),
+            orders: slot.map(|slot| slot.orders.clone()).unwrap_or_default(),
+            searches: slot.map(|slot| slot.searches.clone()).unwrap_or_default(),
         }
     }
 
@@ -242,6 +273,30 @@ impl Writes {
     pub fn amount_edited(&mut self, alias: &str, key: &str, text: &str) {
         let slot = self.slots.entry(alias.to_owned()).or_default();
         slot.amounts.insert(key.to_owned(), text.to_owned());
+    }
+
+    /// The draft of the `ordered` line `key` of `alias`, while there is one.
+    pub fn order(&self, alias: &str, key: &str) -> Option<OrderDraft> {
+        self.slots.get(alias).and_then(|slot| slot.orders.get(key)).cloned()
+    }
+
+    /// The draft of the `ordered` line `key` of `alias` kept as `draft`; none lets it go.
+    pub fn set_order(&mut self, alias: &str, key: &str, draft: Option<OrderDraft>) {
+        let slot = self.slots.entry(alias.to_owned()).or_default();
+        match draft {
+            Some(draft) => {
+                slot.orders.insert(key.to_owned(), draft);
+            }
+            None => {
+                slot.orders.remove(key);
+            }
+        }
+    }
+
+    /// The search field of the `ordered` line `key` of `alias` typed as `text`.
+    pub fn searched(&mut self, alias: &str, key: &str, text: &str) {
+        let slot = self.slots.entry(alias.to_owned()).or_default();
+        slot.searches.insert(key.to_owned(), text.to_owned());
     }
 
     /// A press `act` of `alias` that asks to be confirmed before it writes `target`, losing
@@ -270,8 +325,9 @@ impl Writes {
     /// version; none when there was no question, it was asked in another epoch, the Runtime takes
     /// no writes, or a write of the account is out or waits for a read; and none when `again` does
     /// not write what was asked about or does not ask the same (or there is none: the page does
-    /// not show or take writes now, the line is gone, or the press writes nothing now), which the
-    /// line then says, and the person looks again.
+    /// not show or take writes now, the line is gone, the press writes nothing now, or a list's
+    /// draft was begun on keys the page no longer reads), which the line then says, and the
+    /// person looks again.
     pub fn confirm(
         &mut self,
         alias: &str,
@@ -316,7 +372,7 @@ impl Writes {
 
     /// What the write of `alias` under `ticket` came to, landing at `at_ms`: none when that ticket
     /// is not the one out, which a restart let go. One that took lets go of the amount typed on its
-    /// line, which the page read again shows.
+    /// line, its list's draft and what its search field holds, which the page read again shows.
     fn settle(
         &mut self,
         alias: &str,
@@ -333,10 +389,12 @@ impl Writes {
             }
         };
         let edited = landing.edited();
-        let (said, after) = landing.said(at_ms);
+        let (said, after) = landing.said(at_ms, &request.target);
         let key = request.target.key;
         if edited {
             slot.amounts.remove(&key);
+            slot.orders.remove(&key);
+            slot.searches.remove(&key);
         }
         match said {
             Some(said) => slot.said.insert(key, said),
@@ -359,10 +417,11 @@ impl Writes {
     }
 
     /// The tab shows `wanted`'s page from now on, or nothing: none waits any more for a read of
-    /// before, since the page shown anew is read anew. What each press came to, and the amounts
-    /// typed, stay through all of that, and go only as the line is pressed again, the Runtime
-    /// starts again (`restarted`), or here, as the tab shows another account than it last did:
-    /// then those of the account it showed go, but for a press out. A question goes either way.
+    /// before, since the page shown anew is read anew. What each press came to, the amounts typed,
+    /// the lists' drafts and their search fields stay through all of that, and go only as the line
+    /// is pressed again, the Runtime starts again (`restarted`), or here, as the tab shows another
+    /// account than it last did: then those of the account it showed go, but for a press out. A
+    /// question goes either way.
     pub fn follow(&mut self, wanted: Option<&str>) {
         for slot in self.slots.values_mut() {
             if matches!(slot.stage, Stage::Behind) {
@@ -378,14 +437,16 @@ impl Writes {
             if let Some(slot) = self.slots.get_mut(&left) {
                 slot.said.retain(|_, said| *said == GoalSaid::Sending);
                 slot.amounts.clear();
+                slot.orders.clear();
+                slot.searches.clear();
             }
         }
     }
 
     /// The Runtime online is of the owner epoch `epoch`, another than before: a write out of
     /// another epoch is let go, said to be out across a restart; every other line goes, as do a
-    /// question, a wait for a read, the amounts typed and what another epoch's Runtime said of its
-    /// writes. The lines for the log.
+    /// question, a wait for a read, the amounts typed, the lists' drafts and search fields and what
+    /// another epoch's Runtime said of its writes. The lines for the log.
     fn restarted(&mut self, epoch: &str) -> Vec<String> {
         if self.unsupported.as_deref().is_some_and(|said| said != epoch) {
             self.unsupported = None;
@@ -395,6 +456,8 @@ impl Writes {
             slot.said.clear();
             slot.asking = None;
             slot.amounts.clear();
+            slot.orders.clear();
+            slot.searches.clear();
             slot.stage = match mem::take(&mut slot.stage) {
                 Stage::Out(request) if request.target.epoch != epoch => {
                     lines.push(format!(
@@ -432,8 +495,11 @@ impl Landing {
     }
 
     /// What it came to, before its words, as it lands at `at_ms` (none: nothing to say on the
-    /// line), and what it calls for.
-    fn said(self, at_ms: u64) -> (Option<GoalSaid>, After) {
+    /// line), and what it calls for; `target` what it wrote. A variable's value refused by its
+    /// rule (G3) says the page's rule is older than the Runtime's, as the page checks what it sends
+    /// by the same rules: the page is read again at once. The item a refusal points at in a list
+    /// sent is kept by its key.
+    fn said(self, at_ms: u64, target: &WriteTarget) -> (Option<GoalSaid>, After) {
         let reread = After { reread: true, unsupported: false };
         let settled = After::default();
         match self {
@@ -444,7 +510,14 @@ impl Landing {
                     (Some(GoalSaid::NotNewer { at_ms }), reread)
                 }
                 WriteOutcome::Refused { why: WriteRefusal::Invalid(invalid), .. } => {
-                    (Some(GoalSaid::Invalid { at_ms, invalid }), settled)
+                    let item = match (&invalid.pointer, &target.write.change) {
+                        (Some(pointer), GoalChange::Set(sent)) => pointed_key(sent, pointer),
+                        (Some(_) | None, _) => None,
+                    };
+                    let of_the_rule =
+                        target.key.starts_with(VARIABLE_KEY) && invalid.problem.of_the_rule();
+                    let after = if of_the_rule { reread } else { settled };
+                    (Some(GoalSaid::Invalid { at_ms, invalid, item }), after)
                 }
                 WriteOutcome::Refused { why: WriteRefusal::Other, failure } => {
                     let host = failure.host.map(|(code, _)| code);
@@ -543,14 +616,14 @@ fn prefix(alias: &str, request: &GoalRequest) -> String {
     )
 }
 
-/// The amount on the resource line `key` typed as `text`: kept, so that a paint does not take it
-/// back, and the line's "set" follows what it is.
+/// The amount on the resource line `key`, or the number on the `integer` line `key`, typed as
+/// `text`: kept, so that a paint does not take it back, and the line's "set" follows what it is.
 pub fn amount_edited(ui: &Ui, key: &str, text: &str) {
     ui.model.borrow_mut().goal_amount_edited(key, text);
     paint::tasks(ui);
 }
 
-/// "Set" on the resource line `key`, of the amount typed.
+/// "Set" on the resource or `integer` line `key`, of the amount or number typed.
 pub fn set_pressed(ui: &Ui, key: &str) {
     let text = ui.model.borrow().goal_amount(key);
     pressed(ui, key, GoalAct::Amount(text));
@@ -572,6 +645,70 @@ pub fn toggled(ui: &Ui, key: &str, on: bool) {
 /// "Clear" or "back to the default" on the line `key`.
 pub fn clear_pressed(ui: &Ui, key: &str) {
     pressed(ui, key, GoalAct::Clear);
+}
+
+/// The option of `value` added at the end of the draft of the `ordered` line `key` (G3), as far as
+/// it can be now (`Model::goal_order_edit`): nothing is written.
+pub fn order_added(ui: &Ui, key: &str, value: &str) {
+    order_edited(ui, key, &OrderEdit::Add(value.to_owned()));
+}
+
+/// The key at the place `from` of the draft of the `ordered` line `key` moved to the place `to`:
+/// whether it moved, which the list's mark follows. A place the window gives that is no place
+/// moves nothing.
+pub fn order_moved(ui: &Ui, key: &str, from: i32, to: i32) -> bool {
+    match (usize::try_from(from), usize::try_from(to)) {
+        (Ok(from), Ok(to)) => order_edited(ui, key, &OrderEdit::Move { from, to }),
+        _ => {
+            paint::tasks(ui);
+            false
+        }
+    }
+}
+
+/// The key at the place `place` of the draft of the `ordered` line `key` removed.
+pub fn order_removed(ui: &Ui, key: &str, place: i32) {
+    match usize::try_from(place) {
+        Ok(place) => {
+            order_edited(ui, key, &OrderEdit::Remove(place));
+        }
+        Err(_) => paint::tasks(ui),
+    }
+}
+
+/// One edit of the draft of the `ordered` line `key`, then the page painted: whether it was made.
+fn order_edited(ui: &Ui, key: &str, edit: &OrderEdit) -> bool {
+    let language = ui.labels().tongue;
+    let made = ui.model.borrow_mut().goal_order_edit(key, edit, language);
+    paint::tasks(ui);
+    made
+}
+
+/// "Discard changes" on the `ordered` line `key`: its draft let go, the keys the next run reads
+/// shown again.
+pub fn order_discarded(ui: &Ui, key: &str) {
+    let language = ui.labels().tongue;
+    ui.model.borrow_mut().goal_order_discard(key, language);
+    paint::tasks(ui);
+}
+
+/// The search field of the `ordered` line `key` typed as `text`: kept, so that a paint does not
+/// take it back; it writes nothing.
+pub fn order_searched(ui: &Ui, key: &str, text: &str) {
+    ui.model.borrow_mut().goal_searched(key, text);
+    paint::tasks(ui);
+}
+
+/// "Save order" on the `ordered` line `key`: its draft pressed, while there is one that is not
+/// stale and is not the keys the next run reads already (`Model::goal_order_draft`); else only
+/// painted.
+pub fn order_saved(ui: &Ui, key: &str) {
+    let language = ui.labels().tongue;
+    let keys = ui.model.borrow().goal_order_draft(key, language);
+    match keys {
+        Some(keys) => pressed(ui, key, GoalAct::Order(keys)),
+        None => paint::tasks(ui),
+    }
 }
 
 /// The question on the page confirmed: what it asked about is sent, once, at once, while the newest
@@ -646,8 +783,9 @@ fn send(ui: &Ui, root: PathBuf, alias: &str, request: GoalRequest) {
 }
 
 /// An answer, on the event loop. One whose ticket is no longer the one out, which a restart let go,
-/// changes nothing shown: only the log had it. One that may have changed the page, or says another
-/// tool did, is a write: the reads begun before it are let go, and read again at once.
+/// changes nothing shown: only the log had it. One that may have changed the page, says another
+/// tool did, or refuses a variable's value by its rule, is a write: the reads begun before it are
+/// let go, and read again at once.
 fn landed(ui: &Ui, alias: &str, ticket: u64, landing: Landing) {
     let at_ms = paint::now_ms();
     let after = ui.model.borrow_mut().goal_writes_mut().settle(alias, ticket, landing, at_ms);

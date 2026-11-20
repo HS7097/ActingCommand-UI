@@ -13,7 +13,7 @@
 //! it says so the account's rules panel in the picture's place (UI-3e1-b). And which of the right
 //! column's three tabs shows, under the second the account's daily task list (UI-3f1), its
 //! reasons in the cards' words, and its packages' switches (UI-3f2), and under the third its goals
-//! (Workflow #455 T1-C), with the controls of those it sets (G2).
+//! (Workflow #455 T1-C), with the controls of those it sets (G2), numbers and lists too (G3).
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -26,11 +26,13 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::goals::{
-    amount as goal_amount, newer_than_this_console, AmountProblem, Carried, ClearOffer, Closed,
-    Declaration, Form, GoalLine, GoalsPage, Group, LabEntry, Loses, OtherTarget, PageState,
-    Pending, PoolState, Progress, Reading, Removed, ResourceLine, SetBy, Setter, Shown, Stored,
-    StoredGoal, TimeUnit, Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid,
-    WriteProblem,
+    amount as goal_amount, largest, newer_than_this_console, number as goal_number,
+    order_matches, order_problem, order_room, whole_time, AmountProblem, Carried, ClearOffer,
+    Closed, Declaration, Form, GoalLine, GoalsPage, Group, LabEntry, Loses, NumberProblem,
+    NumberRule, NumberUnit, OrderProblem, OrderRule, OtherTarget, PageState, Pending, PoolState,
+    Progress, Reading, Removed, ResourceLine, SetBy, Setter, Shown, Stored, StoredGoal, TimeUnit,
+    Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid, WriteProblem,
+    ORDER_SEARCH_FROM, VALUE_BYTES,
 };
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
@@ -75,8 +77,8 @@ use crate::report;
 use crate::strings::{fill, outcome_informs, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, GoalControl, GoalListData, GoalRowData, GoalRowKind, IdlePick,
-    OverlayItem,
+    AccountCard, BackendGroupItem, GoalControl, GoalListData, GoalOffer, GoalPick, GoalRowData,
+    GoalRowKind, IdlePick, OverlayItem,
     PresetChoice, QuietData, QuietEditor, QuietLine, RescueBar, RescueOp, RulesData, SettingItem,
     StatusTone, TargetItem, TaskListData, TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab,
     WorkbenchWindow,
@@ -3195,14 +3197,17 @@ fn goals_page(
     (data, rows)
 }
 
-/// A line's controls (Workflow #455 G2), over its words: what names it to a press; a resource's
-/// amount where its pool takes a goal here, with why what is typed is no amount; in amber, on any
-/// resource line, that its goal was set elsewhere; a choice's options (side by side up to four,
-/// else a drop-down) or a switch, at the value the next run reads; the clear it has; an other
-/// target the Lab alone can clear, so said in grey, as is a value no longer offered, an other
-/// target or a variable's value whose name another line has, which no clear here is sure to reach.
-/// Then what its last press came to and the question a press asks, if either. All of them are off
-/// while the page takes no press (`WritesNow::enabled`).
+/// A line's controls (Workflow #455 G2, G3), over its words: what names it to a press; a
+/// resource's amount where its pool takes a goal here, with why what is typed is no amount; in
+/// amber, on any resource line, that its goal was set elsewhere; a choice's options (side by side
+/// up to four, else a drop-down) or a switch, at the value the next run reads; an `integer`'s
+/// number, typed in its unit, with what can be set and why what is typed is not sent; an `ordered`
+/// variable's editor (`order_controls`); in grey of a variable whose declaration this console does
+/// not read, but where no bound package offers it, that this console cannot change it here; the
+/// clear it has; an other target the Lab alone can clear, so said in grey, as is a value no longer
+/// offered, an other target or a variable's value whose name another line has, which no clear here
+/// is sure to reach. Then what its last press came to and the question a press asks, if either.
+/// All of them are off while the page takes no press (`WritesNow::enabled`).
 fn goal_controls(
     ui: &Ui,
     labels: &Labels,
@@ -3265,7 +3270,24 @@ fn goal_controls(
                     row.control = GoalControl::Switch;
                     row.switch_on = on.unwrap_or(false);
                 }
-                ValueControl::None => {}
+                ValueControl::Number { rule, now } => {
+                    let typed = writes.amounts.get(&key).cloned().unwrap_or_default();
+                    row.control = GoalControl::Amount;
+                    row.amount_placeholder = labels.goals_number_placeholder.into();
+                    match goal_number(&typed, rule, *now) {
+                        Ok(_) => row.set_ready = true,
+                        Err(problem) => {
+                            row.amount_problem = number_problem_text(labels, rule, problem).into();
+                        }
+                    }
+                    row.amount_text = typed.into();
+                    row.amount_unit = number_unit_text(labels, &rule.unit).into();
+                    row.control_hint = number_hint(labels, rule, *now).into();
+                }
+                ValueControl::Ordered { rule, chosen } => {
+                    order_controls(labels, &mut row, &key, rule, chosen, writes, old);
+                }
+                ValueControl::Unknown => {}
             }
         }
         GoalLine::Variable(_) => {}
@@ -3289,7 +3311,9 @@ fn goal_controls(
         | GoalLine::Closed { .. } => {}
     }
     // A variable's clear, whether or not it has a control; none of a name another line has too,
-    // which a clear of it could take instead (`goals::press`).
+    // which a clear of it could take instead (`goals::press`). G3: one whose declaration this
+    // console does not read is never written, which it says, but where no bound package offers
+    // it: there its value is only cleared, as G2 has it.
     if let GoalLine::Variable(variable) = line {
         row.clear_label = match variable.clearable() {
             Some(ClearOffer::Restore) => labels.goals_restore.into(),
@@ -3298,6 +3322,10 @@ fn goal_controls(
         };
         if variable.shared && variable.clear_offer().is_some() {
             notes.push(labels.goals_same_name.to_owned());
+        }
+        let unknown = matches!(variable.control, ValueControl::Unknown);
+        if unknown && !matches!(variable.state, VariableState::NotOffered) {
+            notes.push(labels.goals_unknown_type.to_owned());
         }
     }
     if !warnings.is_empty() {
@@ -3317,7 +3345,7 @@ fn goal_controls(
         row.note = all.join("\n").into();
     }
     if let Some(said) = writes.said.get(&key) {
-        let (text, tone) = goal_said_text(ui, labels, said);
+        let (text, tone) = goal_said_text(ui, labels, said, line);
         row.said = text.into();
         row.said_failed = matches!(tone, SaidTone::Failed);
         row.said_warning = matches!(tone, SaidTone::Warning);
@@ -3341,13 +3369,236 @@ fn amount_problem_text(labels: &Labels, problem: AmountProblem) -> &'static str 
     }
 }
 
+/// Why the number typed for an `integer` of `rule` is not sent (G3): not a whole number; outside
+/// what can be set here (from `min` to the largest, [`largest`]); off its step, from `min`; the
+/// number in effect already. Nothing of nothing typed.
+fn number_problem_text(labels: &Labels, rule: &NumberRule, problem: NumberProblem) -> String {
+    let low = || number_words(labels, rule, rule.min);
+    match problem {
+        NumberProblem::Empty => String::new(),
+        NumberProblem::NotWhole => labels.goals_amount_not_whole.to_owned(),
+        NumberProblem::OutOfRange => fill(
+            labels.goals_number_out_of_range,
+            &[&low(), &number_words(labels, rule, largest(rule))],
+        ),
+        NumberProblem::OffStep => fill(
+            labels.goals_number_off_step,
+            &[&low(), &number_words(labels, rule, rule.interval())],
+        ),
+        NumberProblem::Same => labels.goals_number_same.to_owned(),
+    }
+}
+
+/// What an `integer` of `rule` can be set to here, in grey under its field: from `min` to the
+/// largest, with the step between them where it is more than one of the unit typed in; and, of a
+/// time in effect that is no whole number of that unit (set elsewhere, or the default), that it
+/// can only be changed here to one, and that another value is set with the Lab.
+fn number_hint(labels: &Labels, rule: &NumberRule, now: Option<i64>) -> String {
+    let low = number_words(labels, rule, rule.min);
+    let high = number_words(labels, rule, largest(rule));
+    let interval = rule.interval();
+    let mut lines = vec![if rule.in_entry(interval) == Some(1) {
+        fill(labels.goals_number_range, &[&low, &high])
+    } else {
+        let step = number_words(labels, rule, interval);
+        fill(labels.goals_number_range_step, &[&low, &high, &step])
+    }];
+    if let (NumberUnit::Time { entry, .. }, Some(now)) = (&rule.unit, now) {
+        if rule.in_entry(now).is_none() {
+            let unit = time_unit_name(labels, *entry);
+            lines.push(fill(labels.goals_number_now_not_whole, &[unit, unit]));
+        }
+    }
+    lines.join("\n")
+}
+
+/// A number of an `integer` of `rule` as its field's words say it: a time in the unit typed in, in
+/// which every number the field's words name is whole (else, not reached, as a value is shown);
+/// a number with its unit's text; a bare number.
+fn number_words(labels: &Labels, rule: &NumberRule, value: i64) -> String {
+    match (&rule.unit, rule.in_entry(value)) {
+        (NumberUnit::Time { entry, .. }, Some(amount)) => {
+            shown_text(labels, &Shown::Time { amount, unit: *entry })
+        }
+        _ => bound_words(labels, rule, value),
+    }
+}
+
+/// A number of an `integer` of `rule` as a value is shown: a time in the largest unit at most the
+/// declared one in which it is whole ([`whole_time`]), a number with its unit's text, a bare
+/// number. The bounds the Runtime gives with a refusal are said so, being no number typed here.
+fn bound_words(labels: &Labels, rule: &NumberRule, value: i64) -> String {
+    match &rule.unit {
+        NumberUnit::Plain => value.to_string(),
+        NumberUnit::Text(unit) => format!("{value} {unit}"),
+        NumberUnit::Time { declared, .. } => {
+            let (amount, unit) = whole_time(value, *declared);
+            shown_text(labels, &Shown::Time { amount, unit })
+        }
+    }
+}
+
+/// The unit an `integer`'s field is typed in, beside it: a time unit's name, a unit's text, none.
+fn number_unit_text(labels: &Labels, unit: &NumberUnit) -> String {
+    match unit {
+        NumberUnit::Plain => String::new(),
+        NumberUnit::Text(text) => text.clone(),
+        NumberUnit::Time { entry, .. } => time_unit_name(labels, *entry).to_owned(),
+    }
+}
+
+/// A time unit's name.
+fn time_unit_name(labels: &Labels, unit: TimeUnit) -> &'static str {
+    match unit {
+        TimeUnit::Millisecond => labels.goals_unit_milliseconds,
+        TimeUnit::Second => labels.goals_unit_seconds,
+        TimeUnit::Minute => labels.goals_unit_minutes,
+        TimeUnit::Hour => labels.goals_unit_hours,
+        TimeUnit::Day => labels.goals_unit_days,
+    }
+}
+
+/// An `ordered` variable's editor (Workflow #455 G3), over `row`, of the line `key` whose next run
+/// reads `chosen`: the draft's keys, or `chosen` while there is no draft (a draft of those keys is
+/// none), each numbered with its option's title, or its key once the option is no longer offered,
+/// which is marked; the options its search finds (the field only of more than eight options), at
+/// most a hundred, each marked chosen, or not fitting while the list is not full; how many more,
+/// or that none is found; what keeps the draft from being saved, first that it was begun on other
+/// keys than the next run reads now; whether "save order" can be pressed (the page takes presses,
+/// a draft is there and can be saved, and its line asks nothing); and how many are chosen of how
+/// many, then that the list is full or that no option fits any more. The two inner lists keep the
+/// models the window shows, a row at a time ([`kept`]).
+fn order_controls(
+    labels: &Labels,
+    row: &mut GoalRowData,
+    key: &str,
+    rule: &OrderRule,
+    chosen: &[String],
+    writes: &WritesNow,
+    old: Option<&GoalRowData>,
+) {
+    row.control = GoalControl::Ordered;
+    let draft = writes.orders.get(key).filter(|draft| draft.keys != chosen);
+    let keys: &[String] = draft.map_or(chosen, |draft| draft.keys.as_slice());
+    let picks: Vec<GoalPick> = keys
+        .iter()
+        .enumerate()
+        .map(|(at, pick)| {
+            let option = rule.option(pick);
+            let title = option.map_or(pick.as_str(), |option| option.title.as_str());
+            GoalPick { title: format!("{}. {title}", at + 1).into(), gone: option.is_none() }
+        })
+        .collect();
+    row.picks = kept(old.map(|old| &old.picks), picks);
+    row.search_shown = rule.options.len() >= ORDER_SEARCH_FROM;
+    let search = match row.search_shown {
+        true => writes.searches.get(key).cloned().unwrap_or_default(),
+        false => String::new(),
+    };
+    let full = u64::try_from(keys.len()).unwrap_or(u64::MAX) >= rule.cap();
+    let (found, more) = order_matches(rule, keys, &search);
+    let more_text = if more > 0 {
+        fill(labels.goals_order_more, &[&more.to_string()])
+    } else if found.is_empty() && !search.trim().is_empty() {
+        labels.goals_order_no_match.to_owned()
+    } else {
+        String::new()
+    };
+    let offers: Vec<GoalOffer> = found
+        .into_iter()
+        .map(|option| {
+            let mark = match (option.chosen, option.fits) {
+                (true, _) => labels.goals_order_chosen_mark,
+                (false, false) if !full => labels.goals_order_no_fit_mark,
+                (false, _) => "",
+            };
+            GoalOffer {
+                value: option.value.into(),
+                title: option.title.into(),
+                chosen: option.chosen,
+                fits: option.fits,
+                mark: mark.into(),
+            }
+        })
+        .collect();
+    row.offers = kept(old.map(|old| &old.offers), offers);
+    row.offers_more = more_text.into();
+    row.search_text = search.into();
+    row.order_changed = draft.is_some();
+    let problem = match draft {
+        None => None,
+        Some(draft) if draft.from != chosen => Some(labels.goals_order_stale.to_owned()),
+        Some(draft) => order_problem(rule, &draft.keys).map(|why| order_problem_text(labels, why)),
+    };
+    let asking = writes.asking.as_ref().is_some_and(|(asking, _)| asking == key);
+    row.order_ready = writes.enabled && draft.is_some() && problem.is_none() && !asking;
+    row.order_problem = problem.unwrap_or_default().into();
+    row.control_hint = order_hint(labels, rule, keys).into();
+}
+
+/// Why a draft of an `ordered` variable is not saved, in words.
+fn order_problem_text(labels: &Labels, problem: OrderProblem) -> String {
+    match problem {
+        OrderProblem::Repeated => labels.goals_problem_key_repeated.to_owned(),
+        OrderProblem::Gone(count) => fill(labels.goals_order_gone, &[&count.to_string()]),
+        OrderProblem::TooFew(count) => fill(labels.goals_order_too_few, &[&count.to_string()]),
+        OrderProblem::TooMany(count) => fill(labels.goals_order_too_many, &[&count.to_string()]),
+        OrderProblem::TooLong(bytes) => fill(
+            labels.goals_order_too_long,
+            &[&bytes.to_string(), &VALUE_BYTES.to_string()],
+        ),
+    }
+}
+
+/// How many keys the list `keys` of `rule` holds, of how many: exactly `min_count` where that is
+/// all it can hold, else from `min_count` to as many as it can hold ([`OrderRule::cap`]); then,
+/// on a line of its own, that it is full, or else that no option it does not hold fits in a value
+/// beside them any more, of all its options, not only those listed.
+fn order_hint(labels: &Labels, rule: &OrderRule, keys: &[String]) -> String {
+    let (count, cap) = (keys.len().to_string(), rule.cap());
+    let mut lines = vec![if rule.min_count == cap {
+        fill(labels.goals_order_count_exact, &[&count, &cap.to_string()])
+    } else {
+        let min = rule.min_count.to_string();
+        fill(labels.goals_order_count, &[&count, &min, &cap.to_string()])
+    }];
+    if u64::try_from(keys.len()).unwrap_or(u64::MAX) >= cap {
+        lines.push(labels.goals_order_full.to_owned());
+    } else if !order_room(rule, keys) {
+        lines.push(fill(labels.goals_order_no_room, &[&VALUE_BYTES.to_string()]));
+    }
+    lines.join("\n")
+}
+
+/// A row's inner list: the model the window shows in its place, kept and changed a row at a time
+/// (`sync`), while it is one, so that its repeater keeps its rows (a new model would have them all
+/// made anew on every paint, and every key typed paints); else a new one.
+fn kept<T: Clone + PartialEq + 'static>(old: Option<&ModelRc<T>>, items: Vec<T>) -> ModelRc<T> {
+    let Some(old) = old else {
+        return models(items);
+    };
+    let mut fresh = None;
+    sync(old.clone(), items, |rows| fresh = Some(rows));
+    fresh.unwrap_or_else(|| old.clone())
+}
+
 /// The question a press asks first: what it loses that this page cannot set back. Another entry's
-/// goal is named by that entry's title, never by its pool's id.
+/// goal is named by that entry's title, never by its pool's id; keys no longer offered by their
+/// keys, which have no title any more.
 fn loses_text(labels: &Labels, loses: &Loses) -> String {
     match loses {
         Loses::Value(value) => fill(labels.goals_confirm_value, &[&shown_text(labels, value)]),
         Loses::Replaced(value) => {
             fill(labels.goals_confirm_value_replaced, &[&shown_text(labels, value)])
+        }
+        // G3: the keys of a list in effect that the run leaves out, as stored: no option has them.
+        Loses::LeftOut { keys, cleared } => {
+            let template = if *cleared {
+                labels.goals_confirm_left_out_restore
+            } else {
+                labels.goals_confirm_left_out_save
+            };
+            fill(template, &[&keys.join(labels.goals_list_separator)])
         }
         Loses::Unsettable { amount, carried } => fill(
             labels.goals_confirm_clear_unsettable,
@@ -3424,8 +3675,8 @@ fn carried_text(labels: &Labels, carried: Carried) -> String {
 }
 
 /// What a line's last press came to, in words, with when it landed: a refused value in the words of
-/// its `goal_problem`, another refusal by its codes.
-fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid) -> (String, SaidTone) {
+/// its `goal_problem`, of `line`'s rule (G3), another refusal by its codes.
+fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid, line: &GoalLine) -> (String, SaidTone) {
     let at = |template: &str, at_ms: u64| fill(template, &[&format_second(at_ms)]);
     match said {
         GoalSaid::Sending => (labels.goals_write_sending.to_owned(), SaidTone::Plain),
@@ -3433,8 +3684,8 @@ fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid) -> (String, SaidTon
         GoalSaid::NotNewer { at_ms } => {
             (at(labels.goals_write_not_newer, *at_ms), SaidTone::Warning)
         }
-        GoalSaid::Invalid { at_ms, invalid } => {
-            let words = invalid_text(ui, labels, invalid);
+        GoalSaid::Invalid { at_ms, invalid, item } => {
+            let words = invalid_text(ui, labels, invalid, item.as_deref(), line);
             (fill(labels.goals_write_invalid, &[&words, &format_second(*at_ms)]), SaidTone::Failed)
         }
         GoalSaid::Refused { at_ms, codes } => {
@@ -3465,9 +3716,22 @@ fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid) -> (String, SaidTon
 
 /// Why the Runtime did not take a value, one sentence per `goal_problem` word, with the values the
 /// word comes with: a range, a bound with its unit (bytes, items), why a variable does not apply. A
-/// number off its step is said without the range it comes with, which would read as the step's. A
-/// word of a newer Runtime by its code, which the log hears of once.
-fn invalid_text(ui: &Ui, labels: &Labels, invalid: &WriteInvalid) -> String {
+/// number off its step is said without the range it comes with, which would read as the step's,
+/// nor with its step, which the Runtime does not give (945727d4
+/// `crates/runtime-host/src/goals.rs:449-453`: `off_step` comes with `min` and `max` only) and the
+/// page's may be older than. A word of a newer Runtime by its code, which the log hears of once.
+/// G3: of `line`, an `integer`'s range in its unit, as a value is shown (the bounds need be no
+/// whole number of the unit typed in); of an `integer` or a list refused by its rule, that the
+/// package's rule may have just changed and the page is read again (`WriteProblem::of_the_rule`,
+/// which `goals::Landing::said` reads again for); then the item a list's refusal points at
+/// (`item`, by its key as sent), by its option's title or its key.
+fn invalid_text(
+    ui: &Ui,
+    labels: &Labels,
+    invalid: &WriteInvalid,
+    item: Option<&str>,
+    line: &GoalLine,
+) -> String {
     let words = match &invalid.problem {
         WriteProblem::NameUnknown => labels.goals_problem_name_unknown,
         WriteProblem::HoldsNoValue => labels.goals_problem_holds_no_value,
@@ -3511,18 +3775,41 @@ fn invalid_text(ui: &Ui, labels: &Labels, invalid: &WriteInvalid) -> String {
     if let Some(whole) = whole {
         return whole;
     }
-    let range = invalid.min.zip(invalid.max).map(|(min, max)| {
-        fill(labels.goals_problem_range, &[&min.to_string(), &max.to_string()])
+    let control = match line {
+        GoalLine::Variable(variable) => Some(&variable.control),
+        _ => None,
+    };
+    let range = invalid.min.zip(invalid.max).map(|(min, max)| match control {
+        Some(ValueControl::Number { rule, .. }) => fill(
+            labels.goals_problem_range,
+            &[&bound_words(labels, rule, min), &bound_words(labels, rule, max)],
+        ),
+        _ => fill(labels.goals_problem_range, &[&min.to_string(), &max.to_string()]),
     });
     let detail = match &invalid.problem {
         WriteProblem::OutOfRange | WriteProblem::CountOutOfRange => range,
         WriteProblem::VariableNotApplying => Some(unapplied_text(labels, &invalid.variable)),
         _ => None,
     };
-    match detail {
+    let mut sentence = match detail {
         Some(detail) => fill(labels.goals_problem_with, &[words, &detail]),
         None => words.to_owned(),
+    };
+    let ruled = matches!(control, Some(ValueControl::Number { .. } | ValueControl::Ordered { .. }));
+    if ruled && invalid.problem.of_the_rule() {
+        sentence = fill(labels.goals_problem_with, &[&sentence, labels.goals_rule_changed]);
     }
+    if let Some(item) = item {
+        let title = match control {
+            Some(ValueControl::Ordered { rule, .. }) => {
+                rule.option(item).map_or(item, |option| option.title.as_str())
+            }
+            _ => item,
+        };
+        let named = fill(labels.goals_problem_item, &[title]);
+        sentence = fill(labels.goals_problem_with, &[&sentence, &named]);
+    }
+    sentence
 }
 
 /// One line of the Goals tab, at most three layers: its title, the value now, and under it amber
@@ -3707,8 +3994,9 @@ fn stored_goal_text(
 }
 
 /// A variable: its title; the value the next run reads; in amber that a value set is not used or
-/// the variable does not apply, and why; in grey that no pack offers it, the keys skipped, the
-/// pack's default while a value set is in effect, and who set it. Greyed while not offered.
+/// the variable does not apply, and why; in grey the keys of a list not used that are no longer
+/// offered (G3), that no pack offers it, the keys skipped, the pack's default while a value set is
+/// in effect, and who set it. Greyed while not offered.
 fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
     let mut warnings: Vec<String> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
@@ -3727,6 +4015,12 @@ fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
             warnings.push(fill(labels.goals_not_applying, &[&unapplied_text(labels, why)]));
         }
         VariableState::NotOffered => notes.push(labels.goals_not_offered.to_owned()),
+    }
+    // G3: of a list stored and not used, the keys no longer offered, just under why it is not
+    // used; by their keys, which have no title any more.
+    if !line.gone.is_empty() {
+        let keys = line.gone.join(labels.goals_list_separator);
+        notes.push(fill(labels.goals_stored_gone, &[&keys]));
     }
     if !line.left_out.is_empty() {
         let keys = line.left_out.join(labels.goals_list_separator);

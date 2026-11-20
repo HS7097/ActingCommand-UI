@@ -1073,10 +1073,9 @@ is turned off".
 **Goals** (#455, the goal page) is that instance's goal page, drawn from its `GoalView` alone (#463 V3,
 Runtime 0.12.61), the very read the Lab's `goals` answers, and some of it can be changed there (below). On
 a page with something to set (an entry, a value no longer offered or an other resource goal), a line at its
-top says what can be changed there (resource goal amounts, switches and choices, each put back to its
-default or cleared, and values no longer offered and other resource goals cleared) and that number and
-order settings, putting them back to their defaults included, need the Lab (command line or MCP) until the
-next version; any other page leaves that line out. Its
+top says what can be changed there (resource goal amounts and the variables' choices, switches, numbers
+and orders, each put back to its default or cleared, and values no longer offered and other resource
+goals cleared); any other page leaves that line out. Its
 lines go in the Runtime's order: first the entries of the game's `goals.json`, then each package variable
 no entry places, in groups under the display name of its first package (the `pack-catalog.json` title the
 task names come from, `ui.json`'s before Runtime 0.12.68; every variable whose package has none goes in one
@@ -1109,7 +1108,10 @@ per `variable_problem` word (a word this console does not know by its code, whic
 of once); a variable that does not apply in the game says "This does not apply in this game: …", and one
 no root check judges now (`root_unchecked`) "Whether this applies in this game is not known now: …"; a
 placement no pack of the instance offers is greyed with "No pack of this instance offers this"; an
-`ordered` value applied in part lists in grey the items skipped. The packages' remedy parameters, which
+`ordered` value applied in part lists in grey the items skipped, and one stored and not used lists in grey,
+just under why it is not used, its items no longer offered, by their ids, which have no title any more
+("Of the value stored, these are no longer offered: …"; the console finds them by the declaration's
+options, as the Runtime names them only of a value in effect). The packages' remedy parameters, which
 `remedy set` writes, are not on this page: it does not read them from the `GoalView`.
 
 Three groups close the page. **No longer offered**: each value stored under a name nothing offers any more,
@@ -1177,10 +1179,13 @@ Return or a click picks, and a pick of another option writes it once; Esc closes
 click picks, the clicks and the wheel of the next half second or so do nothing, so the second click
 of a double-click reaches nothing under the list. After a pick the keyboard focus waits just beside
 the box, where Return and Space do nothing. A variable with
-a value stored has **Back to Default**, which clears it (but for a name another line has, below);
-`integer` and `ordered` variables are only shown in this version, and so have neither a control nor
-**Back to Default**: with no control of them here a value cleared could not be set back from here, so both
-come with their controls in the next version. A placement no bound pack offers that holds a value, and
+a value stored has **Back to Default**, which clears it (but for a name another line has, below); an
+`integer` and an `ordered` variable have their controls too (#455 G3, below). A variable whose declaration
+this console does not read as the Runtime reads it (a type it does not know, or an `integer` or `ordered`
+declaration the Runtime would refuse) shows its title and value only, and says in grey "This version of
+the console cannot change this here": it has neither a control nor **Back to Default**, as the contract's
+fallback rule has it (shown, never written); a block this console does not know shows its type's base
+control. A placement no bound pack offers that holds a value, and
 each value **No longer offered**, has **Clear**. An **other resource goal** whose id has an entry name's
 form (`[a-z0-9][a-z0-9_]*`, at most 64 bytes, the only names `EditGoal` takes) has **Clear**; any other
 says "Change it with the Lab". A write names a name only, and the Runtime takes what is stored under it in
@@ -1196,13 +1201,75 @@ while the page lists nothing (`not_checked_yet`, `root_failing`, `no_schedule`),
 is of the old form (v1), while a write of the instance is out, and after an answer until the page read
 again has come.
 
+**Numbers and orders** (#455 G3). An `integer` variable has a field, "New value", with the unit it is
+typed in beside it, and **Set**; under it in grey what can be set, "From 30 s to 3630 s, in steps of 30 s"
+(no step said where it is one of that unit). A number of a time unit (`second`, `minute`, `hour` or `day`,
+whose values are milliseconds) is typed in one unit: the largest at most the declared one that is a whole
+number of steps, of which the minimum is a whole number, and one of which past the minimum is not above
+the maximum, so that every whole number typed lands on a step and more than the minimum can be typed (one
+declared in hours without a step is typed in hours, where its range holds an hour); failing every unit (a
+step of 7 milliseconds, say, or minutes declared on a range of 200 milliseconds), the largest of which both
+the minimum and the step are whole numbers (milliseconds always are). A value in use that is no whole
+number of that unit (set elsewhere or the default, 90 minutes declared in hours say) is still shown on the
+line, and the grey words add that it can only be changed here to a whole number of the unit, and that
+another value is set with the Lab. What is typed is checked here as the Runtime checks it: "Type a whole
+number" (ASCII digits after one sign at most: full-width digits, a point, a space inside or digit groups
+are not), "Must be from … to …" (up to the last value on a step, which the maximum need not be), "Must
+start at … and go up in steps of …", "This is the value in use already" (of a value stored and not used,
+that is the default, which writes nothing: the value stored is replaced by another number, or put back to
+the default). Only **Set** sends it, never Return in the field, and there are no − and + buttons; a time
+is written in milliseconds.
+
+An `ordered` variable has an editor under its value: the items chosen, numbered, in their order ("None
+chosen" above an empty list); **Move Up**, **Move Down** and **Remove**, which act on the marked item; a
+search field when it has more than eight options, which finds options by their titles in any language and
+in any case, never by an option's id, which is not shown; the options it finds in the declaration's order,
+at most 100 of them, then "N more not listed: type more to narrow the list", or "No option matches". A
+click on an option, or Return on it, adds it at the end; an option chosen stays in its place, marked
+"Chosen", and a click on it does nothing (so the second click of a double-click adds nothing); one that
+would not fit is greyed, "Does not fit". Under them in grey how many are chosen of how many ("3 chosen, 1
+to 32 allowed", "2 chosen, 2 needed": never more than there are options, as the Runtime does not refuse a
+`max_count` above them), then "Full: remove an item to add another", or, while it is not full, "No more
+items fit: a value holds at most 1024 bytes" once no option left fits: a value's text, the compact JSON
+list of the ids, holds at most 1024 bytes, so fifteen ids of 64 bytes fit and a sixteenth does not. Every
+edit changes a draft only, which writes nothing: it starts from the ids the next run reads (of a value not
+used, the default; of one applied in part, the value stored without the items no longer offered), and
+**Save Order** sends it whole, checked first, in this order: an item twice, items no longer offered
+("Items no longer offered: N. Remove them first"), too few, too many, too long ("Together these are too
+long to store: N bytes, at most 1024"). **Discard Changes** goes back to the ids in use. A draft whose
+value was changed elsewhere since it was begun says "This value was changed elsewhere after you began:
+discard your changes and start again" and is not saved, only discarded. The drafts and what the search
+fields hold stay through the page's reads, and go once a save took, as the tab shows another instance, or
+as the Runtime starts again. A list saved as it is in use writes nothing.
+
+The keyboard: each list is one Tab stop; the Up and Down keys move its mark; Return in the list of options
+adds the option marked (held down, once); Space does nothing; the Down key in the search field moves to the
+list of options. After **Set**, **Clear**, **Back to Default**, **Confirm**, **Cancel**, **Save Order** or
+**Discard Changes**, the keyboard focus waits at the foot of its line, where Return and Space do nothing,
+and Tab goes on to the line's first control rather than round the window to the top bar's buttons. While a
+write is out every control of the page is off, so Tab then passes over the line; and where a clear takes
+its line off the page (a value no longer offered, an other resource goal), the focus may go with the line
+once the page is read again, and Tab then starts again from the top of the window (known gaps).
+
+The Runtime's refusal of a number or a list by its rule (out of range, off its step, not an option, a
+count out of range, an item twice, a value of the wrong type), which the checks here leave only to a rule
+newer than the page's, adds "The package's rule may have just changed; the page is read again", and the
+page is read again at once; a number's range is said in its unit, as a value is shown, and the item a
+list's refusal points at by its title ("The item is "…""). The packages' remedy parameters are still not
+on this page.
+
 A press asks to be confirmed first only where what it loses cannot be set back from here, and the question
 says what: clearing a value no run reads (no longer offered, or of a placement not offered), "the value
 stored (…) cannot be set back"; for a variable whose value stored the next run does not take (an option no
 longer offered, a value of another type, a number off its range or step, a reason word this console does
 not know, or the game root's own judgement that it does not apply, such as a pack that counts as able to
-do something irreversible, after which no value can be set on it here), **Back to Default**, another option
-or the switch turned, likewise with the value stored, which no control here sets again; clearing an other
+do something irreversible, after which no value can be set on it here), **Back to Default**, another option,
+the switch turned, a number set or a list saved, likewise with the value stored, which no control here
+sets again; saving another list, or **Back to Default**, of an `ordered` value in effect whose stored items
+no longer offered the run leaves out, with those items, which no list set here holds again ("Saving drops
+the items of the value stored that are no longer offered (…), which cannot be set back from here. Save?",
+"Going back to the default clears the value stored, with the items no longer offered (…), which cannot be
+set back from here. Go back?"); clearing an other
 resource goal, with its pool and amount; setting an amount on a resource whose name an other resource goal,
 or another resource's goal, has as its id, which the Runtime then removes too: of an other resource goal
 with its pool and amount, of another resource entry's goal with that entry's title (never its pool's id),
@@ -1218,15 +1285,17 @@ amber "This goal was set elsewhere: changing it here replaces how it was set", w
 takes a goal here. A goal set elsewhere that carries none of the four (as one set by name elsewhere), on a
 pool that takes a goal here, loses nothing a goal set here does not hold again, so replacing or clearing it
 asks nothing: only that amber line says it was set elsewhere. Back to the default of a variable whose value
-is in effect, a choice or switch changed while the value in effect is the one set, and a goal this console
-set on a pool that takes one ask nothing.
+is in effect, a choice, switch, number or list changed while the value in effect is the one set (any of
+them but for a list with items left out, above), editing a list's draft, and a goal this console set on a
+pool that takes one ask nothing.
 Only **Confirm** sends it, and it reckons the press again on the newest page read, of the same line: when
 that no longer writes or asks what was asked about (the page was read again meanwhile, or cannot be read
-now), the question goes, nothing is sent, and the line says in amber "By the confirmation the page was no
+now), or a list's value was changed elsewhere after its draft was begun, the question goes, nothing is
+sent, and the line says in amber "By the confirmation the page was no
 longer the one asked about (read again, or not readable now): nothing was sent. Look again, then press
 again"; else it goes
-naming that page's version. While the question waits, its line's amount box and **Set** are greyed, so
-what is confirmed is the amount asked about. **Cancel**, a press anywhere else, another instance or a
+naming that page's version. While the question waits, its line's amount box and **Set** are greyed, as is
+a list's editor, so what is confirmed is the amount or list asked about. **Cancel**, a press anywhere else, another instance or a
 restart lets the question go.
 
 The write goes on a fresh person's connection (the `ui` channel, the full receipt) at the slow reads' io
@@ -1238,7 +1307,8 @@ connection; the value refused (`goal_value_invalid`), on its line one sentence p
 the values it comes with (a range "1 to 9999", but not for a number off its step, where it would read as
 the step's; a bound with its unit, "1024 bytes" a value holds or the
 items a record holds, why a variable does not apply; a word
-this console does not know by its code, which the technical log hears of once), nothing read again; not
+this console does not know by its code, which the technical log hears of once), nothing read again, but
+for a variable's value refused by its rule, which only a rule newer than the page's comes to (above); not
 known what became of it, read again first, and pressed again only once that read came (the version it
 named makes a second write after a first that took meet a version conflict, never write twice); a Runtime
 without the write (`runtime_operation_unsupported`, `not_implemented`), the page only shown in that owner

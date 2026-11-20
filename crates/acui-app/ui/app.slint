@@ -197,9 +197,28 @@ export struct TaskListData {
 // What one line of the Goals tab is: an entry, a group's title, or a note's words.
 export enum GoalRowKind { entry, heading, note }
 
-// Which control an entry of the Goals tab has (Workflow #455 G2): none; a resource's amount, typed
-// then set; a choice's options side by side (four or fewer) or in a drop-down (more); a switch.
-export enum GoalControl { none, amount, segments, dropdown, switch }
+// Which control an entry of the Goals tab has (Workflow #455 G2, G3): none; a resource's amount or
+// an integer variable's number, typed then set; a choice's options side by side (four or fewer) or
+// in a drop-down (more); a switch; an ordered variable's list, edited then saved.
+export enum GoalControl { none, amount, segments, dropdown, switch, ordered }
+
+// One item chosen of an ordered variable on the Goals tab (G3): its place and its option's title
+// (its key once the option is no longer offered), and whether the option is no longer offered.
+export struct GoalPick {
+    title: string,
+    gone: bool,
+}
+
+// One option of an ordered variable on the Goals tab (G3) that its search finds: its value, which
+// an addition names (never shown), its title, whether the list holds it, whether it can be added
+// now, and in grey beside it that it is chosen or does not fit.
+export struct GoalOffer {
+    value: string,
+    title: string,
+    chosen: bool,
+    fits: bool,
+    mark: string,
+}
 
 // One line of the account's Goals tab (Workflow #455, #463 V3), in words, at most three layers. A
 // group's title in bold; a note's words in grey, its help under them. An entry: its title, greyed
@@ -207,11 +226,15 @@ export enum GoalControl { none, amount, segments, dropdown, switch }
 // goal is met (never once it lapsed); under it in amber what is not used, does not read or lapsed,
 // and in grey the rest (a reading, a default, who set it, why not). G2: what names the line to a
 // press (never shown); its control and whether the page's controls can be pressed now
-// (`enabled`), this one's too (`settable`); the amount typed, what the field says when empty, why
-// that is no amount, and whether "set" can be pressed; a choice's options, the one chosen (-1:
-// none) and a switch's state; the clear's words ("clear", "back to the default"; none: no clear);
-// what its last press came to, red when that failed and amber when it asks to look again; and the
-// question a press asks first, with "confirm" and "cancel".
+// (`enabled`), this one's too (`settable`); the amount or number typed, what the field says when
+// empty, the unit it is typed in, why that is not sent, and whether "set" can be pressed; a
+// choice's options, the one chosen (-1: none) and a switch's state; in grey under the control what
+// can be set (`control-hint`: a number's range and step; a list's count and whether it is full);
+// G3, a list's items, the options its search finds, how many more or that none is found, whether
+// the search field shows and what it holds, whether "save order" can be pressed, whether there is
+// a draft, and in amber what keeps the draft from being saved; the clear's words ("clear", "back
+// to the default"; none: no clear); what its last press came to, red when that failed and amber
+// when it asks to look again; and the question a press asks first, with "confirm" and "cancel".
 export struct GoalRowData {
     kind: GoalRowKind,
     title: string,
@@ -226,11 +249,21 @@ export struct GoalRowData {
     settable: bool,
     amount-text: string,
     amount-placeholder: string,
+    amount-unit: string,
     amount-problem: string,
     set-ready: bool,
     options: [string],
     chosen: int,
     switch-on: bool,
+    control-hint: string,
+    picks: [GoalPick],
+    offers: [GoalOffer],
+    offers-more: string,
+    search-shown: bool,
+    search-text: string,
+    order-ready: bool,
+    order-changed: bool,
+    order-problem: string,
     clear-label: string,
     said: string,
     said-failed: bool,
@@ -571,13 +604,27 @@ export global Strings {
     in property <string> tasks-irreversible;
     in property <string> tasks-risky;
     // The right column's third tab, the account's goals (Workflow #455), and on it, in grey, what
-    // can be changed there and what still needs the Lab; the buttons of its lines: "set" beside an
-    // amount, "confirm" and "cancel" of a question.
+    // can be changed there; the buttons of its lines: "set" beside an amount or a number, "confirm"
+    // and "cancel" of a question.
     in property <string> goals-tab;
     in property <string> goals-later;
     in property <string> goals-set;
     in property <string> goals-confirm;
     in property <string> goals-cancel;
+    // An ordered variable's editor (Workflow #455 G3): its buttons "move up", "move down",
+    // "remove", "save order" and "discard changes"; its search field's words; the names of its two
+    // lists for a screen reader; in amber beside an item, that its option is no longer offered; in
+    // grey, that none is chosen.
+    in property <string> goals-order-up;
+    in property <string> goals-order-down;
+    in property <string> goals-order-remove;
+    in property <string> goals-order-save;
+    in property <string> goals-order-discard;
+    in property <string> goals-order-search;
+    in property <string> goals-order-chosen-label;
+    in property <string> goals-order-options-label;
+    in property <string> goals-order-gone-mark;
+    in property <string> goals-none-chosen;
     // Under the live view: the button that refreshes the picture of the account picked, and in
     // grey what a refresh costs.
     in property <string> refresh-frame;
@@ -2476,12 +2523,15 @@ component TaskList {
     }
 }
 
-// A resource line's amount field on the Goals tab (Workflow #455 G2): what is typed is the
-// caller's as much as the person's, both ways. The field takes what the caller holds whenever that
-// changes, which is what was typed, or nothing once a set took or the line is another's.
+// A resource line's amount field, or an integer variable's number field (G3), on the Goals tab
+// (Workflow #455 G2): what is typed is the caller's as much as the person's, both ways. The field
+// takes what the caller holds whenever that changes, which is what was typed, or nothing once a
+// set took or the line is another's. Return in it does nothing: only "set" sends. For a screen
+// reader it is named by `label`, the line's title, else by what it says when empty.
 component GoalAmount {
     in property <string> text-shown;
     in property <string> placeholder;
+    in property <string> label;
     in property <bool> enabled;
     callback edited(string);
     HorizontalLayout {
@@ -2490,7 +2540,7 @@ component GoalAmount {
             text: root.text-shown;
             placeholder-text: root.placeholder;
             enabled: root.enabled;
-            accessible-label: root.placeholder;
+            accessible-label: root.label != "" ? root.label : root.placeholder;
             font-size: Scale.body-font;
             // The std field asks for 160px; an amount needs less.
             min-width: 80px * Scale.factor;
@@ -2538,14 +2588,394 @@ component GoalChoiceBox {
     }
 }
 
+// An ordered variable's search field on the Goals tab (Workflow #455 G3), as GoalAmount is: what
+// is typed is the caller's as much as the person's, both ways, and the field takes what the caller
+// holds whenever that changes. It is never off: a search writes nothing. The Down key hands the
+// keyboard focus to the list of options under it (`to-options`); every other key is the field's.
+component GoalSearch {
+    in property <string> text-shown;
+    callback edited(string);
+    callback to-options();
+    HorizontalLayout {
+        padding: 0;
+        search-field := LineEdit {
+            text: root.text-shown;
+            placeholder-text: Strings.goals-order-search;
+            accessible-label: Strings.goals-order-search;
+            font-size: Scale.body-font;
+            min-width: 120px * Scale.factor;
+            preferred-width: 220px * Scale.factor;
+            horizontal-stretch: 0;
+            edited(text) => {
+                root.edited(text);
+            }
+            key-pressed(event) => {
+                if (event.text == Key.DownArrow) {
+                    root.to-options();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
+        }
+    }
+    changed text-shown => {
+        if (search-field.text != root.text-shown) {
+            search-field.text = root.text-shown;
+        }
+    }
+}
+
+// An ordered variable's editor on the Goals tab (Workflow #455 G3), no popup and no virtualized
+// list. From the top: "none chosen" in grey, outside the list so a screen reader counts no row of
+// it; the items chosen, each numbered, all of them (32 at most), one Tab stop, the Up and Down keys
+// moving the mark, which always shows, as "move up", "move down" and "remove" act on its item; the
+// search field, only of a long list; the options it finds, one Tab stop, eight rows in sight, the
+// Up and Down keys moving the highlight and Return adding the option highlighted, a click adding
+// the option clicked (an option chosen stays where it is, marked, and a click on it does nothing,
+// so the second click of a double-click adds nothing); how many more there are; in amber what
+// keeps the draft from being saved, in grey how many are chosen; "save order" and "discard
+// changes", always there, so neither is gone while it has the focus. The lists' key handlers are
+// never off, as an off FocusScope takes no focus but still has its keys, and so they ask
+// `enabled` themselves, and while it is off both lists' words are grey as the buttons are; every
+// button's handler asks again what its button's state says, as an off button with the focus is
+// still pressed by Space or Return in the flat skin. Every edit is the caller's to make or refuse
+// (`moved` says whether it moved, which the mark follows).
+component GoalOrderEditor {
+    in property <[GoalPick]> picks;
+    in property <[GoalOffer]> offers;
+    in property <string> offers-more;
+    in property <bool> search-shown;
+    in property <string> search-text;
+    in property <string> problem;
+    in property <string> hint;
+    in property <bool> save-ready;
+    in property <bool> has-draft;
+    in property <bool> enabled;
+    callback added(string);
+    callback moved(int, int) -> bool;
+    callback removed(int);
+    callback saved();
+    callback discarded();
+    callback searched(string);
+    // The marked item, kept within the items.
+    property <int> mark;
+    property <int> mark-at: root.picks.length == 0 ? -1 : clamp(root.mark, 0, root.picks.length - 1);
+    // The highlighted option, kept within those listed.
+    property <int> offer-mark;
+    property <int> offer-at: root.offers.length == 0 ? -1 : clamp(root.offer-mark, 0, root.offers.length - 1);
+    property <int> offer-rows: min(8, root.offers.length);
+    property <length> list-padding: 4px;
+    // The option at `at` added, while it can be.
+    function add-at(at: int) {
+        if (root.enabled && at >= 0 && at < root.offers.length) {
+            if (!root.offers[at].chosen && root.offers[at].fits) {
+                root.added(root.offers[at].value);
+            }
+        }
+    }
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 4px;
+        if root.picks.length == 0: Text {
+            text: Strings.goals-none-chosen;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: TextWrap.word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        Rectangle {
+            height: root.picks.length * Scale.row;
+            vertical-stretch: 0;
+            accessible-role: AccessibleRole.list;
+            accessible-label: Strings.goals-order-chosen-label;
+            accessible-delegate-focus: root.mark-at;
+            accessible-item-count: root.picks.length;
+            picks-keys := FocusScope {
+                focus-on-click: false;
+                focus-on-tab-navigation: root.picks.length > 0;
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow) {
+                        root.mark = max(0, root.mark-at - 1);
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.DownArrow) {
+                        root.mark = max(0, min(root.picks.length - 1, root.mark-at + 1));
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.Return || event.text == Key.Space) {
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+                VerticalLayout {
+                    alignment: LayoutAlignment.start;
+                    for pick[place] in root.picks: Rectangle {
+                        height: Scale.row;
+                        // The mark always shows: "move up", "move down" and "remove" act on it.
+                        background: place == root.mark-at ? Look.selection : Colors.transparent;
+                        border-radius: max(0px, Look.radius - 2px);
+                        accessible-role: AccessibleRole.list-item;
+                        accessible-label: pick.gone ? pick.title + " " + Strings.goals-order-gone-mark : pick.title;
+                        accessible-item-selectable: true;
+                        accessible-item-selected: place == root.mark-at;
+                        accessible-item-index: place;
+                        HorizontalLayout {
+                            padding-left: 7px;
+                            padding-right: 7px;
+                            spacing: 6px;
+                            Text {
+                                text: pick.title;
+                                font-size: Scale.body-font;
+                                // In grey while the editor is off.
+                                color: root.enabled ? Look.text : Look.text-caption;
+                                vertical-alignment: TextVerticalAlignment.center;
+                                overflow: TextOverflow.elide;
+                                min-width: 0px;
+                                horizontal-stretch: 1;
+                                // The row itself carries the words.
+                                accessible-role: AccessibleRole.none;
+                            }
+                            if pick.gone: Text {
+                                text: Strings.goals-order-gone-mark;
+                                font-size: Scale.grey-font;
+                                color: Severity.warning;
+                                vertical-alignment: TextVerticalAlignment.center;
+                                horizontal-stretch: 0;
+                                accessible-role: AccessibleRole.none;
+                            }
+                        }
+                        TouchArea {
+                            clicked => {
+                                root.mark = place;
+                                picks-keys.focus();
+                            }
+                        }
+                    }
+                }
+            }
+            if picks-keys.has-focus: FocusRing { }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            SkinButton {
+                text: Strings.goals-order-up;
+                enabled: root.enabled && root.mark-at > 0;
+                clicked => {
+                    let here = root.mark-at;
+                    if (root.enabled && here > 0) {
+                        if (root.moved(here, here - 1)) {
+                            root.mark = here - 1;
+                        }
+                    }
+                }
+            }
+            SkinButton {
+                text: Strings.goals-order-down;
+                enabled: root.enabled && root.mark-at >= 0 && root.mark-at < root.picks.length - 1;
+                clicked => {
+                    let here = root.mark-at;
+                    if (root.enabled && here >= 0 && here < root.picks.length - 1) {
+                        if (root.moved(here, here + 1)) {
+                            root.mark = here + 1;
+                        }
+                    }
+                }
+            }
+            SkinButton {
+                text: Strings.goals-order-remove;
+                enabled: root.enabled && root.mark-at >= 0;
+                clicked => {
+                    let here = root.mark-at;
+                    if (root.enabled && here >= 0) {
+                        root.removed(here);
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.search-shown: GoalSearch {
+            text-shown: root.search-text;
+            edited(text) => {
+                root.offer-mark = 0;
+                offers-scroller.viewport-y = 0px;
+                root.searched(text);
+            }
+            to-options => {
+                if (root.offers.length > 0) {
+                    offers-keys.focus();
+                }
+            }
+        }
+        Rectangle {
+            height: root.offers.length == 0 ? 0px : root.offer-rows * Scale.row + 2 * root.list-padding;
+            vertical-stretch: 0;
+            background: Look.card-background;
+            border-radius: Look.radius;
+            border-width: root.offers.length == 0 ? 0px : 1px;
+            border-color: Look.card-border;
+            accessible-role: AccessibleRole.list;
+            accessible-label: Strings.goals-order-options-label;
+            accessible-delegate-focus: root.offer-at;
+            accessible-item-count: root.offers.length;
+            offers-keys := FocusScope {
+                focus-on-click: false;
+                focus-on-tab-navigation: root.offers.length > 0;
+                // Scrolls the list just enough for the highlighted option to show.
+                function reveal() {
+                    if (root.offer-at * Scale.row < -offers-scroller.viewport-y) {
+                        offers-scroller.viewport-y = -(root.offer-at * Scale.row);
+                    } else if ((root.offer-at + 1) * Scale.row + 2 * root.list-padding > offers-scroller.visible-height - offers-scroller.viewport-y) {
+                        offers-scroller.viewport-y = offers-scroller.visible-height - (root.offer-at + 1) * Scale.row - 2 * root.list-padding;
+                    }
+                }
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow) {
+                        root.offer-mark = max(0, root.offer-at - 1);
+                        self.reveal();
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.DownArrow) {
+                        root.offer-mark = max(0, min(root.offers.length - 1, root.offer-at + 1));
+                        self.reveal();
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.Return) {
+                        root.add-at(root.offer-at);
+                        return EventResult.accept;
+                    }
+                    if (event.text == Key.Space) {
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
+                }
+                offers-scroller := ScrollView {
+                    viewport-width: self.visible-width;
+                    VerticalLayout {
+                        alignment: LayoutAlignment.start;
+                        padding: root.list-padding;
+                        for offer[at] in root.offers: Rectangle {
+                            height: Scale.row;
+                            background: offers-keys.has-focus && at == root.offer-at ? Look.selection : Colors.transparent;
+                            border-radius: max(0px, Look.radius - 2px);
+                            accessible-role: AccessibleRole.list-item;
+                            accessible-label: offer.title;
+                            accessible-item-selectable: true;
+                            accessible-item-selected: offer.chosen;
+                            accessible-item-index: at;
+                            accessible-action-default => {
+                                root.add-at(at);
+                            }
+                            HorizontalLayout {
+                                padding-left: 7px;
+                                padding-right: 7px;
+                                spacing: 6px;
+                                Text {
+                                    text: offer.title;
+                                    font-size: Scale.body-font;
+                                    // Chosen, no longer fitting, or the editor off: in grey.
+                                    color: !root.enabled || offer.chosen || !offer.fits ? Look.text-caption : Look.text;
+                                    vertical-alignment: TextVerticalAlignment.center;
+                                    overflow: TextOverflow.elide;
+                                    min-width: 0px;
+                                    horizontal-stretch: 1;
+                                    accessible-role: AccessibleRole.none;
+                                }
+                                if offer.mark != "": Text {
+                                    text: offer.mark;
+                                    font-size: Scale.grey-font;
+                                    color: Look.text-caption;
+                                    vertical-alignment: TextVerticalAlignment.center;
+                                    horizontal-stretch: 0;
+                                    accessible-role: AccessibleRole.none;
+                                }
+                            }
+                            TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.move) {
+                                        root.offer-mark = at;
+                                    }
+                                }
+                                clicked => {
+                                    root.offer-mark = at;
+                                    offers-keys.focus();
+                                    root.add-at(at);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if offers-keys.has-focus: FocusRing { }
+        }
+        if root.offers-more != "": Text {
+            text: root.offers-more;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: TextWrap.word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.problem != "": Text {
+            text: root.problem;
+            font-size: Scale.grey-font;
+            color: Severity.warning;
+            wrap: TextWrap.word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.hint != "": Text {
+            text: root.hint;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: TextWrap.word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            SkinButton {
+                text: Strings.goals-order-save;
+                enabled: root.save-ready;
+                clicked => {
+                    if (root.save-ready) {
+                        root.saved();
+                    }
+                }
+            }
+            SkinButton {
+                text: Strings.goals-order-discard;
+                enabled: root.enabled && root.has-draft;
+                clicked => {
+                    if (root.enabled && root.has-draft) {
+                        root.discarded();
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
 // One line of the Goals tab (Workflow #455, #463 V3), by its kind. A group's title, in bold. A
 // note's words in grey, its help under them. An entry: its title, greyed while no goal can be set
 // on its pool or no pack offers it; the value now, in the accent once a goal is met; G2's control
-// where it has one: an amount and "set" (and beside them why what is typed is no amount), a
-// choice's options side by side or in a drop-down, a switch, each showing what the newest read
-// says; in amber what is not used, does not read, lapsed or was set elsewhere; in grey the rest;
-// its clear, "clear" or "back to the default"; what its last press came to; the question a press
-// asks first, in amber, with "confirm" and "cancel". All of it wraps.
+// where it has one: an amount or a number and "set" (with the number's unit, and beside them why
+// what is typed is not sent), a choice's options side by side or in a drop-down, a switch, each
+// showing what the newest read says, and in grey under it what can be set; G3's editor of an
+// ordered variable's list; in amber what is not used, does not read, lapsed or was set elsewhere;
+// in grey the rest; its clear, "clear" or "back to the default"; what its last press came to; the
+// question a press asks first, in amber, with "confirm" and "cancel". All of it wraps.
+//
+// Where the keyboard focus waits (G3): `line-park`, at the line's foot on its left edge and of no
+// size, which Tab never reaches and where Return and Space do nothing. Each button that sends or
+// answers ("set", "clear" or "back to the default", "confirm", "cancel", "save order", "discard
+// changes") puts the focus there before it acts, so that as the button greys or goes, the focus
+// does not go round the window to the top bar's buttons that act on every instance; and Tab from
+// there goes on to the line's first control that takes the focus. It is the line's first child,
+// outside the layout: placed, it adds nothing to the line's size.
 component GoalLineView {
     in property <GoalRowData> line;
     callback amount-edited(string);
@@ -2555,7 +2985,27 @@ component GoalLineView {
     callback clear-pressed();
     callback confirmed();
     callback cancelled();
+    callback order-added(string);
+    callback order-moved(int, int) -> bool;
+    callback order-removed(int);
+    callback order-saved();
+    callback order-discarded();
+    callback order-searched(string);
     vertical-stretch: 0;
+    line-park := FocusScope {
+        x: 0px;
+        y: root.height;
+        width: 0px;
+        height: 0px;
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == Key.Space) {
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
     VerticalLayout {
         spacing: 2px;
         if root.line.kind == GoalRowKind.heading: Text {
@@ -2591,22 +3041,32 @@ component GoalLineView {
             min-height: self.preferred-height;
             vertical-stretch: 0;
         }
-        if root.line.kind == GoalRowKind.entry && root.line.control != GoalControl.none: HorizontalLayout {
+        if root.line.kind == GoalRowKind.entry && root.line.control != GoalControl.none && root.line.control != GoalControl.ordered: HorizontalLayout {
             spacing: 6px;
             vertical-stretch: 0;
             // Greyed while this line's question waits: the confirmation sends the amount asked about.
             if root.line.control == GoalControl.amount: GoalAmount {
                 text-shown: root.line.amount-text;
                 placeholder: root.line.amount-placeholder;
+                label: root.line.title;
                 enabled: root.line.enabled && root.line.settable && root.line.confirm == "";
                 edited(text) => {
                     root.amount-edited(text);
                 }
             }
+            // The unit a number is typed in.
+            if root.line.control == GoalControl.amount && root.line.amount-unit != "": Text {
+                text: root.line.amount-unit;
+                font-size: Scale.body-font;
+                color: Look.text-secondary;
+                vertical-alignment: TextVerticalAlignment.center;
+                horizontal-stretch: 0;
+            }
             if root.line.control == GoalControl.amount: SkinButton {
                 text: Strings.goals-set;
                 enabled: root.line.enabled && root.line.settable && root.line.set-ready && root.line.confirm == "";
                 clicked => {
+                    line-park.focus();
                     root.set-pressed();
                 }
             }
@@ -2648,6 +3108,49 @@ component GoalLineView {
             }
             Rectangle { horizontal-stretch: 1; }
         }
+        // What a number can be set to (G3); a resource line has none, and so no blank line either.
+        if root.line.control-hint != "" && root.line.control != GoalControl.ordered: Text {
+            text: root.line.control-hint;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: TextWrap.word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        // An ordered variable's list (G3), off while this line's question waits: the confirmation
+        // saves the list asked about.
+        if root.line.kind == GoalRowKind.entry && root.line.control == GoalControl.ordered: GoalOrderEditor {
+            picks: root.line.picks;
+            offers: root.line.offers;
+            offers-more: root.line.offers-more;
+            search-shown: root.line.search-shown;
+            search-text: root.line.search-text;
+            problem: root.line.order-problem;
+            hint: root.line.control-hint;
+            save-ready: root.line.order-ready;
+            has-draft: root.line.order-changed;
+            enabled: root.line.enabled && root.line.settable && root.line.confirm == "";
+            added(value) => {
+                root.order-added(value);
+            }
+            moved(here, there) => {
+                return root.order-moved(here, there);
+            }
+            removed(place) => {
+                root.order-removed(place);
+            }
+            saved => {
+                line-park.focus();
+                root.order-saved();
+            }
+            discarded => {
+                line-park.focus();
+                root.order-discarded();
+            }
+            searched(text) => {
+                root.order-searched(text);
+            }
+        }
         if root.line.warning != "": Text {
             text: root.line.warning;
             font-size: Scale.grey-font;
@@ -2670,6 +3173,7 @@ component GoalLineView {
                 text: root.line.clear-label;
                 enabled: root.line.enabled;
                 clicked => {
+                    line-park.focus();
                     root.clear-pressed();
                 }
             }
@@ -2695,12 +3199,14 @@ component GoalLineView {
                 text: Strings.goals-confirm;
                 enabled: root.line.enabled;
                 clicked => {
+                    line-park.focus();
                     root.confirmed();
                 }
             }
             SkinButton {
                 text: Strings.goals-cancel;
                 clicked => {
+                    line-park.focus();
                     root.cancelled();
                 }
             }
@@ -2709,11 +3215,11 @@ component GoalLineView {
 }
 
 // The account's Goals tab on the workbench (Workflow #455, #463 V3), under its own tab in the right
-// column. In grey, what can be changed here and what still needs the Lab, only on a page with
-// something to set (G0). What it says instead of its lines; else above them that the game's
-// standard pack offers no goals to set here yet, in amber how the page stands where something is
-// wrong, when it was read, and in grey how it stands otherwise; the lines, each press naming its
-// line by its key (G2); under them, in grey, the old form's note, and whether the resource goals
+// column. In grey, what can be changed here, only on a page with something to set (G0). What it
+// says instead of its lines; else above them that the game's standard pack offers no goals to set
+// here yet, in amber how the page stands where something is wrong, when it was read, and in grey
+// how it stands otherwise; the lines, each press and each edit of a list's draft naming its line
+// by its key (G2, G3); under them, in grey, the old form's note, and whether the resource goals
 // stored hold and until when. All of it wraps; the whole card scrolls when it is too short for it.
 component GoalList {
     in property <GoalListData> data;
@@ -2725,6 +3231,12 @@ component GoalList {
     callback clear-pressed(string);
     callback confirmed();
     callback cancelled();
+    callback order-added(string, string);
+    callback order-moved(string, int, int) -> bool;
+    callback order-removed(string, int);
+    callback order-saved(string);
+    callback order-discarded(string);
+    callback order-searched(string, string);
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 6px;
@@ -2786,6 +3298,24 @@ component GoalList {
             }
             cancelled => {
                 root.cancelled();
+            }
+            order-added(value) => {
+                root.order-added(item.key, value);
+            }
+            order-moved(here, there) => {
+                return root.order-moved(item.key, here, there);
+            }
+            order-removed(place) => {
+                root.order-removed(item.key, place);
+            }
+            order-saved => {
+                root.order-saved(item.key);
+            }
+            order-discarded => {
+                root.order-discarded(item.key);
+            }
+            order-searched(text) => {
+                root.order-searched(item.key, text);
             }
         }
         if root.data.form != "": Text {
@@ -3136,6 +3666,15 @@ export component WorkbenchWindow inherits Window {
     callback goal-clear(string);
     callback goal-confirmed();
     callback goal-cancelled();
+    // An ordered variable's editor (G3), each by its line's key: an option added (its value), an
+    // item moved from a place to another (whether it moved), an item removed (its place), "save
+    // order", "discard changes", the search field typed in (as typed).
+    callback goal-order-added(string, string);
+    callback goal-order-moved(string, int, int) -> bool;
+    callback goal-order-removed(string, int);
+    callback goal-order-saved(string);
+    callback goal-order-discarded(string);
+    callback goal-order-searched(string, string);
     // The box beside the picture's title, as it is now.
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
@@ -4044,6 +4583,24 @@ export component WorkbenchWindow inherits Window {
                                         }
                                         cancelled => {
                                             root.goal-cancelled();
+                                        }
+                                        order-added(key, value) => {
+                                            root.goal-order-added(key, value);
+                                        }
+                                        order-moved(key, here, there) => {
+                                            return root.goal-order-moved(key, here, there);
+                                        }
+                                        order-removed(key, place) => {
+                                            root.goal-order-removed(key, place);
+                                        }
+                                        order-saved(key) => {
+                                            root.goal-order-saved(key);
+                                        }
+                                        order-discarded(key) => {
+                                            root.goal-order-discarded(key);
+                                        }
+                                        order-searched(key, text) => {
+                                            root.goal-order-searched(key, text);
                                         }
                                     }
                                     // At the column's foot, what it leaves: under the tasks or the

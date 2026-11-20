@@ -677,6 +677,38 @@ fn install_workbench(window: &WorkbenchWindow) {
             workbench::goals::cancelled(&ui);
         }
     });
+    // An `ordered` variable's editor on the Goals tab (Workflow #455 G3), each by its line's key:
+    // an option added, an item moved (whether it moved, which the list's mark follows), an item
+    // removed, "save order", "discard changes", the search field typed in.
+    window.on_goal_order_added(|key, value| {
+        if let Some(ui) = current() {
+            workbench::goals::order_added(&ui, &key, &value);
+        }
+    });
+    window.on_goal_order_moved(|key, from, to| match current() {
+        Some(ui) => workbench::goals::order_moved(&ui, &key, from, to),
+        None => false,
+    });
+    window.on_goal_order_removed(|key, place| {
+        if let Some(ui) = current() {
+            workbench::goals::order_removed(&ui, &key, place);
+        }
+    });
+    window.on_goal_order_saved(|key| {
+        if let Some(ui) = current() {
+            workbench::goals::order_saved(&ui, &key);
+        }
+    });
+    window.on_goal_order_discarded(|key| {
+        if let Some(ui) = current() {
+            workbench::goals::order_discarded(&ui, &key);
+        }
+    });
+    window.on_goal_order_searched(|key, text| {
+        if let Some(ui) = current() {
+            workbench::goals::order_searched(&ui, &key, &text);
+        }
+    });
     window.on_rules_toggled(|| {
         if let Some(ui) = current() {
             workbench::actions::rules_toggled(&ui);
@@ -1031,6 +1063,16 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_goals_set(labels.goals_set.into());
     global.set_goals_confirm(labels.goals_confirm.into());
     global.set_goals_cancel(labels.goals_cancel.into());
+    global.set_goals_order_up(labels.goals_order_up.into());
+    global.set_goals_order_down(labels.goals_order_down.into());
+    global.set_goals_order_remove(labels.goals_order_remove.into());
+    global.set_goals_order_save(labels.goals_order_save.into());
+    global.set_goals_order_discard(labels.goals_order_discard.into());
+    global.set_goals_order_search(labels.goals_order_search.into());
+    global.set_goals_order_chosen_label(labels.goals_order_chosen_label.into());
+    global.set_goals_order_options_label(labels.goals_order_options_label.into());
+    global.set_goals_order_gone_mark(labels.goals_order_gone_mark.into());
+    global.set_goals_none_chosen(labels.goals_none_chosen.into());
     global.set_refresh_frame(labels.refresh_frame.into());
     global.set_refresh_cost(labels.refresh_cost.into());
     global.set_rescue_check(labels.rescue_check.into());
