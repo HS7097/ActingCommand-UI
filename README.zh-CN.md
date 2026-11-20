@@ -97,7 +97,8 @@
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`，
   同一个限定到一窗的 `EventQuery`、同一个页上限、同一个 `next_cursor`。在线时，监控台不发出缺
   `from_sequence` 或 `to_sequence`、上下界不在 1 到钉点之内、跨度超过 4096 个位置（帧查找为它那条事件
-  前后各 65,536 个位置）、或带时间条件的页——带了时间条件，Runtime 可能改走时间索引，序号上下界就框不住
+  前后各 65,536 个位置；按运行编号查一次运行的显示换算时不限跨度，从 1 到钉点：这时由这次运行自己的关联
+  索引带动 Runtime 的语句，读的只是这次运行的记录）、或带时间条件的页——带了时间条件，Runtime 可能改走时间索引，序号上下界就框不住
   扫描。某次读取要发这样的页就是监控台的缺陷：它以 `console_online_page_unbounded` 失败，什么也不发。
 - 素材走自己那条连接上的 `RuntimeClient::read_material_complete`：这条连接在钉住时与页连接一起建好、
   连到同一个 owner epoch，读素材（最长 30 秒）时跟随轮询和状态读取不用排在它后面；一次读取把它锁死后
@@ -408,7 +409,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 rev = "945727d429141a384228ce264d2438f89bf082f3"
 ```
 
-六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
+七个 crate（contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
 内嵌 typed client 读取在线 lifecycle-failure 页中的可选 `resource_dispositions` 分组；离线 ledger
 reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
 严格校验和显式读取错误保持。
@@ -569,21 +570,34 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
 - **页标签**，在帧上方标题旁：这一帧上识别匹配到的页面，或写明没有匹配。画在帧上会盖住页面自己的
   页头目标。
 - **点击标记**：以操作意图的每个点（`action.x, y`；滑动、拖动每个点各一个）为圆心、带白圈的
-  圆点。它取代事件自己的 `action` 几何，免得同一次输入画两遍。显示是包基准尺寸纯缩放的实例上（1280×720 的包遇上
-  1920×1080 的显示），这些点还没换算：操作意图里的点仍是基准的像素，帧和它的 `frame_extent` 却是设备的（Runtime
-  `contracts/display-adapter.md` 第 10 节「Records」），所以那里的点击标记，这里和实时画面上，都画得偏离实际发出的输入；
-  识别目标框是设备帧的像素（第 8 节「Evidence」），画的位置是对的。Runtime v0.12.75 起（#479 F-3b），比例和基准差不到一个像素的
-  显示（1280×720 基准下的 1334×750、1366×768）也按纯缩放映射，横竖各用自己的系数，但在这种显示上按压照旧被拒
-  （`input_scale_unsupported`），什么都不发；运行在第一次按压被拒之前就写下了操作意图，所以这种显示上的点击标记同样画偏
-  （往左上偏，最多偏帧和基准尺寸之差：1334×750 上 54×30 像素，1366×768 上 86×48），而识别目标框 Runtime 按两个系数换回了设备像素，
-  画的位置是对的。运行的 `display_map` 只记宽度的系数，高度的系数是帧高除以基准高。按运行的 `display_map` 换算点击标记是另一件事，
-  这一版监控台还没做。
-- **一句说明**，在帧下面，每个在这一帧上的输入一句：「步骤 0 notice_close：识别到
-  `<game>/news`，点击 (1142, 102)」。
+  圆点。它取代事件自己的 `action` 几何，免得同一次输入画两遍；操作意图的 `action` 任何时候都不照原样画（帧区
+  没有帧时也只画这条操作意图自己换算后的点），详情里的原始 JSON 照旧，基准像素在那里看得到。操作意图里的点是包基准的
+  像素，帧、它的 `frame_extent` 和识别目标框却是设备的（Runtime `contracts/display-adapter.md` 第 10 节「Records」），
+  所以点照这次运行的显示换算画到设备帧上：比例取这次运行在这条操作意图之前最后一条 `task.geometry_observed` 记录的
+  `display_map`，读法和 `actingledger task-evidence` 一样；换算用的是产品自己的函数（显示适配器的
+  `DisplayMap::admit_input` 和 `device_input`，按显示坐标），监控台不另写一份换算。那条记录没写 `display_map`（纯恒等，
+  更早的记录不算）、这次运行在它之前没有这种记录、或操作意图没给 `frame_extent` 时照原样画，基准即设备。监控台读的
+  `Ui` 投影不带采样框，所以换算不带框；在 Runtime 发得出去的比例下（`admit_input` 放行的：比例的两倍是整数），合法的点
+  不会因为框被拒，点和带框时一样（第 10 节「Points」）。产品会拒的输入不画点，写「这一步的输入没有换算」，例如比例和基准
+  差不到一个像素的显示（1280×720 基准下的 1334×750、1366×768：Runtime v0.12.75 起按纯缩放映射，按压照旧被拒，
+  `input_scale_unsupported`）。缩放下的竖刹拖拽照产品发出的带停顿和刹车的拖拽画三个点；路径拖拽不画点。识别目标框本来就是
+  设备帧的像素（第 8 节「Evidence」），不换算。
+- **一句说明**，在帧下面，每个在这一帧上的输入一句，点是画出来的设备像素点：「步骤 0 notice_close：识别到
+  `<game>/news`，点击 (1142, 102)」。没有换算的写「点击：这一步的输入没有换算」，换算还不知道的写下面读的那句。
 - **识别目标框**：这一帧上最近一次识别评估过的目标（`task.recognition_completed.targets`，取匹配页的；
   没有匹配时取第一个候选页的），各画在自己的 `region` 上：通过的画绿色实线，没通过的画琥珀色虚线，
   标上 `target_id` 和角色。纯关键字目标没有区域，不画；帧下那句说明把它们都算上（「……（目标 3/4
   通过）」）。
+
+点击标记的换算要读的：每次运行多一次按运行编号筛 `task.geometry_observed` 的查询，往回只到这次运行的开头。账本窗口里，
+选中的事件所在帧上有操作意图（或选中的就是一条操作意图）、而它那次运行的显示换算还不知道时，读线程读一次，不带运行恢复，
+跟着游标读完：在线带操作意图关联的实例、运行编号、这一种类型和从 1 到钉点的位置，离线只带运行编号和类型（离线的帧查找也
+只按帧编号）。同一次运行在同一个窗口会话里只读一次，钉点上移后、有操作意图落在上次读到的位置之后时才再读一次。读的时候
+帧下写「正在读这次运行的显示换算…」；读不全写「这次运行的显示换算没读全；这一步的点没画」，读失败写「读不到这次运行的显示
+换算：…；这一步的点没画」，都不会自己再读，下次重读（「读更早」不算）把它清掉。实时画面那边，一次运行头一回有输入要画时读
+一次，到轮询接着往后读的那个位置为止，每页 64 行、最多 4 页；之后靠轮询带上这次运行后来的记录（轮询多问这一种类型，不多发
+查询），只有轮询不整页后这些运行才算落后，需要时再读一次。读不全或读不到时帧下写「读不到这次运行的显示换算（详情见技术
+日志），这一步的点没画」，没有换算的写「这一步的输入没有换算」，帧上不写字；技术日志末尾的读取统计里它叫 `run maps`。
 
 ## 运行
 
@@ -1550,7 +1564,8 @@ python tools/make_install_set.py --out <新文件夹> --label <安装集的名�
   它还每个会话读一次实例的任务事实（`instance_facts()`）：离线在钉住的位置重放，在线连同实例状态
   一起读，钉点就取自这两次读；事实快照的作用域与取值类型直接从契约 crate 取。
 - `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
-  出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。
+  出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。操作意图的点画到设备帧上用的是 Runtime 的显示适配器
+  （`actingcommand-display-adapter`，它只依赖契约库）；`acui-model` 自己不直接依赖契约库，契约类型照旧经 `acui-rows` 取。
 - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
   `strings.rs`，设置文件的读写在 `settings.rs`。各窗口共用的东西——语言、字号、主题、启动器的视图，以及
   工作台和各账本窗口的登记处——在 `ui.rs`，只在事件循环上用；各窗口按主题换的外观在 `skin.rs` 里设。
@@ -1624,7 +1639,7 @@ python tools/make_install_set.py --out <新文件夹> --label <安装集的名�
 ## 许可
 
 `GPL-3.0-only`。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint` 文件的 SPDX 头与之一致。界面由
-[Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime crate（contract / ledger /
+[Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime crate（contract / display-adapter / ledger /
 ledger-forensics / runtime-client / runtime-config / execution-kernel）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
 
 本仓没有其他自动化项目的源码。整个项目族的上游许可矩阵见伞仓的

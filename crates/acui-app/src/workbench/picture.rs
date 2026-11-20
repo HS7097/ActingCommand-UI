@@ -15,8 +15,10 @@
 //! meant on a frame goes only to that frame, by its key.
 //!
 //! On a task's frame the window draws the targets its recognition found, solid, and those it
-//! did not, dashed, and the points its inputs were meant at, unless a person turned that off
-//! for this run; never on an observation's, which has none. It draws none where the frame's
+//! did not, dashed, and the points its inputs were meant at, put on the frame by their runs'
+//! display maps (UI-PT1; an input's that were not converted, or whose run's map is not known,
+//! are not drawn, and the line under the frame says so), unless a person turned that off for
+//! this run; never on an observation's, which has none. It draws none where the frame's
 //! size the recognition states is not the frame's own: they would land on the wrong pixels.
 //! And under the frame it hints that the account's game's standard pack declares no picture
 //! of the frame's proportions, when the pack declares any (`ASPECT_TOLERANCE`).

@@ -6,5 +6,6 @@ license.workspace = true
 
 [dependencies]
 acui-rows = { workspace = true }
+actingcommand-display-adapter = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

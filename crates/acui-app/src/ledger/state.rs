@@ -8,12 +8,13 @@
 //! (`paint`) reads this and nothing else, holding the lock only while it
 //! paints, so it never waits on a read.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use acui_model::{Filters, ViewModel};
+use acui_model::{Filters, RunMaps, ViewModel};
 use acui_rows::{InstanceId, PortBindings, PortEntry, ProjectedEvent};
 use acui_source::{
     ClientFailure, InstanceFacts, LedgerOpenFailure, MaterialReader, OfflineFacts, OfflineReason,
@@ -65,6 +66,9 @@ pub struct LedgerState {
     /// (`paint::port_options`), in the language shown then.
     pub port_map: PortMap,
     pub frame_events: FrameEventsSlot,
+    /// The display maps of the runs whose effect intents the frame pane draws
+    /// (UI-PT1).
+    pub run_maps: RunMapsSlot,
     /// What the reader is reading now, and since when; `None` while it waits
     /// for a request.
     pub busy: Option<Busy>,
@@ -335,6 +339,91 @@ impl FrameEventsSlot {
     }
 }
 
+/// What the frame pane read of the runs whose effect intents it draws (UI-PT1):
+/// each run's `task.geometry_observed` records, by run (its id as `code` writes
+/// it), from its start up to the pin, the display maps its effect intents' points
+/// are put on the device frame by. A run is asked once in a session, and again
+/// only when an effect intent of it lies past where its last read reached, the pin
+/// having moved since. A read that failed, or was not whole, stays until a reload
+/// clears it to ask again: it is never asked again by itself.
+#[derive(Default)]
+pub struct RunMapsSlot {
+    asked: BTreeMap<String, RunAsk>,
+    maps: RunMaps,
+}
+
+/// One run's last read: asked up to a position and not answered yet, read whole
+/// up to it, whose records are in the slot's maps, or failed or not whole, and
+/// why.
+pub enum RunAsk {
+    Pending { to: u64 },
+    Read { to: u64 },
+    Failed { error: FrameLookupError },
+}
+
+impl RunMapsSlot {
+    /// The display maps read, for the marks.
+    pub fn maps(&self) -> &RunMaps {
+        &self.maps
+    }
+
+    /// Whether `run` is to be asked for an effect intent at `effect` whose map
+    /// is not known: it was never asked, or its last read reached a position
+    /// the effect intent lies past. One pending, failed or not whole is not.
+    pub fn wants(&self, run: &str, effect: u64) -> bool {
+        match self.asked.get(run) {
+            None => true,
+            Some(RunAsk::Read { to }) => to.saturating_add(1) < effect,
+            Some(RunAsk::Pending { .. } | RunAsk::Failed { .. }) => false,
+        }
+    }
+
+    /// `run` is asked of the reader up to `to`.
+    pub fn ask(&mut self, run: &str, to: u64) {
+        self.asked.insert(run.to_owned(), RunAsk::Pending { to });
+    }
+
+    /// Whether `run` is asked up to `to` and not answered yet.
+    pub fn pending(&self, run: &str, to: u64) -> bool {
+        matches!(self.asked.get(run), Some(RunAsk::Pending { to: asked }) if *asked == to)
+    }
+
+    /// What the read of `run` up to `to` came to: its events, read whole, or
+    /// why not. Records read before stay, and so does how far they reach.
+    pub fn answer(
+        &mut self,
+        run: &str,
+        to: u64,
+        read: Result<Vec<ProjectedEvent>, FrameLookupError>,
+    ) {
+        let ask = match read {
+            Ok(events) => {
+                for event in &events {
+                    self.maps.take(event);
+                }
+                self.maps.read_to(run, to);
+                RunAsk::Read { to }
+            }
+            Err(error) => RunAsk::Failed { error },
+        };
+        self.asked.insert(run.to_owned(), ask);
+    }
+
+    /// Why the last read of `run` failed, or was not whole, if it did.
+    pub fn failure(&self, run: &str) -> Option<&FrameLookupError> {
+        match self.asked.get(run) {
+            Some(RunAsk::Failed { error }) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// A reload: each read that failed, or was not whole, is asked again when
+    /// its effect intents are drawn.
+    pub fn clear_failed(&mut self) {
+        self.asked.retain(|_, ask| !matches!(ask, RunAsk::Failed { .. }));
+    }
+}
+
 /// Why a frame's own events could not be read: put into words when painted
 /// (`paint`).
 #[derive(Clone)]
@@ -377,6 +466,8 @@ pub enum BusyKind {
     Polling,
     Instances,
     FrameEvents,
+    /// A run's display map, for the frame pane's marks (UI-PT1).
+    RunMaps,
     /// The material connection rebuilt after a frame read latched it.
     Reconnecting,
 }
@@ -429,6 +520,7 @@ impl LedgerState {
             model: None,
             port_map: PortMap::Opening,
             frame_events: FrameEventsSlot::Empty,
+            run_maps: RunMapsSlot::default(),
             busy: None,
             reader: None,
             effects: Effects::default(),

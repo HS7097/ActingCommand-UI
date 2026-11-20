@@ -130,7 +130,9 @@ answers come from:
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`. Online the
   console sends no page that does not carry both `from_sequence` and `to_sequence` within 1 to the pin,
-  that spans more than 4096 positions (a frame's lookup: 65,536 either side of its event), or that
+  that spans more than 4096 positions (a frame's lookup: 65,536 either side of its event; a run's display
+  map, looked up by its run id, spans 1 to the pin, as the run's own link index drives the Runtime's
+  statement then and it reads only that run's records), or that
   carries a time condition — with one, the Runtime may read through its time index, where the position
   bounds do not hold the scan. A read asking for such a page would be a defect of the console: it fails as
   `console_online_page_unbounded`, and nothing is sent.
@@ -620,7 +622,7 @@ v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-c
 rev = "945727d429141a384228ce264d2438f89bf082f3"
 ```
 
-The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
+The seven crates (contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
 The embedded typed client reads optional `resource_dispositions` groups in online lifecycle-failure
 pages; the offline ledger reader accepts them in full failure and `ResourceQuiescence` records.
 Historical records without the field keep their meaning. Strict validation and explicit read errors
@@ -855,27 +857,51 @@ On the frame, beside the event's own geometry:
   or that it matched none. On the frame it would cover the page's own header targets.
 - **The tap mark**: a white-ringed dot centred on each point of the step's effect intent (`action.x, y`; a
   swipe or drag has one per point). It replaces the event's own `action` geometry, which would draw the
-  same input twice. These points are not mapped yet onto an instance whose display is a pure scale of its
-  package's base (a 1280×720 package on a 1920×1080 display): the effect intent keeps them in the base's
-  pixels while the frame and its `frame_extent` are the device's (Runtime `contracts/display-adapter.md`,
-  section 10, "Records"), so there the marks, here and on the live picture, are drawn off the input that
-  was sent; the target boxes are in the device frame's pixels (section 8, "Evidence") and are drawn where
-  they belong. From Runtime v0.12.75 (#479 F-3b) a display within a pixel of its base's shape (1334×750 or
-  1366×768 for a 1280×720 base) maps as a pure scale too, each axis by its own factor, while a press on it
-  is still refused (`input_scale_unsupported`), so nothing is sent; a run there writes an effect intent
-  before that first press is refused, so such a display has the same mark off its place (towards the
-  upper left, at most by the frame's size less the base's: 54 by 30 pixels at 1334×750, 86 by 48 at
-  1366×768), while its target boxes, which the Runtime maps back to the device's
-  pixels by both factors, are drawn where they belong. The run's `display_map` records the width's factor
-  alone; the height's is the frame's height over the base's. Mapping the marks by the run's `display_map`
-  is a change of its own, which this console version does not make yet.
-- **One sentence** under the frame, per input meant on it: "Step 0 notice_close: recognized
-  `<game>/news`, tap (1142, 102)".
+  same input twice; an effect intent's `action` is never drawn as it is (with no frame in the pane, only
+  that effect intent's own converted points are), and the payload's JSON keeps it, in base pixels, as
+  recorded. The effect intent keeps its points in the package's base pixels, while the frame, its
+  `frame_extent` and the target boxes are the device's (Runtime `contracts/display-adapter.md`, section 10,
+  "Records"), so the points are put on the device frame by the run's display map: the `display_map` of
+  the run's last `task.geometry_observed` record before the effect intent, read as `actingledger
+  task-evidence` reads it, converted by the product's own functions (the display adapter's
+  `DisplayMap::admit_input` and `device_input`, for display coordinates); the console has no conversion of
+  its own. When that record names no `display_map` (the plain identity; no earlier one counts), when the
+  run has no such record before it, or when the effect intent states no `frame_extent`, the points are
+  drawn as asked: base and device are one. The `Ui` projection the console reads carries no sampling
+  regions, so the conversion has no boxes; under the scales the Runtime sends under (those `admit_input`
+  lets through: twice the scale is a whole number) no legal point is refused for its box, and the point is
+  the one it is with its box (section 10, "Points"). An input the product refuses has no point drawn, and
+  says "This step's input was not converted" — such as one on a display within a pixel of its base's shape
+  (1334×750 or 1366×768 for a 1280×720 base: from Runtime v0.12.75 a pure scale whose presses are refused,
+  `input_scale_unsupported`). A vertical-brake drag under a scale is drawn as the drag with a pause and a
+  brake the product sends, three points; a path drag has no point drawn. The target boxes are the device
+  frame's pixels already (section 8, "Evidence"), and are not converted.
+- **One sentence** under the frame, per input meant on it, with the device pixels its points are drawn at:
+  "Step 0 notice_close: recognized `<game>/news`, tap (1142, 102)". One not converted says "tap: This
+  step's input was not converted", and one whose run's map is not known the reading line below.
 - **The recognition target boxes**: the targets the frame's latest recognition evaluated
   (`task.recognition_completed.targets`, those of the matched page or, with no match, of the first
   candidate), each in its `region`: solid green when it passed, dashed amber when it did not, labelled
   with its `target_id` and role. A keyword-only target has no region and is not drawn; the sentence
   counts all of them ("… (3 of 4 targets passed)").
+
+What the tap marks' conversion reads: one query more per run, `task.geometry_observed` filtered by its
+run id, back to the run's start and no further. In the ledger window, when the selected event's frame
+has an effect intent (or the selected event is one) whose run's display map is not known yet, the reader
+thread reads it once, without run recovery, through its cursor: online by the instance the effect intent
+links, the run id, that one type and the positions 1 to the pin; offline by the run id and the type alone
+(offline a frame's lookup reads by frame id alone too). A run is read once per window session, and again
+only when the pin has moved and an effect intent of it lies past where the last read reached. While it
+reads, the note under the frame says "Reading this run's display map…"; a read not whole says "This run's
+display map was not read whole; this step's points are not drawn", a read that failed "This run's display
+map could not be read: …; this step's points are not drawn", and neither is read again by itself: the
+next reload (not "read earlier") clears it. On the live picture a run is read the first time an input of
+it is to be drawn, up to where the polls go on from, in pages of 64 rows, at most 4; from then on the
+polls bring the run's later records with them (they ask for that one type more, and no page more), and
+only after a poll that was not whole are the runs behind, each read again when an input needs it. Unread
+or not whole, the line under the frame says "This run's display map could not be read (see the technical
+log); this step's points are not drawn", and one not converted "This step's input was not converted";
+nothing is written on the frame. The end-of-run read count calls it `run maps`.
 
 ## Running
 
@@ -2327,7 +2353,9 @@ one frame-grouping function the live picture shares with the ledger window:
   reads the pin is taken from; for the fact snapshot's scope and value types it names the contract crate directly.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
-  is chosen by `acui-app` from the language tables.
+  is chosen by `acui-app` from the language tables. It puts an effect intent's points on the device frame
+  through the Runtime's display adapter (`actingcommand-display-adapter`, which depends on the contract
+  alone); it does not depend on the contract crate itself, whose types it takes through `acui-rows`.
 - `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`. What the
   windows share — the language, the text size, the theme, the launcher's view, and the registry of the
@@ -2439,7 +2467,7 @@ to the Runtime source at the pinned rev.
 `GPL-3.0-only`. The repository includes the full LICENSE text; the workspace `license` field and the SPDX
 header of every `.rs` / `.slint` file agree with it. The interface is rendered by
 [Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended on
-(contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) are `AGPL-3.0-only`, and the
+(contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) are `AGPL-3.0-only`, and the
 two combine under GPLv3 section 13.
 
 No source code of another automation project is in this repository. The upstream license matrix of the

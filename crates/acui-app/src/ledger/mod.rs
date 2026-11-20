@@ -31,8 +31,8 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use acui_model::{DisplayRow, Filters, ViewModel, ALL_TABS};
-use acui_rows::{code, EventQuery, EventSeverity, LedgerView, OriginModule};
+use acui_model::{DisplayRow, Filters, InEffect, ViewModel, ALL_TABS};
+use acui_rows::{code, EventQuery, EventSeverity, EventType, LedgerView, OriginModule};
 use acui_source::{PauseTarget, SourceMode, FRAME_LOOKUP_REACH};
 use slint::{SharedString, Timer, TimerMode};
 
@@ -526,22 +526,25 @@ impl LedgerHandle {
 
     /// Paints the window from its state alone (`paint`), after doing what the
     /// reader left for the event loop. The selected event's frame, when the
-    /// loaded rows hold no capture of it, is asked of the reader here; the
-    /// pane says so until the answer comes. A closed window is not painted.
+    /// loaded rows hold no capture of it, is asked of the reader here, and the
+    /// display map of each run whose effect intents the pane draws when it is
+    /// not known (UI-PT1); the pane says so until the answer comes. A closed
+    /// window is not painted.
     pub fn refresh(&self, ui: &Ui) {
         if self.closed.get() {
             return;
         }
         let labels = ui.labels();
         let runtime_ready = ui.launcher_view.borrow().runtime_ready();
-        let (lookup, busy) = {
+        let (lookup, runs, busy) = {
             let mut guard = self.lock();
             let state = &mut *guard;
             let effects = std::mem::take(&mut state.effects);
             self.apply(effects);
             let lookup = wanted_frame_events(state);
+            let runs = wanted_run_maps(state);
             paint::refresh(&self.window, self, state, labels, runtime_ready);
-            (lookup, state.busy.is_some())
+            (lookup, runs, state.busy.is_some())
         };
         // A failure the window shows may have made the technical log; the top
         // of every window says where it is.
@@ -549,6 +552,9 @@ impl LedgerHandle {
         self.tick_busy(busy);
         if let Some((frame, query, searched)) = lookup {
             self.send(Command::FrameEvents { frame, query, searched });
+        }
+        for (run, query, to) in runs {
+            self.send(Command::RunMaps { run, query, to });
         }
     }
 
@@ -629,7 +635,9 @@ fn wanted_frame_events(
     let (basis, _) = model.selected_basis()?;
     let frame_id = basis.links.frame_id().copied()?;
     let frame = code(&frame_id);
-    if state.frame_events.holds(&frame) || model.frame_group(&frame, &[]).target.is_some() {
+    if state.frame_events.holds(&frame)
+        || model.frame_group(&frame, &[], state.run_maps.maps()).target.is_some()
+    {
         return None;
     }
     let mut query = EventQuery {
@@ -652,6 +660,67 @@ fn wanted_frame_events(
     }
     state.frame_events = FrameEventsSlot::Pending { frame: frame.clone() };
     Some((frame, query, searched))
+}
+
+/// UI-PT1: the runs whose display maps the frame pane needs and the slot does
+/// not hold, each marked pending, with the query by run and the pin it reads up
+/// to. The effect intents the pane draws are those on the selected event's frame
+/// among the loaded rows and that frame's own events read for it, or, with no
+/// frame, the selected event when it is one; a run is asked for one of them whose
+/// map is not known, when it was never asked in this session or its last read
+/// reached a position before the effect intent. Online the query is the run id,
+/// the instance the effect intent links (when it links one), the type
+/// `task.geometry_observed`, and the positions from 1 to the pin: the run id
+/// bounds what it reads to the run's own records, back to its start, its link
+/// index driving the Runtime's statement (945727d4
+/// `crates/ledger/src/global/sqlite.rs:4777-4790, 4856`; `acui_source`'s
+/// `check_online_page`). Offline it is the run id and the type, as a frame's
+/// lookup reads by frame id alone there.
+fn wanted_run_maps(state: &mut LedgerState) -> Vec<(String, EventQuery, u64)> {
+    let online = match &state.phase {
+        Phase::Open(facts) => facts.follows,
+        _ => return Vec::new(),
+    };
+    let Some(model) = state.model.as_ref() else {
+        return Vec::new();
+    };
+    let frame = model.selected_basis().and_then(|(basis, _)| basis.links.frame_id().map(code));
+    let extra = match frame.as_deref().and_then(|frame| state.frame_events.of(frame)) {
+        Some(Ok(events)) => events.as_slice(),
+        Some(Err(_)) | None => &[][..],
+    };
+    let pin = model.snapshot_position();
+    let mut wanted: Vec<(String, EventQuery, u64)> = Vec::new();
+    for effect in model.drawn_effects(frame.as_deref(), extra) {
+        let Some(run_id) = effect.links.run_id() else {
+            continue;
+        };
+        let run = code(run_id);
+        let unknown =
+            matches!(state.run_maps.maps().in_effect(&run, effect.sequence), InEffect::Unknown);
+        if !unknown
+            || !state.run_maps.wants(&run, effect.sequence)
+            || wanted.iter().any(|(held, _, _)| *held == run)
+        {
+            continue;
+        }
+        let mut query = EventQuery {
+            view: Some(LedgerView::Events),
+            run_id: Some(*run_id),
+            event_types: vec![EventType::TaskGeometryObserved],
+            ..EventQuery::default()
+        };
+        if online {
+            query.instance_id = effect.links.instance_id().copied();
+            query.from_sequence = Some(1);
+            query.to_sequence = Some(pin);
+        }
+        wanted.push((run, query, pin));
+    }
+    for (run, _, to) in &wanted {
+        state.run_maps.ask(run, *to);
+    }
+    wanted
 }
 
 /// The ledger window's controls. Each only changes the window's state and

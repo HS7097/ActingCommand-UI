@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acui_model::{
-    stop_marked, BasisVia, DisplayRow, FrameGroup, FrameTarget, InstanceCard, Mark, Overlay,
-    QueryError, RecoveryGroup, ViewModel, ALL_TABS,
+    stop_marked, BasisVia, DisplayRow, FrameGroup, FrameTarget, InstanceCard, Mark,
+    MarkConversion, Overlay, QueryError, RecoveryGroup, ViewModel, ALL_TABS,
 };
 use acui_rows::outcome::CONSOLE_RUNTIME_OWNER_CHANGED;
 use acui_rows::{
@@ -32,7 +32,7 @@ use crate::ledger::frame::{FrameRequest, FrameSlot};
 use crate::ledger::resume;
 use crate::ledger::state::{
     box_pick, BusyKind, DroppedPick, FrameLookupError, InstancesSnapshot, LedgerFailure,
-    LedgerState, OnlineInstance, Phase, PortChoice, PortMap, SourceFacts,
+    LedgerState, OnlineInstance, Phase, PortChoice, PortMap, RunMapsSlot, SourceFacts,
 };
 use crate::ledger::LedgerHandle;
 use crate::phrase::{phrase, Phrase};
@@ -493,9 +493,20 @@ pub fn refresh(
             // to, else the overlays' own extent.
             let frame_size = stated_size
                 .or_else(|| sequence.and_then(|sequence| ledger.frame.decoded_size(sequence)));
+            // UI-PT1: an effect intent of no frame draws its own mark, put on its
+            // device frame; its `action`, in base pixels (Runtime 945727d4
+            // `contracts/display-adapter.md:458-464`), is never drawn as it is
+            // (`ViewModel::detail` leaves its geometry out).
+            let own = match &frame {
+                Some(_) => None,
+                None => model.selected_mark(state.run_maps.maps()),
+            };
             // The step's own marks replace the event's `action` geometry, which
             // would draw the same input twice.
-            let marks = frame.as_ref().map_or(&[][..], |frame| frame.group.marks.as_slice());
+            let marks = match &frame {
+                Some(frame) => frame.group.marks.as_slice(),
+                None => own.as_slice(),
+            };
             let (canvas_width, canvas_height) = canvas_size(&detail.overlays, marks, frame_size);
             window.set_canvas_width(canvas_width);
             window.set_canvas_height(canvas_height);
@@ -543,9 +554,12 @@ pub fn refresh(
             window.set_frame_page(
                 frame.as_ref().map(|frame| page_text(labels, &frame.group)).unwrap_or_default().into(),
             );
-            window.set_frame_explain(
-                frame.as_ref().map(|frame| explain_text(labels, frame)).unwrap_or_default().into(),
-            );
+            let explain = match (&frame, &own) {
+                (Some(frame), _) => explain_text(labels, frame, &state.run_maps),
+                (None, Some(mark)) => own_mark_text(labels, mark, &state.run_maps),
+                (None, None) => String::new(),
+            };
+            window.set_frame_explain(explain.into());
             window.set_payload_json(detail.pretty_payload_json.into());
         }
         None => clear_detail(window, ledger, labels, labels.no_event_selected.to_string()),
@@ -773,6 +787,7 @@ pub fn busy_text(labels: &Labels, state: &LedgerState) -> String {
         BusyKind::Polling => labels.busy_polling.to_owned(),
         BusyKind::Instances => labels.busy_instances.to_owned(),
         BusyKind::FrameEvents => labels.frame_events_reading.to_owned(),
+        BusyKind::RunMaps => labels.effect_points_reading.to_owned(),
         BusyKind::Reconnecting => labels.busy_reconnecting.to_owned(),
     };
     let template = if busy.per_page { labels.busy_waited_page } else { labels.busy_waited };
@@ -1483,7 +1498,7 @@ fn frame_view(state: &LedgerState, model: &ViewModel) -> Option<FrameView> {
         Some(Err(error)) => (&[][..], Some(error.clone())),
         None => (&[][..], None),
     };
-    let group = model.frame_group(&frame, extra);
+    let group = model.frame_group(&frame, extra, state.run_maps.maps());
     Some(FrameView { group, via, basis_sequence, pending, searched, failure })
 }
 
@@ -1503,8 +1518,9 @@ fn page_text(labels: &Labels, group: &FrameGroup) -> String {
 
 /// One sentence per input meant on the frame — its step, what was recognized,
 /// what was done where — then how the frame was found when the event does not
-/// name it.
-fn explain_text(labels: &Labels, frame: &FrameView) -> String {
+/// name it. Where is where the input lands on the device frame, as drawn
+/// (`mark_text`).
+fn explain_text(labels: &Labels, frame: &FrameView, runs: &RunMapsSlot) -> String {
     let recognition = frame.group.recognition.as_ref().map(|(page, candidates)| {
         let seen = match page {
             Some(page) => fill(labels.frame_matched, &[page]),
@@ -1524,9 +1540,10 @@ fn explain_text(labels: &Labels, frame: &FrameView) -> String {
         .map(|mark| {
             let step =
                 fill(labels.frame_step, &[&mark.step_index.to_string(), &mark.operation_label]);
+            let done = mark_text(labels, mark, runs);
             match &recognition {
-                Some(seen) => fill(labels.frame_explain_full, &[&step, seen, &mark_text(labels, mark)]),
-                None => fill(labels.frame_explain_short, &[&step, &mark_text(labels, mark)]),
+                Some(seen) => fill(labels.frame_explain_full, &[&step, seen, &done]),
+                None => fill(labels.frame_explain_short, &[&step, &done]),
             }
         })
         .collect();
@@ -1542,19 +1559,51 @@ fn explain_text(labels: &Labels, frame: &FrameView) -> String {
     parts.join(labels.join)
 }
 
-/// What an input did where: its name, and its points in order.
-fn mark_text(labels: &Labels, mark: &Mark) -> String {
+/// The sentence of an effect intent of no frame, selected (UI-PT1): its step,
+/// and what it did where.
+fn own_mark_text(labels: &Labels, mark: &Mark, runs: &RunMapsSlot) -> String {
+    let step = fill(labels.frame_step, &[&mark.step_index.to_string(), &mark.operation_label]);
+    fill(labels.frame_explain_short, &[&step, &mark_text(labels, mark, runs)])
+}
+
+/// What an input did where: its name, and its points in order, in the device
+/// frame's pixels, as drawn (UI-PT1). An input not converted says so, and one
+/// whose run's display map is not known says why: being read, not read whole,
+/// or not read, the read's own words then how to read it again. The payload's
+/// JSON keeps the base pixels the effect intent recorded.
+fn mark_text(labels: &Labels, mark: &Mark, runs: &RunMapsSlot) -> String {
     let name = labels
         .action_kinds
         .iter()
         .find(|(kind, _)| mark.kind.starts_with(kind))
         .map_or(mark.kind.as_str(), |(_, name)| name);
+    let unplaced = match mark.conversion {
+        MarkConversion::AsAsked | MarkConversion::Converted => None,
+        MarkConversion::NotConverted => Some(labels.effect_points_unconverted.to_owned()),
+        MarkConversion::Unknown => Some(run_map_text(labels, runs, mark.run.as_deref())),
+    };
+    if let Some(why) = unplaced {
+        return fill(labels.frame_explain_short, &[name, &why]);
+    }
     let points: Vec<String> =
         mark.points.iter().map(|(x, y)| format!("({}, {})", x.round(), y.round())).collect();
     if points.is_empty() {
         name.to_string()
     } else {
         format!("{name} {}", points.join(" → "))
+    }
+}
+
+/// Why an input's run's display map is not known (UI-PT1): its read failed, or
+/// was not whole; else it is being read, or is asked at this paint.
+fn run_map_text(labels: &Labels, runs: &RunMapsSlot, run: Option<&str>) -> String {
+    match run.and_then(|run| runs.failure(run)) {
+        Some(FrameLookupError::Incomplete) => labels.effect_points_incomplete.to_owned(),
+        Some(FrameLookupError::Read { text, code }) => fill(
+            labels.effect_points_failed,
+            &[&reason_text(labels, text, *code, labels.frame_read_again)],
+        ),
+        None => labels.effect_points_reading.to_owned(),
     }
 }
 

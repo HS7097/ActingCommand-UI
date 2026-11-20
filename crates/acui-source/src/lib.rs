@@ -665,15 +665,22 @@ fn page_failed(error: &RuntimeClientError) -> anyhow::Error {
 /// allow (#429): every online page reads one window of positions at the pin,
 /// `from_sequence` and `to_sequence` both stated, `1 <= from <= to <= pin`, at
 /// most `MAX_ONLINE_WINDOW` positions — a frame's lookup, keyed by its frame
-/// id, at most `FRAME_LOOKUP_REACH` either side of its event — and with no time
-/// condition: with one, the Runtime's planner may read through the time index,
-/// where the sequence bounds do not hold the scan, and a page's work grows with
-/// all the history before its window. No read of the window asks for such a
-/// page; one that did is a defect, said loudly with
-/// `CONSOLE_ONLINE_PAGE_UNBOUNDED`, and nothing is sent.
+/// id, at most `FRAME_LOOKUP_REACH` either side of its event; a lookup keyed by
+/// a run id, a run's display map (UI-PT1), back to the run's start, as wide as
+/// the pin: the run's own link index drives the Runtime's statement then, and
+/// the window enters it as that index's second term (Runtime 945727d4
+/// `crates/ledger/src/global/sqlite.rs:4764-4790, 4856`), so its work follows
+/// the run's rows, not the window — and with no time condition: with one, the
+/// Runtime's planner may read through the time index, where the sequence bounds
+/// do not hold the scan, and a page's work grows with all the history before
+/// its window. No read of the window asks for such a page; one that did is a
+/// defect, said loudly with `CONSOLE_ONLINE_PAGE_UNBOUNDED`, and nothing is
+/// sent.
 fn check_online_page(query: &EventQuery, pin: u64) -> Result<()> {
     let widest = if query.frame_id.is_some() {
         2 * FRAME_LOOKUP_REACH + 1
+    } else if query.run_id.is_some() {
+        u64::MAX
     } else {
         MAX_ONLINE_WINDOW
     };

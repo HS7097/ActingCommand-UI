@@ -36,7 +36,8 @@ use acui_source::{console_code, ReadSource, RunRecovery, Session, SourceMode};
 
 use crate::ledger::state::{
     Busy, BusyKind, FrameEventsSlot, FrameLookupError, InstancesSnapshot, LedgerFailure,
-    LedgerShared, LedgerState, Phase, PortMap, RequestTag, SourceFacts, StatusReread,
+    LedgerShared, LedgerState, Phase, PortMap, RequestTag, RunMapsSlot, SourceFacts,
+    StatusReread,
 };
 use crate::{launcher, report};
 
@@ -109,6 +110,13 @@ pub enum Command {
     /// pending for `frame`. Not superseded by a new generation: the answer
     /// depends on the frame alone.
     FrameEvents { frame: String, query: EventQuery, searched: Option<(u64, u64)> },
+    /// The display map of `run` (UI-PT1), as its id is written: its
+    /// `task.geometry_observed` records up to `to`, the pin when it was asked —
+    /// online from the run's start, by run id, within the pin; offline by run id
+    /// and type alone — read once while the slot is still pending for that run and
+    /// position. Not superseded by a new generation: the answer depends on the run
+    /// and the position alone.
+    RunMaps { run: String, query: EventQuery, to: u64 },
     /// A frame read found the material reader latched, or its rebuild failed:
     /// a new one is made and published.
     RefreshReader,
@@ -396,6 +404,7 @@ impl Worker {
             state.port_map = port_map;
             state.reader = Some(reader);
             state.frame_events = FrameEventsSlot::Empty;
+            state.run_maps = RunMapsSlot::default();
             state.tag
         })?;
         self.repaint();
@@ -417,6 +426,7 @@ impl Worker {
             Command::FrameEvents { frame, query, searched } => {
                 self.frame_events(source, frame, &query, searched)
             }
+            Command::RunMaps { run, query, to } => self.run_maps(source, run, &query, to),
             Command::RefreshReader => self.refresh_reader(source),
             Command::RereadInstances => self.reread_instances(source),
         };
@@ -479,11 +489,13 @@ impl Worker {
         let pin = source.snapshot_position();
         let mut fill = Fill::default();
         if !earlier {
-            // And it retries a frame read that failed.
+            // And it retries a frame read that failed, and a run's display map read
+            // that failed or was not whole.
             let plan = self.current(tag, |state| {
                 if state.frame_events.failed() {
                     state.frame_events = FrameEventsSlot::Empty;
                 }
+                state.run_maps.clear_failed();
                 state
                     .model
                     .as_ref()
@@ -1046,6 +1058,52 @@ impl Worker {
         self.in_session(|state| {
             if state.frame_events.pending(&frame) {
                 state.frame_events = FrameEventsSlot::Read { frame, searched, events };
+            }
+        })?;
+        self.repaint();
+        Ok(())
+    }
+
+    /// The display map of `run` (UI-PT1), for the marks of the effect intents
+    /// the frame pane draws: its `task.geometry_observed` records up to `to`,
+    /// read once — one query by run id, followed through its cursor, without
+    /// run recovery — as `actingledger task-evidence` reads a run's map in
+    /// effect (Runtime 945727d4 `crates/ledger-forensics/src/input_pairing.rs:53-97`).
+    /// A page whose source is not whole leaves the map unknown; a read that
+    /// failed says why. Either is read again only after a reload.
+    fn run_maps(
+        &self,
+        source: &ReadSource,
+        run: String,
+        query: &EventQuery,
+        to: u64,
+    ) -> Result<(), Superseded> {
+        // Superseded when another session took the window, or the run was asked
+        // again meanwhile: either way not wanted any more.
+        let pending =
+            || self.in_session(|state| state.run_maps.pending(&run, to)).unwrap_or(false);
+        if !pending() {
+            return Ok(());
+        }
+        self.busy(Busy::new(BusyKind::RunMaps, page_seconds(source.follows()), true))?;
+        let read: Result<Vec<ProjectedEvent>, FrameLookupError> =
+            match read_window(source, query, RunRecovery::Skipped, &pending)? {
+                Ok(pages) => match pages.iter().all(|page| page_source_complete(page)) {
+                    true => {
+                        Ok(pages.iter().flat_map(|page| page.events().iter().cloned()).collect())
+                    }
+                    false => Err(FrameLookupError::Incomplete),
+                },
+                Err(QueryError::ReadFailed { text, code }) => {
+                    Err(FrameLookupError::Read { text, code })
+                }
+                // `read_window` fails with a read's error only; any other is
+                // still said, as it is.
+                Err(other) => Err(FrameLookupError::Read { text: format!("{other:?}"), code: None }),
+            };
+        self.in_session(|state| {
+            if state.run_maps.pending(&run, to) {
+                state.run_maps.answer(&run, to, read);
             }
         })?;
         self.repaint();
