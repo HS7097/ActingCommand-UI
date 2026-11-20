@@ -131,8 +131,11 @@ answers come from:
   the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`. Online the
   console sends no page that does not carry both `from_sequence` and `to_sequence` within 1 to the pin,
   that spans more than 4096 positions (a frame's lookup: 65,536 either side of its event; a run's display
-  map, looked up by its run id, spans 1 to the pin, as the run's own link index drives the Runtime's
-  statement then and it reads only that run's records), or that
+  map spans 1 to the pin, as the run's own link index drives the Runtime's statement then and it reads only
+  that run's records — only a page of exactly that lookup's shape: the run id, the one type
+  `task.geometry_observed` by `event_types` and no `event_type`, no other per-run link and no time
+  condition; any other page with a run id, such as a timeline window under a `run_` filter, is held to
+  4096 like every other), or that
   carries a time condition — with one, the Runtime may read through its time index, where the position
   bounds do not hold the scan. A read asking for such a page would be a defect of the console: it fails as
   `console_online_page_unbounded`, and nothing is sent.
@@ -871,14 +874,23 @@ On the frame, beside the event's own geometry:
   regions, so the conversion has no boxes; under the scales the Runtime sends under (those `admit_input`
   lets through: twice the scale is a whole number) no legal point is refused for its box, and the point is
   the one it is with its box (section 10, "Points"). An input the product refuses has no point drawn, and
-  says "This step's input was not converted" — such as one on a display within a pixel of its base's shape
+  says "this step's input was not converted" — such as one on a display within a pixel of its base's shape
   (1334×750 or 1366×768 for a 1280×720 base: from Runtime v0.12.75 a pure scale whose presses are refused,
-  `input_scale_unsupported`). A vertical-brake drag under a scale is drawn as the drag with a pause and a
-  brake the product sends, three points; a path drag has no point drawn. The target boxes are the device
-  frame's pixels already (section 8, "Evidence"), and are not converted.
+  `input_scale_unsupported`). Like `actingledger task-evidence`, the console rebuilds the map without the
+  game's declared layout, which the host builds the run's map with. For a game that declares one, the two
+  can differ on some displays within a pixel of its base's shape: where the layout's map is a pure scale
+  by one factor the host sends under, while without the layout the other axis's own factor is one it does
+  not. With a 1280×720 base scaled by its width on a 2560×1439 display, for example, the host sends the
+  input at one factor, 2/1, while the map without the layout has 1439/720 down, so the step says "this
+  step's input was not converted", as `actingledger task-evidence` reports it (`source_mismatch`). On
+  1334×750 or 1366×768 the host refuses such a game's press too, and the two agree. A vertical-brake drag
+  under a scale is drawn as the drag with a pause and a brake the product sends, three points; a path
+  drag through each point it passes, as the product sends them (as asked under the identity). The target
+  boxes are the device frame's pixels already (section 8, "Evidence"), and are not converted.
 - **One sentence** under the frame, per input meant on it, with the device pixels its points are drawn at:
-  "Step 0 notice_close: recognized `<game>/news`, tap (1142, 102)". One not converted says "tap: This
-  step's input was not converted", and one whose run's map is not known the reading line below.
+  "Step 0 notice_close: recognized `<game>/news`, tap (1142, 102)". One not converted says "tap, this
+  step's input was not converted", and one whose run's map is not known the reading line below, after its
+  name the same way.
 - **The recognition target boxes**: the targets the frame's latest recognition evaluated
   (`task.recognition_completed.targets`, those of the matched page or, with no match, of the first
   candidate), each in its `region`: solid green when it passed, dashed amber when it did not, labelled
@@ -892,16 +904,20 @@ thread reads it once, without run recovery, through its cursor: online by the in
 links, the run id, that one type and the positions 1 to the pin; offline by the run id and the type alone
 (offline a frame's lookup reads by frame id alone too). A run is read once per window session, and again
 only when the pin has moved and an effect intent of it lies past where the last read reached. While it
-reads, the note under the frame says "Reading this run's display map…"; a read not whole says "This run's
-display map was not read whole; this step's points are not drawn", a read that failed "This run's display
-map could not be read: …; this step's points are not drawn", and neither is read again by itself: the
+reads, the note under the frame says "reading this run's display map…" after the input's name (the busy
+line "Reading This Run's Display Map…"); a read not whole says "this run's display map was not read whole;
+this step's points are not drawn", a read that failed "this run's display map could not be read, so this
+step's points are not drawn: …", the read's own words last, and neither is read again by itself: the
 next reload (not "read earlier") clears it. On the live picture a run is read the first time an input of
 it is to be drawn, up to where the polls go on from, in pages of 64 rows, at most 4; from then on the
 polls bring the run's later records with them (they ask for that one type more, and no page more), and
-only after a poll that was not whole are the runs behind, each read again when an input needs it. Unread
-or not whole, the line under the frame says "This run's display map could not be read (see the technical
-log); this step's points are not drawn", and one not converted "This step's input was not converted";
-nothing is written on the frame. The end-of-run read count calls it `run maps`.
+only after a poll that was not whole are the runs behind, each read again when an input needs it. A read
+that came back not whole leaves the line "This run's display map was not read whole (see the technical
+log); this step's points are not drawn" under the frame, and an entry in the technical log naming the run,
+which makes the windows show where the log is; one not converted says "This step's input was not
+converted"; nothing is written on the frame. A read that failed writes no line under the frame: like a
+poll that failed, it stops the round, the picture says "Following paused, retrying", and the run is read
+again in a later round. The end-of-run read count calls it `run maps`.
 
 ## Running
 
@@ -1704,7 +1720,15 @@ in red, its code verbatim and the code's words (a fixture instance, for one, is 
 own Pause All; a settings file that lists `console_pause_account` leaves it to "whoever set it", like
 any reason listed. The card resumes only the console's own instance pause: any other pause of the
 instance, another tool's or one set with `actingctl pause --instance`, is said on the card by who lifts it
-as before, and the ledger window resumes those it may (below). From the command line, `actingctl pause
+as before, and the ledger window resumes those it may (below). A newly added instance's pause (reason
+`instance.added`: the Runtime holds an `instances[]` entry that declares `start_paused` with it at the first
+start that sees it, or, when another pause already held the entry then, at that pause's release; and the
+Lab's `instance add` sets it on the instance it has just added) has words of its
+own while the ledger window resumes it: the card says "Newly added instance: its scheduling is held until
+you resume it in Troubleshooting and Ledger", and the line above the Daily Tasks list says it too, in
+place of "Paused by another tool" and the raw reason; when only whoever set it lifts it (the settings file
+lists that reason, or `resume_elsewhere_reasons` cannot be used), the card says so, as for any reason
+listed. From the command line, `actingctl pause
 --state-root <state root> --instance <alias>` and `actingctl resume` with the same flags, or the MCP tools
 `ac_pause` / `ac_resume` (see "MCP for agents"), still pause and resume one instance.
 
@@ -1811,7 +1835,12 @@ through or was stopped.
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
   No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.75
   has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
-  `start_paused` (#453 S2). A Lab recording's hold (Runtime 0.12.64 on) is a kind of its own: an
+  `start_paused` (#453 S2). The pinned Runtime also sets it on such an entry that start found held by a
+  pause of another reason, when that pause is released while the Runtime runs (a person's resume from
+  this window included), so it is not always the instance's first pause. An instance's `instance.added`
+  line says "Pause of a Newly Added Instance" in place of "Paused by Another Tool", with the same reason,
+  revision and since; whether it is offered, and who lifts it, are as above. A Lab recording's hold
+  (Runtime 0.12.64 on) is a kind of its own: an
   instance's pause whose reason is exactly `lab-record-<unix ms>`, digits only after the prefix (the
   Lab's `record start` pauses only the instance it records; the same reason on another scope, and any
   other `lab-` reason, is as before). Its line says "Held by a Lab Recording", that the Lab is
@@ -1888,12 +1917,14 @@ through or was stopped.
 
 ## Instance configuration
 
-The console no longer has an instance-configuration window. Until the Runtime's `install instance`
-lands, an instance can only be added by hand: edit the `instances` of the actingd configuration
-(`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. The
-workbench's "Add Instance" button is off for that reason, with this note under it and the path of that
-configuration file below, selectable to copy. Finding instances comes back with the console's own
-instance page in a later version.
+The console no longer has an instance-configuration window. From Runtime 0.12.52 an emulator instance is
+added with the Lab's rescue module's `instance add` (Runtime `contracts/install-cli.md`, "Instances, the
+first slice"), which writes the entry and commits the configuration in one call and pauses the instance it
+adds (`instance.added`) until a person resumes it; any other change to the `instances` of the actingd
+configuration (`actingd_config`) is made by hand as the Runtime's installation notes describe, then the
+Runtime is restarted. The workbench's "Add Instance" button stays off until the console's own comes in a
+later version, with a note under it that says so and the path of that configuration file below,
+selectable to copy. Finding instances comes back with the console's own instance page in a later version.
 
 ## Setup wizard acsetup
 

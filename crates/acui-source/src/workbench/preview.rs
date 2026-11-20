@@ -67,9 +67,12 @@ pub const POLL_ROWS: u16 = 64;
 /// it come nowhere near this many.
 pub const MARK_ROWS: u16 = 16;
 /// The rows of one page of a run's display map (UI-PT1), and the most pages it reads,
-/// following its cursor: a run's `task.geometry_observed` records, its first one and one
-/// for each recheck or change (Runtime 945727d4
-/// `crates/actingcommand-contract/src/event/payload.rs:3956-3962`), come nowhere near this
+/// following its cursor: a run's `task.geometry_observed` records (phases initial, recheck
+/// and changed, Runtime 945727d4 `crates/actingcommand-contract/src/event/payload.rs:3956-3962`)
+/// are its first one, at most one recheck, as the host rechecks a run's geometry once
+/// (`crates/runtime-host/src/host/contained_task.rs:3155-3157, 3198`), and one each time a
+/// frame's display observation differs from the one the run's map was built on, a frame equal
+/// to it recording nothing (`contained_task.rs:2979-2986`), which come nowhere near this
 /// many. A read that goes on past them is not whole: the run's map stays unknown, and its
 /// inputs' points are not drawn.
 pub const RUN_MAP_ROWS: u16 = 64;

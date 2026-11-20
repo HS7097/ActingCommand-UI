@@ -48,6 +48,26 @@ pub enum DrawnInput {
 /// with no rotation, crop or insets and no rule, a map that does not build refusing the input;
 /// under the plain identity the input as asked; else the input side's admission, then the input
 /// for a backend that takes display coordinates. Its boxes are none (module documentation).
+///
+/// A limit, shared with that reading: the map is rebuilt with no rule, while the host builds the
+/// run's map with the game's declared layout (Runtime 945727d4
+/// `crates/runtime-host/src/host/contained_task.rs:2990-2997`; the reading's own build,
+/// `crates/ledger-forensics/src/input_pairing.rs:116-130`). For a game that declares a layout the
+/// two differ on some displays within a pixel of its base's shape: those where the rule's map is a
+/// pure scale (the other side, scaled, rounds back to the base's;
+/// `crates/display-adapter/src/lib.rs:697-703`) by one factor the input side sends under (twice it
+/// is whole), while without the rule the other axis's own factor is not such a factor. A
+/// 1280x720 base scaled by its width on a 2560x1439 display is one factor, 2/1, on both axes
+/// under the rule, and the host sends the input (`lib.rs:636-660, 995`), but without a rule each
+/// axis has its own factor, 2/1 across and 1439/720 down (`lib.rs:624-634`), the latter's double
+/// not whole: here the input is not converted, and `actingledger task-evidence` says its input
+/// intent's source step is `source_mismatch` (`crates/ledger-forensics/src/lib.rs:1010-1035,
+/// 1207-1208`). On the others the host refuses the input too: on 1334x750 and 1366x768, say, the
+/// rule's one factor by width, 667/640 or 683/640, is not one it sends under, and by height the
+/// rule's map is a translation (`contracts/display-adapter.md:691-694, 747-749`;
+/// `crates/display-adapter/src/lib.rs:993-995`). The console keeps that one reading, and draws no
+/// point of an input it does
+/// not convert.
 pub fn drawn_input(
     action: &InputAction,
     frame_extent: Option<CaptureExtent>,
@@ -199,7 +219,7 @@ mod tests {
 
     use super::*;
     use crate::frame_group::points;
-    use acui_rows::{DisplayArea, DisplayMapKind, DisplayScaleBy};
+    use acui_rows::{DisplayArea, DisplayMapKind, DisplayScaleBy, InputPathPoint};
 
     fn extent(width: u32, height: u32) -> CaptureExtent {
         CaptureExtent::new(width, height).expect("a test extent has two positive sides")
@@ -267,6 +287,23 @@ mod tests {
         }
     }
 
+    /// The path drag in the box (2, 2, 12, 6) through (3, 3) and (13, 7), its one segment 600 ms
+    /// and its corner hold 40 ms, every coordinate `k` times (`input_pairing.rs:241-255`).
+    fn path(k: i32) -> InputAction {
+        InputAction::SingleTouchPathDragV1 {
+            box_x: 2 * k,
+            box_y: 2 * k,
+            box_width: 12 * k,
+            box_height: 6 * k,
+            points: vec![
+                InputPathPoint { x: 3 * k, y: 3 * k },
+                InputPathPoint { x: 13 * k, y: 7 * k },
+            ],
+            segment_duration_ms: vec![600],
+            corner_hold_ms: 40,
+        }
+    }
+
     /// At s = 2 (16x9 on 32x18) the tap (5, 3) is drawn at (10, 6), and the swipe (1, 5) →
     /// (11, 5) at (2, 10) → (22, 10), its 300 ms kept; at s = 3/2 (1280x720 on 1920x1080) the
     /// tap (1, 0) at (2, 0), `round_half_up(1.5)` = 2.
@@ -298,6 +335,52 @@ mod tests {
             drawn_input(&tap(1, 0), Some(extent(20, 15)), Some(&scale_record((16, 12), 5, 4))),
             DrawnInput::NotConverted
         );
+    }
+
+    /// Section 13 (`contracts/display-adapter.md:691-694, 732-737`): on a 1280x720 base a
+    /// 1334x750 display is a pure scale of 667/640 across and 25/24 down, whose doubles are not
+    /// whole, so the input side refuses every press there: the tap (1, 0) is not converted. Its
+    /// record names the width's factor (Runtime 945727d4 `crates/display-adapter/src/lib.rs:814-836`).
+    #[test]
+    fn a_1334x750_display_on_a_1280x720_base_is_not_converted() {
+        assert_eq!(
+            drawn_input(
+                &tap(1, 0),
+                Some(extent(1334, 750)),
+                Some(&scale_record((1280, 720), 667, 640))
+            ),
+            DrawnInput::NotConverted
+        );
+    }
+
+    /// Section 13, as above: a 1366x768 display on a 1280x720 base, 683/640 across and 16/15
+    /// down; the tap (1, 0) is not converted.
+    #[test]
+    fn a_1366x768_display_on_a_1280x720_base_is_not_converted() {
+        assert_eq!(
+            drawn_input(
+                &tap(1, 0),
+                Some(extent(1366, 768)),
+                Some(&scale_record((1280, 720), 683, 640))
+            ),
+            DrawnInput::NotConverted
+        );
+    }
+
+    /// At s = 3 (16x9 on 48x27) the path drag in (2, 2, 12, 6) through (3, 3) and (13, 7) is
+    /// drawn as the product sends it, its box and its points three times
+    /// (`input_pairing.rs:241-262`), so its points are (9, 9) and (39, 21); as asked, its points
+    /// are its own.
+    #[test]
+    fn a_scaled_path_drag_is_drawn_through_its_points() {
+        let drawn =
+            drawn_input(&path(1), Some(extent(48, 27)), Some(&scale_record((16, 9), 3, 1)));
+        assert_eq!(drawn, DrawnInput::Converted(path(3)));
+        let DrawnInput::Converted(sent) = drawn else {
+            unreachable!("asserted converted above");
+        };
+        assert_eq!(points(&sent), vec![(9.0, 9.0), (39.0, 21.0)]);
+        assert_eq!(points(&path(1)), vec![(3.0, 3.0), (13.0, 7.0)]);
     }
 
     /// With no record of the run, a record that names no map, no frame size, or a record whose

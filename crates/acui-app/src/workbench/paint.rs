@@ -38,8 +38,8 @@ use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, Qui
 use acui_source::workbench::stop::{stop_time, Origin as RunOrigin, Refusal, Reset, StopTime};
 use acui_source::workbench::{
     Obstacle, PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
-    SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
-    MODE_OBSERVE, MODE_PACE, SETUP_FIRST_START,
+    SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL,
+    INSTANCE_ADDED_PAUSE_REASON, MODE_FULL, MODE_OBSERVE, MODE_PACE, SETUP_FIRST_START,
 };
 use acui_source::{resumed_device, ClientFailure, PauseStage, ResumedDevice};
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
@@ -269,13 +269,14 @@ pub fn picture(ui: &Ui) {
         OverlayView::NotOnThisFrame => {}
         OverlayView::Mismatch => hint.push(labels.picture_marks_mismatch.to_owned()),
         // UI-PT1: an input whose points are not drawn says why, under the frame: nothing is
-        // written on it.
+        // written on it. A run's map still unknown on a frame shown was read, not whole: a read
+        // that failed stops the round, and the frame is not told before one goes well.
         OverlayView::Shown(overlay) => {
             if overlay.unconverted {
-                hint.push(labels.effect_points_unconverted.to_owned());
+                hint.push(labels.picture_points_unconverted.to_owned());
             }
             if overlay.unknown {
-                hint.push(labels.picture_points_unread.to_owned());
+                hint.push(labels.picture_points_incomplete.to_owned());
             }
         }
         OverlayView::Off => {}
@@ -3943,7 +3944,7 @@ fn task_list(
 /// The account's pause or fence above the list's rows, in its card's words but for three pauses
 /// whose words would be wrong there: this console's own pause of the account is lifted on its
 /// card, not below the list; and another tool's, of the account or of all, goes without the reason
-/// it wrote, which may name a person.
+/// it wrote, which may name a person. A newly added instance's pause has a sentence of its own.
 fn held_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
     let Line::Paused { everyone, by: Lifter::Window, reason } = line else {
         return line_text(ui, labels, line);
@@ -3953,6 +3954,7 @@ fn held_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
         (true, SETUP_FIRST_START) => labels.tasks_paused_first_start,
         (true, _) => labels.tasks_paused_other_all,
         (false, CONSOLE_PAUSE_ACCOUNT) => labels.tasks_paused_account,
+        (false, INSTANCE_ADDED_PAUSE_REASON) => labels.tasks_paused_instance_added,
         (false, _) => labels.tasks_paused_other,
     };
     if *everyone {
@@ -4426,6 +4428,14 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
                 // This console's own pause of the account, which its card lifts.
                 Lifter::Window if reason.as_str() == CONSOLE_PAUSE_ACCOUNT => {
                     labels.card_paused_account.to_owned()
+                }
+                // A newly added instance's pause (the Runtime's first-start hold of the instance,
+                // or its hold at the release of another pause that stood there first, Runtime
+                // 945727d4 `crates/runtime-host/src/host/start_pause.rs:3-9, 15-20`; or the Lab's
+                // `instance add`, `crates/lab-rescue/src/rescue.rs:1739-1823`): what it is,
+                // without its raw reason; the ledger window resumes it as another tool's.
+                Lifter::Window if reason.as_str() == INSTANCE_ADDED_PAUSE_REASON => {
+                    labels.card_paused_instance_added.to_owned()
                 }
                 Lifter::Window => fill(labels.card_paused_other, &[reason.as_str()]),
             };

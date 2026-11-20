@@ -47,7 +47,7 @@ use acui_rows::outcome::{
 };
 use acui_rows::{
     code, page_source_complete, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord,
-    EventActor, EventQuery, EventSource, LedgerCount, LedgerEventPosition, OpenReport,
+    EventActor, EventQuery, EventSource, EventType, LedgerCount, LedgerEventPosition, OpenReport,
     PortBindings, PortEntry, ProjectedArtifactReference, ProjectionProfile,
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
@@ -665,21 +665,25 @@ fn page_failed(error: &RuntimeClientError) -> anyhow::Error {
 /// allow (#429): every online page reads one window of positions at the pin,
 /// `from_sequence` and `to_sequence` both stated, `1 <= from <= to <= pin`, at
 /// most `MAX_ONLINE_WINDOW` positions — a frame's lookup, keyed by its frame
-/// id, at most `FRAME_LOOKUP_REACH` either side of its event; a lookup keyed by
-/// a run id, a run's display map (UI-PT1), back to the run's start, as wide as
-/// the pin: the run's own link index drives the Runtime's statement then, and
-/// the window enters it as that index's second term (Runtime 945727d4
+/// id, at most `FRAME_LOOKUP_REACH` either side of its event; the lookup of a
+/// run's display map (UI-PT1), of exactly that query's shape
+/// (`run_map_lookup`), back to the run's start, as wide as the pin: the run's
+/// own link index drives the Runtime's statement then, and the window enters
+/// it as that index's second term (Runtime 945727d4
 /// `crates/ledger/src/global/sqlite.rs:4764-4790, 4856`), so its work follows
-/// the run's rows, not the window — and with no time condition: with one, the
-/// Runtime's planner may read through the time index, where the sequence bounds
-/// do not hold the scan, and a page's work grows with all the history before
-/// its window. No read of the window asks for such a page; one that did is a
-/// defect, said loudly with `CONSOLE_ONLINE_PAGE_UNBOUNDED`, and nothing is
-/// sent.
+/// the run's rows, not the window. Any other page that carries a run id, such
+/// as a timeline window read under a person's `run_` filter, is held to
+/// `MAX_ONLINE_WINDOW` like every other page. Every online page, those two
+/// lookups included, also carries no time condition: with one, the Runtime's
+/// planner may read through the time index, where the sequence bounds do not
+/// hold the scan, and a page's work grows with all the history before its
+/// window. No read of the window asks for a page these bounds refuse; one that
+/// did is a defect, said loudly with `CONSOLE_ONLINE_PAGE_UNBOUNDED`, and
+/// nothing is sent.
 fn check_online_page(query: &EventQuery, pin: u64) -> Result<()> {
     let widest = if query.frame_id.is_some() {
         2 * FRAME_LOOKUP_REACH + 1
-    } else if query.run_id.is_some() {
+    } else if run_map_lookup(query) {
         u64::MAX
     } else {
         MAX_ONLINE_WINDOW
@@ -701,6 +705,31 @@ fn check_online_page(query: &EventQuery, pin: u64) -> Result<()> {
         query.to_timestamp_unix_ms,
     );
     Err(anyhow::Error::new(ConsoleCode(CONSOLE_ONLINE_PAGE_UNBOUNDED)).context(text))
+}
+
+/// Whether `query` is the lookup of a run's display map (UI-PT1), the ledger
+/// window's one read of a run's `task.geometry_observed` records, and nothing
+/// wider: it names a run id; its types are exactly that one, by `event_types`,
+/// and it names no `event_type`; it names no other per-run link (a request, a
+/// correlation, a causation, a task, a lease, a frame, an action or a
+/// recognition); and it has no time condition.
+fn run_map_lookup(query: &EventQuery) -> bool {
+    let other_links = [
+        query.request_id.is_some(),
+        query.correlation_id.is_some(),
+        query.causation_id.is_some(),
+        query.task_id.is_some(),
+        query.lease_id.is_some(),
+        query.frame_id.is_some(),
+        query.action_id.is_some(),
+        query.recognition_id.is_some(),
+    ];
+    query.run_id.is_some()
+        && query.event_types == [EventType::TaskGeometryObserved]
+        && query.event_type.is_none()
+        && !other_links.contains(&true)
+        && query.from_timestamp_unix_ms.is_none()
+        && query.to_timestamp_unix_ms.is_none()
 }
 
 /// Whether a page exchange timed out waiting for its receipt: the client's

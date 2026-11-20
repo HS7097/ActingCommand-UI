@@ -793,7 +793,9 @@ impl Line {
     /// its start up to `after`, where the polls go on from, counted and timed whether it came
     /// back or not; then the polls bring the rest. A run read since the last poll that was not
     /// whole is not read again: one whose read was not whole stays unknown, its points not
-    /// drawn, and the log says so. One that stopped short is read again in a later round.
+    /// drawn, and the log says so, loud, as the line under the frame points there. One that
+    /// stopped short fails the round, which the picture shows as interrupted and retries, and
+    /// is read again in a later round.
     fn read_runs(&mut self, lane: &mut PreviewLane, tally: &PreviewTally) -> Result<(), Halt> {
         let Some(head) = self.after else {
             return Ok(());
@@ -823,13 +825,15 @@ impl Line {
             tally.run_map(reach.pages, !reach.value.whole);
             slow(&format!("{what} ({} pages)", reach.pages), took);
             self.same_epoch(&reach.epoch)?;
+            // The line under the frame sends a person here: the entry shows where the log is.
+            // The run goes into `asked`, so it is logged once until a poll that was not whole.
             if !reach.value.whole {
                 let line = format!(
                     "{what} was not read whole at {head} ({} pages): its inputs' points are not \
                      drawn",
                     reach.pages
                 );
-                report::log_quiet(THREAD, &line);
+                report::log(THREAD, &line);
             }
             self.runs.absorb(reach.value.maps);
             self.asked.insert(run.name().to_owned());

@@ -27,16 +27,27 @@
 //! one, and "pause this account", an instance's, is of the first kind
 //! (`ResumeElsewhere`).
 //!
-//! Of the pauses set for a person to lift after looking, the one the Lab's
-//! rescue module's `instance add` sets on the account it has just added
-//! (`instance.added`, Runtime INST-5), which no operation of that module lifts
-//! as it does its `lab-<word>-<ms>` ones, and the hold the Runtime's start sets
-//! on an instance whose settlement facts it could not record
-//! (`policy_settlement_facts_skipped`, Runtime ISO-START-1) are neither a
-//! deployment's nor a Lab rescue's: this window offers their resume
+//! Of the pauses set for a person to lift after looking, the one that holds a
+//! newly added instance (`instance.added`, the contract's
+//! `INSTANCE_ADDED_PAUSE_REASON`, Runtime 945727d4
+//! `crates/actingcommand-contract/src/runtime.rs:2477`), which no operation of
+//! the Lab's rescue module lifts as it does its `lab-<word>-<ms>` ones, and the
+//! hold the Runtime's start sets on an instance whose settlement facts it could
+//! not record (`policy_settlement_facts_skipped`, Runtime ISO-START-1) are
+//! neither a deployment's nor a Lab rescue's: this window offers their resume
 //! (`Lifter::Window`), unless the settings file lists their reason or that line
-//! cannot be taken, when they are of the first kind (`Lifter::Setter`). No
-//! Runtime release up to 0.12.51 sets either.
+//! cannot be taken, when they are of the first kind (`Lifter::Setter`). The
+//! pinned Runtime sets both: `instance.added` at the first start that
+//! sees an `instances[]` entry declaring `start_paused`
+//! (`crates/runtime-host/src/host/start_pause.rs:3-9, 110-119`); on such an
+//! entry that start found held by a pause of another reason, when that pause is
+//! released while the Runtime runs, a person's resume from this window included
+//! (`start_pause.rs:15-20`), so it is not always the instance's first pause;
+//! and from the Lab's `instance add` on the instance it has just added
+//! (`crates/lab-rescue/src/rescue.rs:1739-1823`); the settlement hold at a
+//! start (`crates/runtime-host/src/host/runtime_facts.rs:1162-1178`). A newly
+//! added instance's line has words of its own (`instance_added`); who lifts it,
+//! and whether it is offered, are as for another tool's.
 //!
 //! This console's own two are said as its own, not another tool's, and are
 //! resumed here as those are. Whether a pause still on its way is offered is
@@ -61,7 +72,9 @@
 //! scheduled task's screens.
 
 use acui_rows::format_full;
-use acui_source::workbench::{lab_record_started, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
+use acui_source::workbench::{
+    lab_record_started, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, INSTANCE_ADDED_PAUSE_REASON,
+};
 use acui_source::{
     resume_paused, resume_taken, resumed_device, ClientFailure, PauseFact, PauseStage,
     PauseTarget, ResumeCause, ResumeOutcome, ResumedDevice,
@@ -137,6 +150,12 @@ fn console_set(pause: &PauseFact) -> bool {
         None => pause.reason == CONSOLE_PAUSE_ALL,
         Some(_) => pause.reason == CONSOLE_PAUSE_ACCOUNT,
     }
+}
+
+/// Whether `pause` is a newly added instance's: an instance's, with the reason
+/// `instance.added` (`INSTANCE_ADDED_PAUSE_REASON`). Only its words are its own.
+fn instance_added(pause: &PauseFact) -> bool {
+    pause.target.instance_alias().is_some() && pause.reason == INSTANCE_ADDED_PAUSE_REASON
 }
 
 /// Who lifts a pause.
@@ -369,6 +388,9 @@ fn pause_text(labels: &Labels, fact: &PauseFact, by: Lifter) -> (String, bool) {
         }
         // This console's own, by reason and scope (`console_set`), is not another tool's.
         Lifter::Window if console_set(fact) => fill(labels.pause_console, &values),
+        // A newly added instance's pause, an instance's: said as what it is, resumed as another
+        // tool's.
+        Lifter::Window if instance_added(fact) => fill(labels.pause_instance_added, &values),
         Lifter::Window => fill(labels.pause_other_tool, &values),
     };
     // This console's own, by reason and scope, as its card's button has it: an unconfirmed
