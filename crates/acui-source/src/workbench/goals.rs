@@ -75,7 +75,7 @@
 //! alone ([`answered`]): a version conflict (`current_version`), a Runtime without the write, the
 //! goal refused with its `goal_problem` word and the values that locate it, or another refusal.
 //!
-//! What the page says, all at the pinned Runtime (0.12.75, 945727d4;
+//! What the page says, all at the pinned Runtime (0.12.76, f6e2cd26;
 //! `contracts/runtime-interface.md`, "Goal request kinds";
 //! `crates/actingcommand-contract/src/runtime/goals.rs`):
 //!
@@ -139,7 +139,7 @@
 //!
 //! The stored record's form is `targets.active.schema_version`: `v2`, one validity for the whole
 //! document; `v3`, the record `EditGoal` writes, each target with a lifetime of its own or none and
-//! the document with none (`contracts/resource-targets.md:1054-1059`); `v1`, an agent's old form,
+//! the document with none (`contracts/resource-targets.md:1055-1060`); `v1`, an agent's old form,
 //! read only, which no `EditGoal` writes against (`record_unreadable`, "neither a v2 nor a v3
 //! record", `contracts/outcome-codes/catalog.json:11273-11275`); any other, a form newer than this
 //! console, whose targets it does not interpret. A
@@ -173,7 +173,7 @@ use serde_json::{Map, Value};
 use super::{configure_config, pack};
 use crate::{runtime_connection, ClientFailure, Spelling};
 
-/// The record versions the view serves (`contracts/resource-targets.md:62-64`, `:1054-1059`).
+/// The record versions the view serves (`contracts/resource-targets.md:62-64`, `:1055-1060`).
 const SCHEMA_V1: &str = "actingcommand.resource-targets.v1";
 const SCHEMA_V2: &str = "actingcommand.resource-targets.v2";
 const SCHEMA_V3: &str = "actingcommand.resource-targets.v3";

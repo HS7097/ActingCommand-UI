@@ -80,7 +80,9 @@
 //! spells their changes, a list's in the shape that parser reads.
 //!
 //! What a ledger record of a pause's life says (Runtime 0.12.74, #480 PG-2d) is read here too,
-//! as what a pause's receipt says is ([`pause_moment`], beside `pause_answer`), for the ledger
+//! as what a pause's receipt says is ([`pause_moment`], beside `pause_answer`); and so is what the
+//! Runtime's records of an unavailable instance's probes and of an instance's facts nearing their
+//! bound say (Runtime 0.12.76, #489 AVAIL-1 and #498; [`runtime_notice`]). Both are for the ledger
 //! window, which finds such records in its own pages: no lane reads them, and nothing on the
 //! workbench shows them.
 
@@ -806,6 +808,110 @@ fn moment_of(outcome: &Outcome) -> Option<PauseMoment> {
             PauseMoment::LiftedNotQuiet { in_the_way: in_the_way_value(outcome), cause: cause() }
         }
         RESUME_WITHOUT_BACKEND => PauseMoment::ResumedWithoutBackend,
+        _ => return None,
+    })
+}
+
+/// The codes of the records the Runtime writes of an instance its device self-check made
+/// unavailable, when it probes it again (Workflow #489 AVAIL-1, Runtime 0.12.76), the host's own
+/// spellings (runtime-host `codes.rs` 277, 282 and 288 at f6e2cd26).
+const PROBE_FAILED: &str = "instance_unavailable_probe_failed";
+const PROBE_PASSED: &str = "instance_unavailable_probe_passed";
+const AWAITING_PERSON: &str = "instance_unavailable_awaiting_person";
+/// The code of the record of an instance whose own facts near their bound (Workflow #498, Runtime
+/// 0.12.76), the host's own spelling (runtime-host `codes.rs` 3751 at f6e2cd26).
+const FACT_SHARE_REACHED: &str = "fact_store_capacity_share_reached";
+/// The `failure_code` a person is told with when a probe panicked (contract `codes.rs` 25,
+/// `ContractCode::PanicCaught`; runtime-host `host/unavailable_probe.rs` 400-407 at f6e2cd26).
+const PANIC_CAUGHT: &str = "panic_caught";
+/// The value these records name a cause by (contract `outcome/keys.rs` 104 at f6e2cd26: a code,
+/// which the public projection keeps).
+const FAILURE_CODE: &str = "failure_code";
+
+/// One record the Runtime writes, from 0.12.76 on, of an instance unavailable to the scheduler by
+/// its device self-check and probed again, or of an instance's own facts nearing their bound: a
+/// `runtime.failed` record linked to the instance (a probe's under the probe's own request links,
+/// `host/unavailable_probe.rs` 785-787; one of the facts of an alias no registered instance has, to
+/// none, `host/facts.rs` 711-721), whose outcome's code says which and whose severity is that
+/// code's category (runtime-host `host/unavailable_probe.rs` 562-590, `record_unavailable`, and
+/// `host/facts.rs` 698-749 at f6e2cd26; contract `event/envelope.rs` 583-594, `record_severity`),
+/// so that the passed probe is an info and the other three are warnings, and so in the Errors tab
+/// (contract `event/views.rs` 111). The ledger window reads it, as it reads a [`PauseMoment`], in
+/// the public projection, which keeps of that outcome the code and of its values only the
+/// registered names, `operation` and `failure_code`, and drops `instance_id`, `attempts`,
+/// `elapsed_ms`, `limit_ms`, `count`, `limit_count` and `next_occurrence_unix_ms` (contract
+/// `outcome.rs` 931-939 and 1278-1308, `event/payload.rs` 13575 and 13702 at f6e2cd26): which
+/// probe, for how long and when the next one is due, no row can say. `cause` is the record's
+/// `failure_code`, a value of its own, not a cause of its outcome (`caused_by`), and absent when
+/// the Runtime named none (`host/unavailable_probe.rs` 545-548, 897-900 and 909).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeNotice {
+    /// `instance_unavailable_probe_failed` (warning): a probe of the instance, its device
+    /// self-check only, did not pass, and the instance stays unavailable; one record per probe
+    /// (runtime-host `codes.rs` 272-277; `host/unavailable_probe.rs` 903-914). `cause`: the
+    /// self-check's failure, or the refusal of its claim.
+    ProbeFailed { cause: Option<String> },
+    /// `instance_unavailable_probe_passed` (info): a probe passed, and the instance is available
+    /// to the scheduler again (`codes.rs` 278-282; `unavailable_probe.rs` 891-901). `cause`: why
+    /// it had been unavailable.
+    ProbePassed { cause: Option<String> },
+    /// `instance_unavailable_awaiting_person` (warning): the instance stayed unavailable for
+    /// `scheduling.unavailable_probe.attention_after_ms`, and a person is told, once per
+    /// unavailability; the probes go on (`codes.rs` 283-288; `unavailable_probe.rs` 528-560).
+    /// `cause`: why it is unavailable.
+    AwaitingPerson { cause: Option<String> },
+    /// The same code with the `failure_code` `panic_caught`: a probe of this unavailability
+    /// panicked, and nothing probes the instance again until it leaves the unavailable ones (a
+    /// passing self-check of a person's resume or self-check, a fence, the configuration) or the
+    /// Runtime restarts; a person is told at once, unless this unavailability told one already
+    /// (`unavailable_probe.rs` 114-118, 358-407).
+    ProbesStopped,
+    /// `fact_store_capacity_share_reached` (warning): the instance's own active facts reached 80%
+    /// of its bound, once until they fall back under it; nothing is refused yet (`codes.rs`
+    /// 3746-3751; `fact_store.rs` 151-153). A key the full bound has no room for is refused
+    /// `fact_store_capacity_exceeded` (`codes.rs` 731).
+    FactShareReached,
+}
+
+impl RuntimeNotice {
+    /// The record's code, as the wire spells it.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ProbeFailed { .. } => PROBE_FAILED,
+            Self::ProbePassed { .. } => PROBE_PASSED,
+            Self::AwaitingPerson { .. } | Self::ProbesStopped => AWAITING_PERSON,
+            Self::FactShareReached => FACT_SHARE_REACHED,
+        }
+    }
+}
+
+/// The notice `event` records ([`RuntimeNotice`]), read as [`pause_moment`] reads a record: a
+/// `runtime.failed` record of the Runtime's family whose public projection's outcome has one of the
+/// four codes on top. Any other record is none, every other `runtime.failed` among them (the
+/// scheduler driver's `contained_task_cancelled` after a stopped run), and shows as before.
+pub fn runtime_notice(event: &ProjectedEvent) -> Option<RuntimeNotice> {
+    if event.event_type != EventType::RuntimeFailed {
+        return None;
+    }
+    let ProjectionPayload::Public(payload) = &event.payload else {
+        return None;
+    };
+    let PublicEventPayload::Runtime(payload) = payload.as_ref() else {
+        return None;
+    };
+    notice_of(payload.outcome()?)
+}
+
+/// What a record's `outcome` notices, by its top code's spelling, its cause its `failure_code`:
+/// `None` for any other code.
+fn notice_of(outcome: &Outcome) -> Option<RuntimeNotice> {
+    let cause = outcome.value(FAILURE_CODE).and_then(|value| value.as_str()).map(str::to_owned);
+    Some(match outcome.code().as_str() {
+        PROBE_FAILED => RuntimeNotice::ProbeFailed { cause },
+        PROBE_PASSED => RuntimeNotice::ProbePassed { cause },
+        AWAITING_PERSON if cause.as_deref() == Some(PANIC_CAUGHT) => RuntimeNotice::ProbesStopped,
+        AWAITING_PERSON => RuntimeNotice::AwaitingPerson { cause },
+        FACT_SHARE_REACHED => RuntimeNotice::FactShareReached,
         _ => return None,
     })
 }
@@ -2396,9 +2502,10 @@ mod tests {
     use actingcommand_contract::{InstancePauseStage, PauseObstacle, RuntimeReceiptState};
 
     use super::{
-        failed_pause, lab_record_started, moment_of, pause_answer, pause_verdict, FailedPause,
-        Obstacle, PauseMoment, PauseOutcome, PauseSeen, PauseStage, PauseVerdict,
-        ACCOUNT_PAUSE_SETTLES, GLOBAL_PAUSE_SETTLES, PAUSE_WATCH_LIMIT, PAUSE_WATCH_READS,
+        failed_pause, lab_record_started, moment_of, notice_of, pause_answer, pause_verdict,
+        FailedPause, Obstacle, PauseMoment, PauseOutcome, PauseSeen, PauseStage, PauseVerdict,
+        RuntimeNotice, ACCOUNT_PAUSE_SETTLES, GLOBAL_PAUSE_SETTLES, PAUSE_WATCH_LIMIT,
+        PAUSE_WATCH_READS,
     };
 
     /// How long the Runtime takes to show a pause, here: an account's.
@@ -2658,6 +2765,103 @@ mod tests {
             moment_of(&record),
             Some(PauseMoment::Standing { stage: None, in_the_way: None, cause: None })
         );
+    }
+
+    /// A `runtime.failed` record's outcome as the Runtime 0.12.76 writes it, with values the
+    /// public projection drops (`attempts`, `next_occurrence_unix_ms`), before that projection.
+    fn notice_record(
+        code: &str,
+        category: &str,
+        operation: &str,
+        failure: Option<&str>,
+    ) -> Outcome {
+        let mut values = serde_json::json!({
+            "operation": operation,
+            "attempts": 3,
+            "next_occurrence_unix_ms": 1_763_700_000_000_u64,
+        });
+        if let Some(failure) = failure {
+            values["failure_code"] = serde_json::Value::from(failure);
+        }
+        serde_json::from_value(serde_json::json!({
+            "code": code,
+            "category": category,
+            "values": values,
+        }))
+        .expect("a record outcome's form")
+    }
+
+    #[test]
+    fn a_notice_says_which_record_with_its_failure_code_as_its_cause() {
+        // The projection keeps the operation and the failure code, and drops the counts and times.
+        let written = notice_record(
+            "instance_unavailable_probe_failed",
+            "warning",
+            "run_unavailable_probe",
+            Some("paired_backend_open_failed"),
+        );
+        assert!(written.value("attempts").is_some());
+        let projected = written.codes_only();
+        assert!(projected.value("attempts").is_none());
+        assert!(projected.value("next_occurrence_unix_ms").is_none());
+        assert_eq!(
+            projected.value("operation").and_then(|value| value.as_str()),
+            Some("run_unavailable_probe")
+        );
+        let cause = || Some("paired_backend_open_failed".to_owned());
+        for (code, category, operation, failure, notice) in [
+            (
+                "instance_unavailable_probe_failed",
+                "warning",
+                "run_unavailable_probe",
+                Some("paired_backend_open_failed"),
+                RuntimeNotice::ProbeFailed { cause: cause() },
+            ),
+            // A failure the catalog does not list is left out.
+            (
+                "instance_unavailable_probe_failed",
+                "warning",
+                "run_unavailable_probe",
+                None,
+                RuntimeNotice::ProbeFailed { cause: None },
+            ),
+            (
+                "instance_unavailable_probe_passed",
+                "info",
+                "run_unavailable_probe",
+                Some("paired_backend_open_failed"),
+                RuntimeNotice::ProbePassed { cause: cause() },
+            ),
+            (
+                "instance_unavailable_awaiting_person",
+                "warning",
+                "queue_unavailable_probes",
+                Some("paired_backend_open_failed"),
+                RuntimeNotice::AwaitingPerson { cause: cause() },
+            ),
+            // A probe panicked: no more probes of this unavailability.
+            (
+                "instance_unavailable_awaiting_person",
+                "warning",
+                "queue_unavailable_probes",
+                Some("panic_caught"),
+                RuntimeNotice::ProbesStopped,
+            ),
+            (
+                "fact_store_capacity_share_reached",
+                "warning",
+                "publish_facts",
+                None,
+                RuntimeNotice::FactShareReached,
+            ),
+        ] {
+            let record = notice_record(code, category, operation, failure).codes_only();
+            assert_eq!(notice.code(), code);
+            assert_eq!(notice_of(&record), Some(notice), "{code} {failure:?}");
+        }
+        // Another `runtime.failed` record: the scheduler driver's after a stopped run.
+        let stopped = Outcome::new(host("contained_task_cancelled")).codes_only();
+        assert_eq!(notice_of(&stopped), None);
     }
 
     #[test]

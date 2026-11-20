@@ -732,6 +732,33 @@ pub struct Labels {
     pub pause_life_resumed_without_backend_detail: &'static str,
     pub pause_life_unread: &'static str,
     pub pause_life_nothing_in_the_way: &'static str,
+    /// The ledger window's words for the Runtime's `runtime.failed` records of an instance its
+    /// device self-check made unavailable and of an instance's facts nearing their bound (Runtime
+    /// 0.12.76, #489 AVAIL-1 and #498; the codes and the rest of the Runtime's lines are at
+    /// `acui_source::workbench::RuntimeNotice`), one pair per notice: short, after a row's event
+    /// name; and the record's outcome in a sentence, the detail's `pause_outcome`. A probe did not
+    /// pass (`instance_unavailable_probe_failed`); a probe passed and the instance is available
+    /// again (`instance_unavailable_probe_passed`); unavailable for the reminder time, a person is
+    /// told (`instance_unavailable_awaiting_person`); the same with the failure code
+    /// `panic_caught`, after which no probe runs in that unavailability until the Runtime restarts
+    /// (runtime-host `host/unavailable_probe.rs` 114-118 at f6e2cd26); the instance's own facts
+    /// reached four fifths of its bound (`fact_store_capacity_share_reached`, `fact_store.rs`
+    /// 151-153); at the bound, only facts bringing a key the instance does not hold yet are refused
+    /// (`fact_store.rs` 1120-1126 and 1287-1300). The first three name their cause code, the
+    /// record's `failure_code`, only when one was named (`host/unavailable_probe.rs` 545-548,
+    /// 897-900 and 909), so their sentences say "when given". No interval, time or number: the
+    /// intervals and the reminder time are settings, and the record's public projection leaves out
+    /// every count and time the record carries (contract `outcome.rs` 931-939 and 1278-1308).
+    pub notice_probe_failed: &'static str,
+    pub notice_probe_failed_detail: &'static str,
+    pub notice_probe_passed: &'static str,
+    pub notice_probe_passed_detail: &'static str,
+    pub notice_awaiting_person: &'static str,
+    pub notice_awaiting_person_detail: &'static str,
+    pub notice_probes_stopped: &'static str,
+    pub notice_probes_stopped_detail: &'static str,
+    pub notice_fact_share_reached: &'static str,
+    pub notice_fact_share_reached_detail: &'static str,
     /// The same of "pause this account": watched, confirmed late, did not hold, held and was
     /// lifted later by a resume; and still on its way, its runs finishing up or its device being
     /// handed back, once it has been watched for its longest, which is neither confirmed nor
@@ -2474,6 +2501,16 @@ pub const ZH: Labels = Labels {
     pause_life_resumed_without_backend_detail: "iOS 手机的暂停已解除；这一版 Runtime 还不能操控它，没有连接设备",
     pause_life_unread: "这一版控制台不认识，原样见载荷",
     pause_life_nothing_in_the_way: "当时没读到挡着的东西",
+    notice_probe_failed: "自动体检没通过",
+    notice_probe_failed_detail: "实例不可用期间，Runtime 自己做的一次设备体检没通过；带原因码时，它是这次没通过的原因",
+    notice_probe_passed: "自动体检通过，实例恢复可用",
+    notice_probe_passed_detail: "Runtime 自己做的设备体检通过了，这个实例恢复可用；带原因码时，它是之前不可用的原因",
+    notice_awaiting_person: "不可用太久，等人处理",
+    notice_awaiting_person_detail: "这个实例不可用的时间已到设置的提醒时限，请看一下设备和模拟器；Runtime 仍会自动体检，通过了就恢复可用；带原因码时，它是不可用的原因",
+    notice_probes_stopped: "自动体检出错停了，等人处理",
+    notice_probes_stopped_detail: "Runtime 的自动体检自己出了错，这个实例这次不可用期间不再自动体检，直到 Runtime 重启；人来体检或恢复它，通过了就恢复可用",
+    notice_fact_share_reached: "实例的事实快满了",
+    notice_fact_share_reached_detail: "这个实例自己的事实已到上限的八成；上限放不下新键时，带新键的事实会被拒收，只更新已有键的照常收下",
     account_pause_watching: "还没收到确认，正在看它立住没有…",
     account_pause_late: "确认得晚：这个实例已暂停调度",
     account_pause_not_held: "这次暂停没有立住：现在这个实例没有暂停，可以再按一次",
@@ -3841,6 +3878,16 @@ pub const EN: Labels = Labels {
     pause_life_resumed_without_backend_detail: "The iOS phone's pause was lifted; this Runtime version cannot operate it yet, so no device was connected",
     pause_life_unread: "Not known to this console version; see the payload as it is",
     pause_life_nothing_in_the_way: "Nothing was read in the way then",
+    notice_probe_failed: "Automatic Check Failed",
+    notice_probe_failed_detail: "An automatic device check the Runtime ran while the instance was unavailable did not pass; a cause code, when given, says why",
+    notice_probe_passed: "Automatic Check Passed, Instance Available Again",
+    notice_probe_passed_detail: "The Runtime's automatic device check passed, and the instance is available again; a cause code, when given, is why it had been unavailable",
+    notice_awaiting_person: "Unavailable Too Long, Needs a Person",
+    notice_awaiting_person_detail: "This instance has been unavailable for the configured reminder time; please look at the device and the emulator. The Runtime keeps checking it automatically and makes it available again once a check passes; a cause code, when given, is why it is unavailable",
+    notice_probes_stopped: "Automatic Checks Stopped by an Error, Needs a Person",
+    notice_probes_stopped_detail: "The Runtime's automatic check itself failed with an internal error, so this instance gets no more automatic checks in this unavailability until the Runtime restarts; a check or resume by a person that passes makes it available again",
+    notice_fact_share_reached: "Instance Facts Nearly Full",
+    notice_fact_share_reached_detail: "This instance's own facts have reached four fifths of their limit; facts bringing new keys the limit has no room for are refused, while those only updating keys it already holds are still taken",
     account_pause_watching: "Not confirmed yet: watching whether the pause took hold…",
     account_pause_late: "Confirmed late: this instance's scheduling is paused",
     account_pause_not_held: "This pause did not take hold: this instance is not paused now. You can press it again",
