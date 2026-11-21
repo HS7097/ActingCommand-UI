@@ -61,8 +61,10 @@ const HELD_GRACE: Duration = Duration::from_secs(5);
 /// The prefixes of the variables the Runtime's programs and the Lab read. Among them: the state
 /// root a Lab core command takes over its own root's whenever it is set
 /// (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, which an MCP server's child and the tests set; Runtime
-/// `apps/actinglab/src/cli_module/place.rs` `place`), the A/B selection a launcher hands down
-/// (`ACTINGCOMMAND_INSTALL_ROOT`, `ACTINGCOMMAND_INSTALL_SELECTION`), the console's observer
+/// `apps/actinglab/src/cli_module/place.rs` `place`), the installation selection variables
+/// (`ACTINGCOMMAND_INSTALL_ROOT`, `ACTINGCOMMAND_INSTALL_SELECTION`), which actingd still reads
+/// as it starts (Runtime f6e2cd26 `apps/actingd/src/main.rs:484-489`,
+/// `crates/actingcommand-contract/src/installation.rs:349-354`), the console's observer
 /// mode, the outcome detail switch, the initiator and its detached-run marker
 /// (`contracts/lab-two-entries.md` §4.2), the Lab's configuration and session folders
 /// (`ACTINGLAB_CONFIG_PATH`, `ACTINGLAB_SESSION_STATE_DIR`) and the test switches. A list of

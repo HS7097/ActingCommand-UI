@@ -5,10 +5,6 @@ members = [
     "crates/acui-model",
     "crates/acui-app",
     "crates/acui-glass",
-    # crates/acui-setup (the 0.11 acsetup) is out of the workspace from UI-0a
-    # (Workflow #429 v5 F, C.1): its bundle and maintenance code predates bundle
-    # v4 and option 丙, so no compile-only fix keeps its behaviour. Its
-    # component-interfaces.json stays where it is: build.yml reads it there.
     "crates/acui-installation",
     # The 0.12 setup wizard (UI-W2), program acsetup.
     "crates/acui-wizard",
@@ -37,16 +33,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The formal ledger read face (offline) and the typed IPC client (online),
 # pinned to one exact Runtime source. One rev for every Runtime crate the console reads
-# through; setup shares the bundle contract and offline package qualifications. The display
-# adapter is the product's own conversion an effect intent's points are put on the device
-# frame by, for the picture and the ledger window alike; the console converts nothing itself.
+# through. The display adapter is the product's own conversion an effect intent's points are
+# put on the device frame by, for the picture and the ledger window alike; the console converts
+# nothing itself.
 actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
 actingcommand-display-adapter = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
 actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
 actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
 actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
 actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
-actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding, and the console does decode: the capture
@@ -66,10 +61,6 @@ slint = { version = "1.17.1", default-features = false, features = [
 # it, and Slint does not re-export it. The version Slint already locks.
 raw-window-handle = "0.6"
 slint-build = "1.17.1"
-# The wizard's network paths: the umbrella Releases, and a resource package URL
-# a person gives, over HTTPS. Blocking, rustls with the Mozilla root set
-# compiled in; no system TLS library.
-ureq = { version = "2.12", default-features = false, features = ["tls"] }
 # The setup wizard only. sha2 re-hashes every release file against SHA256SUMS
 # and the BUILD-MANIFEST.json inside each zip; it is the crate the Runtime's
 # own artifact store already hashes with, so the lock gains nothing new.

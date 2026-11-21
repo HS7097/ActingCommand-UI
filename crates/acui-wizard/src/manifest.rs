@@ -24,9 +24,6 @@ pub const RUNTIME_LAYOUT: &str = "distribution-v1";
 pub const TOOLS_LAYOUT: &str = "platform-tools-v3";
 /// The schema of an interface declaration (the same file's `INTERFACES_SCHEMA`).
 pub const INTERFACES_SCHEMA: &str = "actingcommand.component-interfaces.v1";
-/// The console zip's A/B forwarding entry: it runs only on an A/B root (it needs
-/// `install\active.json`), so it is not laid into a single-location root.
-pub const FORWARDER: &str = "acforward.exe";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BuildManifest {
@@ -100,12 +97,6 @@ impl Program {
             ],
             Self::Console => &["acui.exe"],
         }
-    }
-
-    /// Whether the manifest's file `path` is laid into the root: every one but the console's
-    /// A/B forwarding entry.
-    pub fn lays(self, path: &str) -> bool {
-        !(self == Self::Console && path == FORWARDER)
     }
 }
 
@@ -328,13 +319,6 @@ mod tests {
     }
 
     #[test]
-    fn the_console_zip_lays_everything_but_the_forwarding_entry() {
-        assert!(!Program::Console.lays("acforward.exe"));
-        assert!(Program::Console.lays("acui.exe"));
-        assert!(Program::Runtime.lays("acforward.exe"));
-    }
-
-    #[test]
     fn the_package_edge_takes_the_bundles_highest_revision() {
         let declaration = json!({
             "schema_version": INTERFACES_SCHEMA,
@@ -360,18 +344,20 @@ mod tests {
     }
 
     /// The UI's and the Runtime's declarations of 0.12.58 (this repository's
-    /// crates/acui-setup/component-interfaces.json and the Runtime's
-    /// distribution/windows/component-interfaces.json).
+    /// component-interfaces.json and the Runtime's
+    /// distribution/windows/component-interfaces.json), but for `install-control`, which is
+    /// [0, 0] on both sides as each declares it now (Runtime f6e2cd26
+    /// distribution/windows/component-interfaces.json:6).
     fn console() -> Value {
         declaration(json!({
-            "actingd-config": [5, 29], "install-selection": [1, 1], "install-control": [0, 1],
+            "actingd-config": [5, 29], "install-selection": [1, 1], "install-control": [0, 0],
             "ledger": [3, 8], "runtime-client": [3, 8], "package": [1, 2], "runtime-outcomes": [1, 1]
         }))
     }
 
     fn runtime() -> Value {
         declaration(json!({
-            "actingd-config": [5, 29], "install-selection": [1, 1], "install-control": [0, 1],
+            "actingd-config": [5, 29], "install-selection": [1, 1], "install-control": [0, 0],
             "ledger": [3, 8], "runtime-client": [3, 8], "package": [3, 10], "runtime-outcomes": [1, 1]
         }))
     }

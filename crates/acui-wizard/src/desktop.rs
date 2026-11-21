@@ -101,7 +101,7 @@ mod imp {
     /// The release build is a window program: run from a console or a script, its command line
     /// still writes there. Output the caller redirected (a pipe or a file) is kept; otherwise
     /// the parent's console is attached and `CONOUT$` becomes stdout and stderr. With neither,
-    /// nothing is shown, and the exit code still says how it went. (The 0.11 acsetup's own.)
+    /// nothing is shown, and the exit code still says how it went.
     pub fn attach_console() {
         // SAFETY: plain queries of this process's own standard handles.
         let redirected = |which: u32| unsafe {
@@ -228,8 +228,8 @@ mod imp {
 
     /// `<root>\ui\acui.exe`, started in `<root>\ui`, apart from the wizard: no console, no
     /// standard handles, and none of the Runtime's or the Lab's variables the wizard was started
-    /// with (an A/B selection, a state root: `acui_wizard::child::cleared_variables`), so it
-    /// reads this root only. The child is never waited on.
+    /// with (an installation selection, a state root: `acui_wizard::child::cleared_variables`),
+    /// so it reads this root only. The child is never waited on.
     pub fn start_console(root: &Path) -> io::Result<()> {
         use std::os::windows::process::CommandExt;
         let ui = root.join("ui");
