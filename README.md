@@ -1580,8 +1580,8 @@ the console does not know such as `install_root`, lines it cannot parse — is k
 result goes to `acui.toml.tmp` beside it, which then replaces the file. **The file so chosen is the
 console's only settings file.** Besides it the console itself reads and writes only the actingd start logs
 the launcher creates and, after an early exit, reads back, its own technical log, and its record of the
-take-over and hand-back requests it sent, `%LOCALAPPDATA%\ActingCommand\acui-holds.json` (see those sections, and "Take
-Over" under "Launcher"): none is inside any state root, and the state root still belongs entirely to the
+take-over and hand-back requests it sent, `%LOCALAPPDATA%\ActingCommand\acui-holds.json`, with its lock file
+`acui-holds.json.lock` beside it (see those sections, and "Take Over" under "Launcher"): none is inside any state root, and the state root still belongs entirely to the
 read face. A missing file is a first run: the defaults
 (Chinese, standard, flat) are used and nothing is said. Anything else is said at the top of every window,
 with the file and the line: a value the console does not recognize, or a line that is not `key = value`,
@@ -1886,9 +1886,11 @@ every status read, so mending it or moving it away is enough. A state root opene
 of its path (a junction, a substituted drive) does not find the requests recorded under the first; they stay
 in the file and harm nothing else. Two consoles of one user on one state root may each settle the other's
 request still on its way as "the last result could not be confirmed"; nothing is sent, and the next status
-that shows the request corrects it. Two consoles of one user share the one record file, and each locks it
-only against itself: when both write it at the same moment, a request one of them just recorded may drop
-out of it, and if that request's answer then never comes, nothing settles it after a restart.
+that shows the request corrects it. Two consoles of one user share the one record file and lock it against
+each other: every read and change of it holds `acui-holds.json.lock` beside it, opened with no sharing, so
+one waits for the other's few milliseconds (each read or change at most five seconds in all, then it is said in
+red, and for five seconds after that each tries once without waiting) and neither loses what the other
+recorded; a console that ended or crashed holds nothing, as the system closes its lock.
 
 v0.12.76 (`f6e2cd26`) answers both requests `not_implemented` and records nothing: this build says "This
 Runtime cannot take over yet; nothing was done (waiting for Runtime support)", and from that answer on the
