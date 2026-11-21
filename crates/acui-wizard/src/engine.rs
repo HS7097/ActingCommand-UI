@@ -480,11 +480,10 @@ impl Told<'_> {
 /// before "Install", for the phone page (see the module's description). The root must be one
 /// the install could take, new or empty ([`check_root`], with room for the Tools). The Tools zip
 /// is checked once more against the set (the set's folder is not the wizard's, and its check
-/// was a while ago); then every file the Tools lay ([`Program::lays`]: each of them) is unpacked
-/// as a new file and read back against its manifest's size and SHA-256, as step 2 lays them, and
-/// the manifest after them. `report` hears each line (kept for the log in [`PreLaid::lines`]),
-/// the same news in a person's words ([`Event::Plain`]) and the bytes laid. A failure says what
-/// it left.
+/// was a while ago); then every file its manifest lists is unpacked as a new file and read back
+/// against its manifest's size and SHA-256, as step 2 lays them, and the manifest after them.
+/// `report` hears each line (kept for the log in [`PreLaid::lines`]), the same news in a
+/// person's words ([`Event::Plain`]) and the bytes laid. A failure says what it left.
 pub fn pre_lay_tools(set: &VerifiedSet, root: &Path, report: &mut dyn FnMut(Event)) -> Result<PreLaid, PreLayFailure> {
     let dir = root.join(Program::Tools.dir());
     let mut told = Told { report, lines: Vec::new() };
@@ -541,10 +540,6 @@ fn lay_tools_early(
     let mut done = 0u64;
     let mut count = 0usize;
     for file in &verified.manifest.files {
-        if !Program::Tools.lays(&file.path) {
-            told.say(Said::new("不放（只在 A/B 安装里用）", "not laid (A/B installations only)").with(&file.path));
-            continue;
-        }
         done += lay_file(&mut archive, file, &under(dir, &file.path))?;
         count += 1;
         told.bytes(done, verified.bytes);
@@ -613,7 +608,6 @@ fn laid_tools(dir: &Path, verified: &VerifiedProgram) -> Result<(usize, u64), Sa
         .manifest
         .files
         .iter()
-        .filter(|file| verified.program.lays(&file.path))
         .map(|file| (file.path.to_ascii_lowercase(), (file.path.as_str(), Some(file))))
         .collect();
     expected.insert(MANIFEST_FILE.to_ascii_lowercase(), (MANIFEST_FILE, None));
@@ -1269,10 +1263,6 @@ fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet, pre_laid: bool) -> Result<
         let mut archive = Archive::open(&verified.zip)?;
         let mut count = 0usize;
         for file in &verified.manifest.files {
-            if !program.lays(&file.path) {
-                run.say(Said::new("不放（只在 A/B 安装里用）", "not laid (A/B installations only)").with(&file.path))?;
-                continue;
-            }
             done += lay_file(&mut archive, file, &under(&dir, &file.path))?;
             count += 1;
             run.bytes(done, total);

@@ -12,16 +12,16 @@
 > `acsetup.exe` 是 0.12 的安装向导（UI-W2）：从一份安装集把 Runtime、工具和监控台装进一个新文件夹，见
 > 「安装向导 acsetup」一节。UI v0.12.17 起随发布件一起发；更早的版本没有它，用 `actingctl install` 安装。
 
-本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）与固定入口 `acforward`——A/B 安装经它拉起
-各个程序。与 Runtime 一样，这些程序不认识任何游戏：不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的
-资源包接入（每个游戏一个标准包）；向导只读包里声明的内容，什么也不猜。
+本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）。与 Runtime 一样，这些程序不认识任何游戏：
+不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的资源包接入（每个游戏一个标准包）；向导只读包里声明的内容，
+什么也不猜。
 
 ## 当前发布
 
 - **0.12 系列（UI v0.12.0 起）**，与此前每一版一样是预发布：本仓
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 上的 `acui-windows-<sha>.zip` 与
   `SHA256SUMS`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。zip 里有
-  `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
+  `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`LICENSE`、
   `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
   里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
   源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime v0.12.76
@@ -429,7 +429,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd"
 ```
 
-七个 crate（contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
+六个 crate（contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config）共用这一个 rev。
 内嵌 typed client 读取在线 lifecycle-failure 页中的可选 `resource_dispositions` 分组；离线 ledger
 reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
 严格校验和显式读取错误保持。
@@ -663,7 +663,7 @@ Runtime 没有这两项，就不显示这一组。Runtime 每次启动后读一�
 Runtime 重启过就等下次进设置页再读。安装向导第 9 页的「开机后自动运行」装的就是这个看门狗（见「安装向导 acsetup」一节）。两页都一直在，只是一次显示一页，所以切过去再切回来，框里的选择不变。账本窗口「高级排障与历史账本」只在
 需要时打开：在工作台按「排障与账本」，或开台时带了 `--tab` 或 `--source`；每种来源（默认 `auto` /
 `online` / `offline`）最多开一个，再按入口只是把已开的那个还原出来（Slint 1.17 没有把窗口提到最前的
-接口）。只给 `--state-root` 不会打开账本窗口：固定入口每次都带它。关掉账本窗口时，它的读线程读完手上
+接口）。只给 `--state-root` 不会打开账本窗口。关掉账本窗口时，它的读线程读完手上
 这一页就退出；再打开是一个新窗口、新会话。关掉工作台就退出整个程序（解锁进行中除外，见「启动器」）。
 
 主页右栏有三个页签「实时画面」「日常任务」「目标」（见下），后面是左栏选中的实例名；选哪个页签在这次运行内保留，换实例、换页都不变，
@@ -903,7 +903,7 @@ actingd：没有在运行的 Runtime 可核对，这种情况认不出来。
 是设置页（截图用）。`--account` 也同类：开窗时选中哪张实例卡，取值是实例的名字（不给时选第一张；列出的实例里没有叫这个名字的时也选第一张，并写进技术日志）。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
 
 直接启动 `acui.exe`（或直接指向它的快捷方式）不再带黑色控制台窗口；从命令行启动时，`--help` 与启动
-失败的原因照旧印在那个控制台上。经固定入口 `acforward.exe` 启动目前仍会有控制台窗口。
+失败的原因照旧印在那个控制台上。
 
 窗口可缩放：工作台默认 1200×780，最小 1000×640；账本窗口默认 1400×900，最小 1100×700，中栏随窗口伸缩，
 两侧栏保持定宽。窗口跟随系统 DPI；程序自己不设缩放。
@@ -1228,7 +1228,7 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   的结果：重读失败，或窗口读不了（离线读取、已不在读取），就用红字带码写「暂停情况未知」，状态没读到时
   暂停行的位置也只剩一行红字说明；只有真读到了才写「以上方的暂停行为准」。三类暂停不给按钮、
   只写说明：理由列在 `resume_elsewhere_reasons` 里的（「此暂停要由设下它的一方解除」）；部署暂停
-  `acsetup_update`、`install_restart` 和以 `deploy-` 开头的，请用安装器恢复（监控台不接
+  （理由以 `deploy-` 开头），请用安装器恢复（监控台不接
   `release-hold`）；Lab 救急模块挂的暂停（Runtime 0.12.48 起），理由恰好是 `lab-<操作>-<毫秒时间戳>`，
   操作是 `config`、`deploy`、`down`、`instance`（加实例，Runtime 0.12.52 起）、`place`、`restore`、
   `rollback` 之一，由那次操作结束时自己解除；
@@ -1601,8 +1601,7 @@ python tools/make_install_set.py --out <新文件夹> --label <安装集的名�
 `secret_fingerprint_salt` 与每台的 `instance_id`），以及仅限 Windows 的 `windows` 0.62（`Win32_Foundation`、
 `Win32_System_Com`、`Win32_System_RestartManager`、`Win32_UI_Shell`：经 `SHGetKnownFolderPath` 找开始菜单与
 桌面文件夹，经 `IShellLinkW` + `IPersistFile` 写快捷方式，经 `IFileOpenDialog` 选文件夹；与 Slint 已锁定的同一
-版本，锁文件不新增 crate）。exe 图标同监控台，由 `winresource` 编进资源段。旧的 0.11 向导 `crates/acui-setup`
-已移出工作区，代码原样留着；它的 A/B 槽、在线下载、升级与只更新资源，新向导都不做。
+版本，锁文件不新增 crate）。exe 图标同监控台，由 `winresource` 编进资源段。
 
 监控台的 Win7 Aero 外框在锁文件里只多本仓的 `acui-glass` 一个 crate。它打开 Slint 的 `raw-window-handle-06` 特性
 以取得原生窗口，`acui-glass` 用 `raw-window-handle` 0.6（所有平台，接口按它接收窗口），以及仅限 Windows 的
@@ -1627,13 +1626,9 @@ python tools/make_install_set.py --out <新文件夹> --label <安装集的名�
   `claude mcp add --scope user actingcommand -- "<安装根>\runtime\actingctl.exe" mcp-serve --tier …`，运行一次即可。
 - **Codex**：打印一段 `[mcp_servers.actingcommand]`（命令、参数、两个超时，以及注释掉的 `enabled_tools` 示例），
   放进 Codex 的 `config.toml`。
-- 在 A/B 安装里，它打印的总是固定入口 `<安装根>\runtime\actingctl.exe`，从不打印槽内路径，所以升级或回退之后注册
-  仍然有效（Runtime v0.11.2 起）。经这个入口启动时，服务从安装的选择取状态根；与之不同的 `--root` 或
-  `--state-root` 一律拒绝。
 - **档位**（0.11 系列）：`observer`（只读；总是开着，也是默认）、`operator`（设备与调度）、`author`（Lab 录制）。
   未开档位的工具答 `tier_not_enabled`。`actingctl mcp-serve --list-tools [--format json|markdown]` 列出全部 22 个工具。
 - 批准、actingd 配置的改动与 Runtime 的重启归人。
-- 运行中的服务保持它启动时的安装代际（见「A/B 安装与升级」）；升级后请在客户端里重启它。
 
 每个工具接收什么、回答什么：`actingctl mcp-serve --list-tools --format markdown`。给智能体的操作手册是
 [伞仓](https://github.com/HS7097/ActingCommand/tree/main/skills/actingcommand)里的 `skills/actingcommand/`。
@@ -1678,8 +1673,7 @@ python tools/make_install_set.py --out <新文件夹> --label <安装集的名�
 另有三个 crate 在这四层之外。`acui-glass` 是 Win7 Aero 外框的原生一半，`acui-app` 经它不认识 Slint 的安全接口
 使用；监控台窗口的 Win32、WinRT 代码及其 unsafe 都在这里，Windows 以外只回答做不到。`acui-wizard`（二进制
 `acsetup`）是 0.12 安装向导：一个后端库，加上共用它的窗口和命令行，不依赖上面任何一层，依赖见「安装向导 acsetup」
-一节。旧的 0.11 向导 `acui-setup` 已移出工作区。`acui-installation` 为监控台提供共享的安装选择消费者，
-并生成二进制 `acforward`，即固定入口。
+一节。`acui-installation` 为监控台提供共享的安装选择消费者。
 
 ## 图标
 
@@ -1728,7 +1722,7 @@ python tools/make_install_set.py --out <新文件夹> --label <安装集的名�
 
 `GPL-3.0-only`。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint` 文件的 SPDX 头与之一致。界面由
 [Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime crate（contract / display-adapter / ledger /
-ledger-forensics / runtime-client / runtime-config / execution-kernel）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
+ledger-forensics / runtime-client / runtime-config）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
 
 本仓没有其他自动化项目的源码。整个项目族的上游许可矩阵见伞仓的
 [LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md)。
