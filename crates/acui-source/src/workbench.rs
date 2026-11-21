@@ -35,8 +35,11 @@
 //! of a setting this file has no name for and those a start report names, all for the
 //! log.
 //!
-//! Left out on purpose: `player_hold` and `control` (the hold's read face is
-//! UI-3d's); a fence's recheck counts. An activity's `request_id` is kept, as the run's
+//! Left out on purpose: `control`, which a reader is told not to read (Runtime f6e2cd26
+//! `crates/actingcommand-contract/src/runtime/player_hold.rs` 780-784); a fence's recheck counts.
+//! The console's gate over an account's picture and device (frozen or withdrawn) comes from
+//! `player_hold` and `player_hold_operation`, which [`hold`] reads (UI-3d; [`hold::gate`]).
+//! An activity's `request_id` is kept, as the run's
 //! identity that a stop of it names and nothing outside this crate reads
 //! ([`ActivityFact::run`], [`stop::stop_run`], UI-3e2).
 //! `emulator_state` is a condition of the picture's refresh and of the device's buttons, whose
@@ -130,6 +133,7 @@ use super::{
 pub mod backends;
 pub mod device;
 pub mod goals;
+pub mod hold;
 pub mod pack;
 pub mod preview;
 pub mod rules;
@@ -250,7 +254,7 @@ impl ReadLane {
         let info = client.runtime_info();
         let (pid, epoch) = (info.pid(), code(&info.owner_epoch()));
         match client.status() {
-            Ok(status) => LiveRead::Read(Box::new(live_snapshot(pid, epoch, &status))),
+            Ok(status) => LiveRead::Read(Box::new(live_snapshot(pid, epoch, status))),
             Err(error) => live_failure(NoConnection::Failed(self.settled(error))),
         }
     }
@@ -1437,6 +1441,9 @@ pub struct LiveSnapshot {
     /// starts down from. Absent when the status states no source; the picture then
     /// asks nothing until a status states one.
     pub ledger_head: Option<u64>,
+    /// The status itself, kept whole and not copied, for one use only: the settlement of a player
+    /// hold request this console stored ([`hold::settle_stored`]).
+    pub status: hold::StatusCopy,
 }
 
 /// One registered instance as that `Status` reported it.
@@ -1479,6 +1486,10 @@ pub struct InstanceLive {
     pub emulator_controls: EmulatorControls,
     /// What the status left out of what `physical` and `emulator_controls` are read from.
     pub unstated: Unstated,
+    /// Its player hold and its last hold operation of this owner epoch (UI-3d), read by
+    /// [`hold::hold_fact`]; none with neither, and always from a Runtime that fills neither,
+    /// v0.12.76 among them.
+    pub hold: Option<hold::HoldFact>,
 }
 
 /// Which of an instance's emulator's controls the Runtime offers (`instance.start`,
@@ -2332,22 +2343,32 @@ fn servers(records: &[RuntimeFactRecord]) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn live_snapshot(pid: u32, epoch: String, status: &RuntimeControlPlaneStatus) -> LiveSnapshot {
+/// One `Status` read, which goes into the snapshot whole, moved and not copied.
+fn live_snapshot(pid: u32, epoch: String, status: RuntimeControlPlaneStatus) -> LiveSnapshot {
     let owner_epoch = status.owner_epoch();
+    let global_pause =
+        status.scheduling_pause().map(|pause| global_pause_fact(pause, owner_epoch));
+    let instances = status
+        .instances()
+        .iter()
+        .map(|instance| instance_live(instance, owner_epoch, &status))
+        .collect();
+    let ledger_head = status.source().map(|source| source.ledger_committed_head);
     LiveSnapshot {
         pid,
         epoch,
-        global_pause: status.scheduling_pause().map(|pause| global_pause_fact(pause, owner_epoch)),
-        instances: status
-            .instances()
-            .iter()
-            .map(|instance| instance_live(instance, owner_epoch))
-            .collect(),
-        ledger_head: status.source().map(|source| source.ledger_committed_head),
+        global_pause,
+        instances,
+        ledger_head,
+        status: hold::StatusCopy::new(status),
     }
 }
 
-fn instance_live(instance: &RuntimeInstanceStatus, owner_epoch: OwnerEpoch) -> InstanceLive {
+fn instance_live(
+    instance: &RuntimeInstanceStatus,
+    owner_epoch: OwnerEpoch,
+    status: &RuntimeControlPlaneStatus,
+) -> InstanceLive {
     let alias = instance.instance_alias();
     let (emulator_on, emulator_off) = match instance.emulator_state() {
         EmulatorRunningState::On { observed_at_unix_ms } => (Some(observed_at_unix_ms), None),
@@ -2375,6 +2396,7 @@ fn instance_live(instance: &RuntimeInstanceStatus, owner_epoch: OwnerEpoch) -> I
             provenance: provenance.is_none(),
             capabilities: instance.capabilities().is_none(),
         },
+        hold: hold::hold_fact(status, alias),
     }
 }
 

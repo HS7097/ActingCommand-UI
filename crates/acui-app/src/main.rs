@@ -28,6 +28,7 @@
 // The native window work is acui-glass's; `report` and `identity` are the exceptions here.
 #![deny(unsafe_code)]
 
+mod hold_file;
 #[allow(unsafe_code)]
 mod identity;
 mod install;

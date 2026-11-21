@@ -1577,10 +1577,12 @@ resume_elsewhere_reasons = []
 It is read once at startup, and a dropdown change writes its one key: the file is read again, the last
 line of that key is replaced (or a line appended), and every other line — comments, the path keys, keys
 the console does not know such as `install_root`, lines it cannot parse — is kept byte for byte; the
-result goes to `acui.toml.tmp` beside it, which then replaces the file. **The file so chosen is the only
-file the console itself reads and writes**, besides the actingd start logs the launcher creates and, after an
-early exit, reads back, and its own technical log (see those sections): it is not inside any state root,
-and the state root still belongs entirely to the read face. A missing file is a first run: the defaults
+result goes to `acui.toml.tmp` beside it, which then replaces the file. **The file so chosen is the
+console's only settings file.** Besides it the console itself reads and writes only the actingd start logs
+the launcher creates and, after an early exit, reads back, its own technical log, and its record of the
+take-over and hand-back requests it sent, `%LOCALAPPDATA%\ActingCommand\acui-holds.json` (see those sections, and "Take
+Over" under "Launcher"): none is inside any state root, and the state root still belongs entirely to the
+read face. A missing file is a first run: the defaults
 (Chinese, standard, flat) are used and nothing is said. Anything else is said at the top of every window,
 with the file and the line: a value the console does not recognize, or a line that is not `key = value`,
 in amber, the default used and the line kept; a file that is there but cannot be read (permissions, not
@@ -1838,6 +1840,65 @@ lists that reason, or `resume_elsewhere_reasons` cannot be used), the card says 
 listed. From the command line, `actingctl pause
 --state-root <state root> --instance <alias>` and `actingctl resume` with the same flags, or the MCP tools
 `ac_pause` / `ac_resume` (see "MCP for agents"), still pause and resume one instance.
+
+**Take Over** (#429 UI-3d). The rescue bar's first row has **Take Over**, just before **Auto Rules** at
+its end, on an instance that drives a device of its own (an emulator or a handset; a fixture instance has none): a person's player hold of
+the device, which the Runtime keeps as the instance's own state, never as a pause. A press asks first, every
+time: taking over disconnects the automation and the picture, a task running now may go on for about a
+minute and then has up to half a minute more to stop at a checkpoint, and if it has not stopped by then there
+is no take-over; once the request is sent it cannot be withdrawn. Any pause, standing pauses kept on every
+instance among them, holds nothing back. While the device is a person's the button is **Resume Auto-Play**, with the box
+"Bring the game to its main screen first" on a row of its own under it (ticked by default; the startup
+package runs only if the instance has one). A hold this console set in this run is handed back at one press; any other hold,
+one another console set included, asks first, since someone may still be using the device, and the question
+goes once a status read shows another hold or none. Any channel may end a hold, and the card names who began
+it: a console, the command line, an agent, the Lab (or an agent or a console through the Lab). Under a pause
+a hand-back ends the hold without reconnecting the device, and automatic scheduling stays paused until the
+pause is lifted; where every instance is kept paused, that is every hand-back.
+
+What the card says comes from the status alone, in the hold's own blue band: **Taking over: asking**;
+**Taking over: finishing <task>**, with the clock time from which the task stops at its next checkpoint and
+the one by which it must have stopped; **Taking over: handing the device over**, with the time by which it
+must be handed over, then "past …, about to fail" once that time has passed, or, once the device session's
+close began, when it began and that the close has no time limit (a restart of the Runtime is the way out of
+one that hangs); **Yours to play (since hh:mm)**, with who began it, a task stopped early, a restart that
+kept it and a hand-back that did not go through; **Handing back to the automation**. A hold that ended under
+a pause still in effect says **The take-over ended; automatic scheduling stays paused**, amber. An acquire
+that did not go through, and a hand-back whose reconnect failed, are said in the small print afterwards.
+Times are clock times; nothing is counted down. While the take-over is asked for and on its way the picture
+stays on its last frame and the device's buttons are off ("the device is being handed over"); while the
+device is a person's, the picture is taken down, its place says so, the device's rows and the run's row are
+not drawn, and the instance's backends group on the settings page is off with the same words as the
+Runtime's own refusal. The rules panel ("Auto Rules") stays as it is. Once the hold ends, a pause still in
+effect or not, the picture and its refresh come back. "Stop This Run" and "Close This Task" can still be
+pressed while the hold asks or drains, as the Runtime takes a stop then; a stop's follow-up waits while the
+hold is past its drain.
+
+Each request goes out once, on a worker thread over a fresh person's connection, and is never sent again by
+itself; a hand-back refused because the hold changed elsewhere (a restart of the Runtime, say) is read again
+and asked of the person once more. Before it is sent, the console records the request in
+`%LOCALAPPDATA%\ActingCommand\acui-holds.json` (by state root and instance), its own record file beside its
+logs and never inside a state root; after the console reopens, its connection is made again or the Runtime
+restarts, the record and the next status settle a request whose answer never came, and it is taken out once
+what it did is known, or once it was settled in another owner epoch than the one it was sent in. A record
+file that cannot be read or written is said in red, and nothing is sent while it is so; it is read again at
+every status read, so mending it or moving it away is enough. A state root opened through another spelling
+of its path (a junction, a substituted drive) does not find the requests recorded under the first; they stay
+in the file and harm nothing else. Two consoles of one user on one state root may each settle the other's
+request still on its way as "the last result could not be confirmed"; nothing is sent, and the next status
+that shows the request corrects it. Two consoles of one user share the one record file, and each locks it
+only against itself: when both write it at the same moment, a request one of them just recorded may drop
+out of it, and if that request's answer then never comes, nothing settles it after a restart.
+
+v0.12.76 (`f6e2cd26`) answers both requests `not_implemented` and records nothing: this build says "This
+Runtime cannot take over yet; nothing was done (waiting for Runtime support)", and from that answer on the
+button stays off for every instance in this console until the Runtime starts again (a console opened again
+offers it once more, and its press is answered the same way); the hold's phases, its source and its
+deadlines show once
+R-7b fills them in the status. The console still declares `runtime-client` [12, 14] and declares no
+`player-hold` range. A device operation, a stop of a run or a refresh refused `player_hold_active` says that
+a person has taken over the instance; an instance resume answered so says the device is held by a person,
+so it was not connected again.
 
 Over the live view, the rescue bar has one more row while the instance does something: **Stop This Run**
 for a run another tool started (#429 UI-3e2, R-6's first slice, Runtime v0.12.53 or later), and **Close

@@ -12,6 +12,7 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::device::DeviceOp;
+use acui_source::workbench::hold::{self as hold_source, HoldGate, HoldPhase, HoldTarget, StatusCopy};
 use acui_source::workbench::goals::{
     self, GoalAct, GoalLine, GoalsAnswer, GoalsPage, GoalsRead, OrderEdit, OrderRule, ValueControl,
 };
@@ -25,12 +26,13 @@ use acui_source::{ClientFailure, PauseFact};
 use super::actions::{self, AccountEntry, Actions, ActionsView, PresetView, RulesView};
 use super::card::{self, CardView, Down, Schedule};
 use super::goals::{GoalPressed, GoalRequest, GoalsView, OrderDraft, WriteTarget, Writes};
+use super::hold::Holds;
 use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
 };
 use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, GOALS_TOO_OLD, PACKS_TOO_OLD, START_TRIES};
-use super::rescue::{Rescue, RescueHold, RescueView, Watch};
+use super::rescue::{Asked, Rescue, RescueHold, RescueView, Watch};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::stop::{Review, StopTarget, Stops};
 use super::switch::{Request, SwitchTarget, Switches};
@@ -300,6 +302,12 @@ pub struct Model {
     /// Each account's stop of its run, beside them (UI-3e2): kept while no Runtime answers, and
     /// judged again by the next `Status` read online (`stops_reviewed`).
     stops: Stops,
+    /// Each account's take-over and hand-back of its device (UI-3d), and the console's record of
+    /// the requests it sent (`hold`).
+    holds: Holds,
+    /// The newest `Status` online, kept whole for one use: the settlement of a request the record
+    /// keeps (`hold::status_read`). None while no Runtime answers.
+    status: Option<StatusCopy>,
     /// The ledger's committed head as the newest `Status` stated it, while online: where the
     /// picture's lookup starts down from.
     ledger_head: Option<u64>,
@@ -322,6 +330,9 @@ pub enum DeviceBusy {
     BackendSwitch,
     /// A refresh of its picture (`refresh`).
     Refresh,
+    /// Its device is being handed over to a person, or is a person's (UI-3d): its gate is not
+    /// open (`Model::preview_gate`).
+    Hold,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -439,6 +450,8 @@ impl Model {
             pictures: Pictures::default(),
             rescue: Rescue::default(),
             stops: Stops::default(),
+            holds: Holds::default(),
+            status: None,
             ledger_head: None,
             rules_open: false,
             resume_elsewhere,
@@ -647,8 +660,9 @@ impl Model {
 
     /// The accounts of the left column: as `Status` listed them while the Runtime
     /// answers; otherwise every alias seen this run, with nothing an earlier answer
-    /// said of it. The one whose picture shows is marked.
-    pub fn cards(&self, now: Instant) -> Vec<CardView> {
+    /// said of it. The one whose picture shows is marked. `now_ms` tells only whether a
+    /// take-over's grace has passed (`card::said`): a card counts nothing down.
+    pub fn cards(&self, now: Instant, now_ms: u64) -> Vec<CardView> {
         let picked = self.picture_account();
         match Down::of(&self.link) {
             None => {
@@ -679,7 +693,7 @@ impl Model {
                         );
                         card::card_view(
                             instance, server, last_seen, global, schedule, selected, elsewhere,
-                            account,
+                            account, now_ms,
                         )
                     })
                     .collect()
@@ -1001,8 +1015,8 @@ impl Model {
     /// Rows that no display part orders (of a game root's `pack-catalog.json`, `ui.json` before
     /// Runtime 0.12.68: the one `actingctl packs` answers under `ui`) go by their names in
     /// `language`. Each package's switch as the switches' read leaves it (`switches_now`, UI-3f2),
-    /// which the rows do not wait for.
-    pub fn tasks_view(&self, now: Instant, language: Language) -> TasksView {
+    /// which the rows do not wait for. `now_ms` as `cards` takes it.
+    pub fn tasks_view(&self, now: Instant, now_ms: u64, language: Language) -> TasksView {
         if let Some(down) = Down::of(&self.link) {
             return TasksView::Down(down);
         }
@@ -1025,7 +1039,8 @@ impl Model {
         };
         let global = self.global_pause.as_ref();
         let schedule = self.schedule(now);
-        let (_, main, notes) = card::said(instance, global, schedule, &self.resume_elsewhere);
+        let (_, main, notes) =
+            card::said(instance, global, schedule, &self.resume_elsewhere, now_ms);
         let (names, packs) = match &self.names {
             Names::Ready { names, packs } => (Some(names), Some(packs)),
             Names::NotAsked | Names::Unreadable => (None, None),
@@ -1396,6 +1411,26 @@ impl Model {
         &mut self.stops
     }
 
+    pub fn holds(&self) -> &Holds {
+        &self.holds
+    }
+
+    pub fn holds_mut(&mut self) -> &mut Holds {
+        &mut self.holds
+    }
+
+    /// The newest `Status` online, whole, for the settlement of a request the record keeps.
+    pub fn status_copy(&self) -> Option<&StatusCopy> {
+        self.status.as_ref()
+    }
+
+    /// The hold of `alias` a hand-back names, while the newest `Status` says it is held.
+    pub fn hold_target(&self, alias: &str) -> Option<HoldTarget> {
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        let hold = instance.hold.as_ref()?.hold.as_ref()?;
+        (hold.phase == HoldPhase::Held).then(|| hold.target.clone())
+    }
+
     /// What a press of "stop this run", or of "close this task", on `alias`'s bar would do now
     /// (UI-3e2, UI-3e3, UI-3e2b): while its rescue bar offers that button, the run the newest
     /// `Status` names for the account, its package, whether the scheduler dispatched it, so that a
@@ -1439,12 +1474,23 @@ impl Model {
         self.stops.reviewed(epoch, &self.instances, &mut self.rescue, at_ms)
     }
 
-    /// Which of its device's works out from here holds `alias`'s device, if any: an operation of
-    /// it, a switch of its backends, a refresh of its picture, said in that order. The one place
-    /// where each of them keeps the others from going out for an account: the Runtime names none
-    /// of them while it waits its turn in the instance's queue, nor a game's operation at all,
-    /// and a `Status` comes every few seconds. One account's work holds no other's.
+    /// What holds `alias`'s device from here, if anything: its gate, not open while the device is
+    /// handed over to a person or is a person's (UI-3d); then which of its device's works out from
+    /// here, an operation of it, a switch of its backends, a refresh of its picture, said in that
+    /// order. The one place where each of them keeps the others from going out for an account:
+    /// the Runtime names none of them while it waits its turn in the instance's queue, nor a game's
+    /// operation at all, and a `Status` comes every few seconds. One account's work holds no
+    /// other's.
     pub fn device_busy(&self, alias: &str) -> Option<DeviceBusy> {
+        if self.preview_gate(alias) != PreviewGate::Open {
+            return Some(DeviceBusy::Hold);
+        }
+        self.device_work(alias)
+    }
+
+    /// Which of `alias`'s device's works is out from here, as `device_busy` says them, its gate
+    /// aside: what holds a take-over of it back (`Holds::row`), which is the gate's own.
+    fn device_work(&self, alias: &str) -> Option<DeviceBusy> {
         if let Some(op) = self.rescue.out(alias) {
             return Some(DeviceBusy::Rescue(op));
         }
@@ -1463,13 +1509,21 @@ impl Model {
         None
     }
 
-    /// Whether the picture may read `alias` now. UI-3d writes this from the account's player
-    /// hold and its own ask for the device; nothing that asks it changes then.
+    /// Whether the picture and the device of `alias` may be read and operated now (UI-3d): from
+    /// the account's player hold and last hold operation as the newest `Status` says them, and
+    /// this console's own ask for the device, from its press until the `Status` after its answer
+    /// (`preview::halt`, `preview::release`); of an account the newest `Status` does not list, the
+    /// ask alone (`hold::gate`).
     pub fn preview_gate(&self, alias: &str) -> PreviewGate {
-        if self.pictures.halted(alias) {
-            PreviewGate::Freeze { since_ms: None }
-        } else {
-            PreviewGate::Open
+        let fact = self
+            .instances
+            .iter()
+            .find(|instance| instance.alias == alias)
+            .and_then(|instance| instance.hold.as_ref());
+        match hold_source::gate(fact, self.pictures.halted(alias)) {
+            HoldGate::Open => PreviewGate::Open,
+            HoldGate::Freeze => PreviewGate::Freeze,
+            HoldGate::Withdrawn => PreviewGate::Withdrawn,
         }
     }
 
@@ -1559,6 +1613,9 @@ impl Model {
                 RefreshHold::Hidden
             } else if self.online_epoch().is_none() {
                 RefreshHold::NotOnline
+            } else if self.preview_gate(alias) == PreviewGate::Withdrawn {
+                // Online, the picture is of an account `Status` lists: its device is a person's.
+                RefreshHold::Held
             } else {
                 // Online, the picture is of an account `Status` lists: its gate is shut.
                 RefreshHold::GateShut
@@ -1625,7 +1682,12 @@ impl Model {
         let withdrawn = gate == PreviewGate::Withdrawn;
         let close = self.stops.row(instance, epoch, &self.switches);
         let stop = self.stops.said(alias);
-        let rows = self.rescue.view(instance, withdrawn, hold, watch, file_value, close, stop);
+        // "Take Over" is held back by the device's work out from here, not by its gate: the gate
+        // is the hold's own.
+        let busy = self.device_work(alias).is_some();
+        let take_over = self.holds.row(instance, self.global_pause.is_some(), epoch, busy);
+        let rows =
+            self.rescue.view(instance, withdrawn, hold, watch, file_value, close, stop, take_over);
         Some(RescueView::Online(rows))
     }
 
@@ -1675,17 +1737,19 @@ impl Model {
     }
 
     /// Why every device button of `instance`, which the newest `Status` lists, is off now, under
-    /// its gate `gate`: the first of these that holds. Its gate is shut. Its device's work is out
-    /// from here (`device_busy`): an operation, a refresh of its picture, a switch of its
-    /// backends. Its last operation cools down. It runs a task. Its recovery ladder climbs or
+    /// its gate `gate`: the first of these that holds. Its gate is shut: its device is being
+    /// handed over, or is a person's (UI-3d), when no device button is drawn at all. Its device's
+    /// work is out from here (`device_busy`): an operation, a refresh of its picture, a switch of
+    /// its backends. Its last operation cools down. It runs a task. Its recovery ladder climbs or
     /// holds. It does something else the Runtime names: claiming the device now would only wait
     /// in its queue and be refused. A pause holds nothing back, whoever's, nor a quiet time, nor
     /// a change of settings out.
     fn rescue_hold(&self, instance: &InstanceLive, gate: PreviewGate) -> Option<RescueHold> {
-        if matches!(gate, PreviewGate::Freeze { .. }) {
+        if gate == PreviewGate::Freeze {
             return Some(RescueHold::GateShut);
         }
         match self.device_busy(&instance.alias) {
+            Some(DeviceBusy::Hold) => return Some(RescueHold::GateShut),
             Some(DeviceBusy::Rescue(op)) => return Some(RescueHold::Out(op)),
             Some(DeviceBusy::Refresh) => return Some(RescueHold::Refreshing),
             Some(DeviceBusy::BackendSwitch) => return Some(RescueHold::Switching),
@@ -1711,13 +1775,18 @@ impl Model {
 
     /// The confirmation asked goes for good once its button cannot be pressed, as a `Status` read
     /// leaves it, the window minimized included: one that came back later would ask about what
-    /// may no longer hold.
+    /// may no longer hold. A hand-back's goes too once the hold it asked about is no longer the
+    /// account's hold, another or none (UI-3d).
     fn rescue_reviewed(&mut self) {
-        let Some((alias, op)) = self.rescue.asked() else {
+        let Some((alias, asked)) = self.rescue.asked() else {
             return;
         };
-        let offered = self.rescue_view(alias).is_some_and(|view| view.offers(op));
-        if !offered {
+        let offered = self.rescue_view(alias).is_some_and(|view| view.offers_asked(asked));
+        let same = match asked {
+            Asked::HandBack { target } => self.hold_target(alias).as_ref() == Some(target),
+            Asked::Device(_) | Asked::TakeOver => true,
+        };
+        if !offered || !same {
             self.rescue.unconfirm();
         }
     }
@@ -1896,8 +1965,9 @@ impl Model {
     }
 
     fn online(&mut self, snapshot: LiveSnapshot, fault_cleared: bool) -> LiveLanded {
-        let LiveSnapshot { pid, epoch, global_pause, instances, ledger_head } = snapshot;
+        let LiveSnapshot { pid, epoch, global_pause, instances, ledger_head, status } = snapshot;
         self.ledger_head = ledger_head;
+        self.status = Some(status);
         let epoch_changed = self.epoch.as_deref() != Some(epoch.as_str());
         if epoch_changed {
             // Started again, not for the first time this run: what the watchdog said is of
@@ -2044,6 +2114,7 @@ impl Model {
         self.instances.clear();
         self.global_pause = None;
         self.ledger_head = None;
+        self.status = None;
         self.explain.error = None;
         self.config.error = None;
         self.actions.status_lost();

@@ -251,15 +251,22 @@ pub fn package_of<'a>(packs: Option<&'a PackTable>, task: &str) -> Option<&'a st
     packs?.package_of(task)
 }
 
-/// What of a card's lines goes above the rows: its main line when that is the account's pause
-/// or fence, else a pause it says in its small print (the global one, over a task finishing).
+/// What of a card's lines goes above the rows: its main line when that is the account's pause,
+/// fence or player hold (UI-3d), else a pause it says in its small print (the global one, over a
+/// task finishing).
 pub fn held(main: Line, notes: Vec<Line>) -> Option<Line> {
     match main {
         Line::Draining { .. }
         | Line::HandingBack { .. }
         | Line::Paused { .. }
         | Line::AwaitingPerson { .. }
-        | Line::Recovering => Some(main),
+        | Line::Recovering
+        | Line::HoldRequesting
+        | Line::HoldDraining { .. }
+        | Line::HoldHandingBack { .. }
+        | Line::HoldHeld { .. }
+        | Line::HoldReleasing
+        | Line::HoldEndedPaused => Some(main),
         _ => notes.into_iter().find(|line| matches!(line, Line::Paused { .. })),
     }
 }

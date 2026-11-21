@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The one file this program reads and writes itself: its preferences and,
-//! outside an installation folder, the three paths the launcher needs. Never
-//! inside a state root, and never anything else — a state root is the read
-//! face's to touch, not this one's.
+//! This program's one settings file, `acui.toml`: its preferences and, outside an
+//! installation folder, the three paths the launcher needs. Besides it, the console
+//! writes only its own logs, the actingd start logs the launcher creates among them,
+//! and one record file, of the take-over and hand-back requests it sent
+//! (`hold_file`), none inside a state root either — a state root is the read face's
+//! to touch, not this one's.
 //!
 //! Which file (`load`, once at the start): outside any single-location root, the
 //! per-user `<config_dir>/ActingCommand/acui.toml`, as ever. In one

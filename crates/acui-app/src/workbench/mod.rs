@@ -34,7 +34,10 @@
 //!    of a scheduled run (`stop`, UI-3e2b) writes that switch's off before it stops the run, and
 //!    is one of them too: it and a switch of the same account never both have a write out. So is
 //!    a person's write of one goal of an account on its Goals tab (`goals`, Workflow #455 G2),
-//!    one of them out for an account at a time, which holds nothing else back either.
+//!    one of them out for an account at a time, which holds nothing else back either. So is a
+//!    person's take-over of an account's device or its hand-back (`hold`, UI-3d), its answer
+//!    counting one: while it is under way, or the device is a person's, its gate is not open, and
+//!    no operation, refresh or switch of that device goes out (`Model::device_busy`).
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
@@ -81,6 +84,7 @@
 pub mod actions;
 pub mod card;
 pub mod goals;
+pub mod hold;
 pub mod model;
 pub mod paint;
 pub mod picture;
@@ -619,6 +623,9 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     // A stop of a run is judged by a read online only, of its own epoch or another: its follow-up,
     // or a restart's letting it go (`stop`).
     stop::status_read(ui);
+    // So are the take-overs and hand-backs: a picture frozen until this read is let go, and every
+    // request the record keeps is settled by it (`hold`). Before the picture is told what to follow.
+    hold::status_read(ui);
     // An unconfirmed switch shown over: only a snapshot begun after this says what came of it.
     if landed.switch_over {
         wrote(ui);

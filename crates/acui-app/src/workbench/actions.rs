@@ -183,7 +183,7 @@ const PAUSE_MOVED: [&str; 3] = [
 /// The client's own: a Runtime that does not know the condition lifted nothing.
 const RUNTIME_OPERATION_UNSUPPORTED: &str = "runtime_operation_unsupported";
 
-/// What a write applies to. UI-3d and 3e1 add an instance.
+/// What a write applies to. 3e1 adds an instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Scope {
     Global,
@@ -1819,6 +1819,10 @@ pub enum GroupState {
     Unconfirmed { over: bool },
     /// The settings had moved on when it was sent: a snapshot is awaited.
     Rereading,
+    /// Its device is being handed over to a person, or is a person's (UI-3d): no switch
+    /// meanwhile, which the Runtime refuses then too (Runtime f6e2cd26
+    /// `crates/runtime-host/src/host/backend_switch.rs` 348-359).
+    Held,
     /// An operation of the device is out from the main page (UI-3e1-a): no switch meanwhile.
     Rescuing,
     /// A refresh of its account's picture is out: no switch meanwhile.
@@ -2027,9 +2031,9 @@ fn use_file_value(
 }
 
 /// Where the group of `backends` stands: its own switch out or awaited first, then what keeps
-/// it shown only, then the device's operation or its picture's refresh out from here
-/// (`device`), then another change of settings out. Of a switch, `device` names only this
-/// group's own, which the first already said.
+/// it shown only, then its device handed over to a person or a person's, the device's operation
+/// or its picture's refresh out from here (`device`), then another change of settings out. Of a
+/// switch, `device` names only this group's own, which the first already said.
 fn group_state(
     backends: &InstanceBackends,
     actions: &Actions,
@@ -2052,6 +2056,8 @@ fn group_state(
         GroupState::KindUnread
     } else if backends.target().is_none() {
         GroupState::RowUnread
+    } else if device == Some(DeviceBusy::Hold) {
+        GroupState::Held
     } else if let Some(DeviceBusy::Rescue(_)) = device {
         GroupState::Rescuing
     } else if device == Some(DeviceBusy::Refresh) {
