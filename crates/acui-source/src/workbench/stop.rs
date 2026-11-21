@@ -249,8 +249,8 @@ fn reset_cause(outcome: &Outcome) -> Option<String> {
 }
 
 /// Every code of `outcome` and of the outcomes it links, depth first, each link with its relation:
-/// for the log only.
-fn chain(outcome: &Outcome) -> String {
+/// for the log only. A player hold request's failure is told the same way (`super::hold`).
+pub(super) fn chain(outcome: &Outcome) -> String {
     let mut line = outcome.code().as_str().to_owned();
     for link in outcome.causes() {
         line.push_str(&format!(" [{} {}]", link.relation().as_str(), chain(link.outcome())));

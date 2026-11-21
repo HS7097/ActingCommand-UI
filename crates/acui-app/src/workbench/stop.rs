@@ -22,7 +22,10 @@
 //! a fresh person's connection, and an answer that counts is a write for the reads
 //! (`super::wrote`), as an operation's is: it changes what they show of the account. It is no work
 //! of the device's (`Model::device_busy`): no operation, refresh or switch of backends holds it
-//! back, nor does it hold them; nor does a pause, a quiet time or a fence. A close holds the
+//! back, nor does it hold them; nor does a pause, a quiet time or a fence; nor does a take-over
+//! under way (UI-3d), whose frozen gate holds the device's buttons back and not this one: the
+//! Runtime takes a stop of a run while a player hold requests or drains (Runtime f6e2cd26
+//! `contracts/player-hold.md` 526), and its drain is what such a stop ends early. A close holds the
 //! account's slot of the daily task list's switches too while it is out (`Switches::close_begin`),
 //! so that it and a switch never both have a write of the account out: the button stays off while a
 //! switch is out (`Switches::writing`), and every switch while a close is, and after one that may
@@ -33,8 +36,13 @@
 //! whose answer is not known: when a `Status` read online of the same owner epoch, begun after that
 //! answer landed, lists the account without that run, so that the reset's result is read (the
 //! Runtime answers it from its memory of the run). A follow-up only stops: it writes no close row
-//! again. No timer sends anything, nor is a refusal or one not sent sent again, nor a close that did
-//! not take. A `Status` of another owner epoch, or one that no longer lists the account, says what
+//! again. While the account's player hold is past its drain (UI-3d: a hold handing the device over,
+//! held or releasing, or a hold operation running in any other phase), the follow-up waits on and
+//! nothing is sent, since the Runtime then refuses a stop (`player_hold_active`; Runtime f6e2cd26
+//! `contracts/player-hold.md` 518-526): a read of the same owner epoch once the hold is over sends
+//! it as ever, and one of another epoch says what came of it is not known. No timer sends
+//! anything, nor is a refusal or one not sent sent again, nor a close that did not take. A
+//! `Status` of another owner epoch, or one that no longer lists the account, says what
 //! came of it is not known and sends nothing; a read that does not come online says nothing, and
 //! the stop waits on, for as long as the run goes on, which its deadline ends. The reading thread
 //! gone ends the wait, not known either; a request out then lands as it would, and what either
@@ -72,6 +80,7 @@ use std::time::Instant;
 use acui_source::workbench::pack::{
     close_then_stop, CloseAnswer, EditAnswer, PackOutcome, PackRefusal,
 };
+use acui_source::workbench::hold::{HoldPhase, RecordState};
 use acui_source::workbench::stop::{
     stop_run, stop_time, Origin, Refusal, Reset, StopOutcome, StopTime,
 };
@@ -461,7 +470,8 @@ impl Stops {
     ///   run went with it; nor when the account is not listed;
     /// - one awaited whose account is listed without its run, idle or doing another, has its
     ///   follow-up go, under a ticket of `rescue`'s count, once, a stop alone even after a close:
-    ///   nothing sends it again;
+    ///   nothing sends it again; but while the account's player hold is past its drain
+    ///   (`hold_waits`), it waits on;
     /// - the line of one that landed goes once the account runs another run.
     ///
     /// Tickets come from `rescue`'s count; what is to be done outside the model is the `Review`'s.
@@ -477,11 +487,11 @@ impl Stops {
         }
         let mut review = Review::default();
         for (alias, slot) in &mut self.slots {
+            let instance = instances.iter().find(|instance| instance.alias == *alias);
             // `None`: not listed; else the run it names now, if any.
-            let listed = instances
-                .iter()
-                .find(|instance| instance.alias == *alias)
+            let listed = instance
                 .map(|instance| instance.activity.as_ref().and_then(|activity| activity.run));
+            let held = instance.is_some_and(hold_waits);
             let was_idle = matches!(slot.stage, Stage::Idle);
             slot.stage = match mem::take(&mut slot.stage) {
                 Stage::Idle => {
@@ -521,6 +531,10 @@ impl Stops {
                     Stage::Idle
                 }
                 Stage::Waiting { request, unconfirmed } if listed == Some(Some(request.run)) => {
+                    Stage::Waiting { request, unconfirmed }
+                }
+                // The Runtime would refuse it while the hold is past its drain: nothing is sent.
+                Stage::Waiting { request, unconfirmed } if held => {
                     Stage::Waiting { request, unconfirmed }
                 }
                 Stage::Waiting { request, .. } => {
@@ -571,6 +585,23 @@ impl Stops {
         }
         lines
     }
+}
+
+/// Whether `instance`'s player hold keeps a stop's follow-up back (UI-3d): its hold, or with no
+/// hold a hold operation still running, is past the two phases in which the Runtime takes a stop
+/// of a run (Runtime f6e2cd26 `contracts/player-hold.md` 526, requesting and draining): handing
+/// the device over, held or releasing. With neither, nothing holds it back.
+fn hold_waits(instance: &InstanceLive) -> bool {
+    let Some(fact) = instance.hold.as_ref() else {
+        return false;
+    };
+    let running = fact.record.as_ref().filter(|record| record.state == RecordState::Running);
+    let phase = match (&fact.hold, running) {
+        (Some(hold), _) => Some(hold.phase),
+        (None, Some(record)) => record.phase,
+        (None, None) => return false,
+    };
+    !matches!(phase, Some(HoldPhase::Requesting | HoldPhase::Draining))
 }
 
 /// What one request came to, as its thread hands it back.

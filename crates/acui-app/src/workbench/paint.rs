@@ -34,6 +34,12 @@ use acui_source::workbench::goals::{
     Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid, WriteProblem,
     ORDER_SEARCH_FROM, VALUE_BYTES,
 };
+use acui_source::workbench::hold::{
+    HoldChannel, HoldKind, HoldNext, HoldOutcome, HoldRefusal, HoldSettled, HoldSource, Restored,
+    StartupDone, PLAYER_HOLD_ACQUIRING, PLAYER_HOLD_ACTIVE, PLAYER_HOLD_ALREADY_HELD,
+    PLAYER_HOLD_DRAIN_INCOMPLETE, PLAYER_HOLD_HANDBACK_BUSY, PLAYER_HOLD_NOT_DURABLE,
+    PLAYER_HOLD_PERSIST_FAILED, PLAYER_HOLD_RELEASING,
+};
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, QuietShown};
@@ -54,13 +60,16 @@ use super::actions::{
 };
 use super::card::{reason_logged, Band, CardView, Down, Line, ReasonClass};
 use super::goals::{GoalSaid, GoalsView, WritesNow};
+use super::hold::{HeldPanel, HoldRow, HoldSaid, HoldWhy};
 use super::model::{Fault, Page, RightTab};
 use super::picture::{
     DimWhy, Doing, EmptyWhy, Offline, Origin, OverlayView, PictureView, RefreshHold, RefreshWhyNot,
     Refreshed, Unread,
 };
 use super::preview;
-use super::rescue::{Button, ButtonWhy, RescueHold, RescueRows, RescueView, Rescued, Watch};
+use super::rescue::{
+    Asked, Button, ButtonWhy, RescueHold, RescueRows, RescueView, Rescued, Watch,
+};
 use super::settings::{
     self, AutostartView, BackendGroup, CheckEntry, ReportedAccount, ReportedLine, SelfCheckView,
     SettingLine, SettingsView, StartView,
@@ -185,7 +194,7 @@ pub fn cards(ui: &Ui) {
         return;
     };
     let labels = ui.labels();
-    let views = ui.model.borrow().cards(Instant::now());
+    let views = ui.model.borrow().cards(Instant::now(), now_ms());
     let cards = views.iter().map(|view| account_card(ui, labels, view)).collect();
     sync(window.get_account_cards(), cards, |rows| window.set_account_cards(rows));
 }
@@ -219,7 +228,7 @@ pub fn picture(ui: &Ui) {
     }
     let (empty, empty_failed) = match &view {
         PictureView::NoAccount => (labels.picture_no_account.to_owned(), false),
-        // UI-3d says why it was taken down.
+        // Why it was taken down is the rescue bar's to say, in its place (`held_note`, UI-3d).
         PictureView::Withdrawn | PictureView::Frame { .. } => (String::new(), false),
         PictureView::Empty { why } => empty_text(labels, why),
     };
@@ -455,6 +464,12 @@ fn capture_words(ui: &Ui, labels: &Labels, code: Option<&str>) -> String {
     let Some(code) = code else {
         return labels.picture_cause_unknown.to_owned();
     };
+    // A refresh already on its way as another channel's take-over began (UI-3d): the Runtime
+    // refuses the capture `player_hold_active` from the hold's `requesting` on (Runtime f6e2cd26
+    // `contracts/player-hold.md` 518-519, 525).
+    if code == PLAYER_HOLD_ACTIVE {
+        return labels.rescue_player_held.to_owned();
+    }
     match explain(code, labels.tongue.outcome_tongue()) {
         Ok(Some(words)) => words.short.to_owned(),
         Ok(None) => {
@@ -512,6 +527,7 @@ fn refresh_why_not(labels: &Labels, why: RefreshWhyNot) -> String {
         RefreshHold::Hidden => String::new(),
         RefreshHold::NotOnline => labels.refresh_not_online.to_owned(),
         RefreshHold::GateShut => labels.refresh_gate_shut.to_owned(),
+        RefreshHold::Held => labels.refresh_player_held.to_owned(),
         RefreshHold::Running => labels.refresh_running.to_owned(),
         RefreshHold::Busy(doing) => fill(labels.refresh_busy, &[doing_text(labels, doing)]),
         RefreshHold::EmulatorOff { at_ms } => {
@@ -573,6 +589,12 @@ fn refreshed_text(ui: &Ui, labels: &Labels, said: &Refreshed) -> (String, bool) 
 /// own. The refresh never shows a code: with words for neither it says so, and the log hears
 /// of them once (the refusal itself is in the log already, codes and all).
 fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&str>) -> String {
+    // A refresh on its way as another channel's take-over began (UI-3d), refused
+    // `player_hold_active` as the capture's is (`capture_words`; Runtime f6e2cd26
+    // `contracts/player-hold.md` 518-519, 525).
+    if [host, class].into_iter().flatten().any(|code| code == PLAYER_HOLD_ACTIVE) {
+        return labels.rescue_player_held.to_owned();
+    }
     for code in [host, class].into_iter().flatten() {
         match explain(code, labels.tongue.outcome_tongue()) {
             Ok(Some(words)) => return words.short.to_owned(),
@@ -608,7 +630,7 @@ pub fn rescue(ui: &Ui) {
         return;
     };
     let labels = ui.labels();
-    let (alias, view, rules) = {
+    let (alias, view, rules, hold_said, starts) = {
         let model = ui.model.borrow();
         let alias = model.picture_account().map(str::to_owned);
         let view = alias.as_deref().and_then(|alias| model.rescue_view(alias));
@@ -616,12 +638,19 @@ pub fn rescue(ui: &Ui) {
             .as_deref()
             .filter(|_| model.rules_open())
             .and_then(|alias| model.rules_view(alias));
-        (alias, view, rules)
+        let holds = model.holds();
+        let hold_said = alias.as_deref().and_then(|alias| holds.said(alias).cloned());
+        let starts = alias.as_deref().is_none_or(|alias| holds.starts(alias));
+        (alias, view, rules, hold_said, starts)
     };
+    // The box under "Resume Auto-Play" is the account's whose picture shows (UI-3d).
+    if window.get_take_over_startup() != starts {
+        window.set_take_over_startup(starts);
+    }
     let mut bar = match (alias.as_deref(), view) {
         (Some(alias), Some(RescueView::Online(rows))) => {
             rescue_told(ui, alias, &rows);
-            rescue_bar(ui, labels, alias, &rows)
+            rescue_bar(ui, labels, alias, &rows, hold_said.as_ref())
         }
         (_, Some(RescueView::Offline { stop })) => {
             let (close_line, close_failed) = match &stop {
@@ -649,8 +678,19 @@ pub fn rescue(ui: &Ui) {
 
 /// The bar's words for the rows of `alias`'s view. Why every device button is off stands only
 /// over device buttons: a fixture's account has none, only "stop this run" or "close this task"
-/// with its own words, which that reason does not hold back.
-fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> RescueBar {
+/// with its own words, which that reason does not hold back. On the first row, before "Auto
+/// Rules" at its end, "Take Over" or "Resume Auto-Play" (UI-3d), the latter's box on a row of its
+/// own under it, under the rows in grey what it does or why it cannot be pressed,
+/// and further down what the account's last take-over or hand-back came to (`hold_said`), red
+/// when it failed; while the record file fails, that, in red, in its place. While the picture is
+/// withdrawn, the hold's words for the picture's place.
+fn rescue_bar(
+    ui: &Ui,
+    labels: &Labels,
+    alias: &str,
+    rows: &RescueRows,
+    hold_said: Option<&HoldSaid>,
+) -> RescueBar {
     let offered = |button: Option<Button>| button.is_some_and(|button| button.offered);
     let devices = rows.check.is_some() || rows.emulator.is_some() || rows.game.is_some();
     let reason = match rows.hold {
@@ -670,6 +710,12 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
     let (close_line, close_failed) = match &rows.stop {
         Some(said) => stop_text(ui, labels, said),
         None => (String::new(), false),
+    };
+    let take_over = rows.take_over.as_ref();
+    let (take_over_line, take_over_failed) = match (take_over.map(|row| &row.why), hold_said) {
+        (Some(HoldWhy::FileFailed(error)), _) => (fill(labels.hold_file_failed, &[error]), true),
+        (_, Some(said)) => hold_said_text(ui, labels, said),
+        (_, None) => (String::new(), false),
     };
     RescueBar {
         shown: true,
@@ -705,7 +751,287 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
         // bar's caller's to say.
         rules_shown: true,
         rules_open: false,
+        take_over_shown: take_over.is_some(),
+        take_over_back: take_over.is_some_and(|row| row.back),
+        take_over_offered: take_over.is_some_and(|row| row.offered),
+        take_over_note: take_over.map_or_else(String::new, |row| take_over_note(labels, row)).into(),
+        take_over_startup_shown: take_over.is_some_and(|row| row.startup_shown),
+        take_over_line: take_over_line.into(),
+        take_over_failed,
+        held_note: held_note(labels, rows.held_panel.as_ref()).into(),
     }
+}
+
+/// Who began a hold, by its channel, and the channel a Lab request came through (UI-3d).
+fn hold_by_text(labels: &Labels, source: HoldSource) -> &'static str {
+    match (source.channel, source.via) {
+        (HoldChannel::Lab, Some(HoldChannel::Mcp)) => labels.hold_by_lab_agent,
+        (HoldChannel::Lab, Some(HoldChannel::Ui)) => labels.hold_by_lab_console,
+        (HoldChannel::Lab, _) => labels.hold_by_lab,
+        (HoldChannel::Ui, _) => labels.hold_by_console,
+        (HoldChannel::Cli, _) => labels.hold_by_cli,
+        (HoldChannel::Mcp, _) => labels.hold_by_agent,
+    }
+}
+
+/// Under "Take Over" or "Resume Auto-Play", in grey: what it does, or why it cannot be pressed;
+/// nothing while this console's own request is out, which the line further down says. The record
+/// file failing is said in red on that line instead.
+fn take_over_note(labels: &Labels, row: &HoldRow) -> String {
+    match &row.why {
+        HoldWhy::TakeOver => labels.hold_take_over_note.to_owned(),
+        HoldWhy::HandBack { source, paused, .. } => {
+            let template = if *paused {
+                labels.hold_hand_back_note_paused
+            } else {
+                labels.hold_hand_back_note
+            };
+            fill(template, &[hold_by_text(labels, *source)])
+        }
+        HoldWhy::Asking | HoldWhy::FileFailed(_) => String::new(),
+        HoldWhy::Acquiring => labels.hold_acquiring_note.to_owned(),
+        HoldWhy::Releasing => labels.hold_releasing_note.to_owned(),
+        HoldWhy::CoolingDown => labels.rescue_cooling.to_owned(),
+        HoldWhy::DeviceBusy => labels.hold_device_busy.to_owned(),
+        HoldWhy::Unsupported => labels.hold_unsupported.to_owned(),
+    }
+}
+
+/// The picture's place while the device is a person's (UI-3d): that the automation and the
+/// picture are disconnected and how to hand it back; who began the hold and since when; that a
+/// task was stopped early, and that a start restored the hold. Nothing while the picture is not
+/// withdrawn.
+fn held_note(labels: &Labels, panel: Option<&HeldPanel>) -> String {
+    let Some(panel) = panel else {
+        return String::new();
+    };
+    let since = format_minute(panel.since_ms);
+    let mut lines = vec![
+        labels.picture_held.to_owned(),
+        fill(labels.picture_held_since, &[hold_by_text(labels, panel.source), &since]),
+    ];
+    if panel.cancelled.is_some() {
+        lines.push(labels.card_hold_cancelled.to_owned());
+    }
+    match panel.restored {
+        Some(Restored::Acquiring) => lines.push(labels.card_hold_restored_acquiring.to_owned()),
+        Some(Restored::Held) => lines.push(labels.card_hold_restored_held.to_owned()),
+        None => {}
+    }
+    lines.join("\n")
+}
+
+/// What the account's last take-over or hand-back came to, in words, and whether that is a
+/// failure (a refusal, a failure, one not sent, one not confirmed): never a code or a request id,
+/// which the log has. A time first is when it landed, or when the Runtime ended it.
+fn hold_said_text(ui: &Ui, labels: &Labels, said: &HoldSaid) -> (String, bool) {
+    match said {
+        HoldSaid::Sending { kind: HoldKind::Acquire, .. } => {
+            (labels.hold_sending_acquire.to_owned(), false)
+        }
+        HoldSaid::Sending { kind: HoldKind::Release, .. } => {
+            (labels.hold_sending_release.to_owned(), false)
+        }
+        HoldSaid::Landed { at_ms, kind, outcome, .. } => {
+            hold_landed_text(ui, labels, *kind, *at_ms, outcome)
+        }
+        HoldSaid::Stored { at_ms, settled, .. } => hold_settled_text(ui, labels, *at_ms, settled),
+        HoldSaid::NoThread { at_ms, error, .. } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            let not_sent = fill(labels.rescue_no_thread, &[why.as_str()]);
+            (fill(labels.stop_at, &[&not_sent, &format_second(*at_ms)]), true)
+        }
+        // Whether it was sent is not known: the attempt it stored is settled from the next
+        // `Status`.
+        HoldSaid::Panicked { at_ms, about: Some(_) } => {
+            (fill(labels.stop_at, &[labels.hold_checking, &format_second(*at_ms)]), false)
+        }
+        // It panicked before its attempt was stored, so nothing was sent.
+        HoldSaid::Panicked { at_ms, about: None } => {
+            (fill(labels.stop_at, &[labels.hold_panicked_not_sent, &format_second(*at_ms)]), true)
+        }
+    }
+}
+
+/// What a request's answer came to, of `kind`, landing at `at_ms`.
+fn hold_landed_text(
+    ui: &Ui,
+    labels: &Labels,
+    kind: HoldKind,
+    at_ms: u64,
+    outcome: &HoldOutcome,
+) -> (String, bool) {
+    match outcome {
+        HoldOutcome::Acquired { cancelled } => (acquired_text(labels, at_ms, *cancelled), false),
+        HoldOutcome::Released { next, selfcheck_failure, startup } => {
+            let failure = selfcheck_failure.as_deref();
+            (released_text(ui, labels, at_ms, *next, failure, *startup), failure.is_some())
+        }
+        HoldOutcome::NotImplemented { .. } => (labels.hold_unsupported_said.to_owned(), true),
+        HoldOutcome::Refused { why, code, denied, .. } => {
+            let text = match (kind, why) {
+                (_, HoldRefusal::AlreadyBusy) => labels.hold_already.to_owned(),
+                (HoldKind::Release, HoldRefusal::Moved) => labels.hold_moved.to_owned(),
+                (HoldKind::Release, HoldRefusal::NotHeld) => labels.hold_not_held.to_owned(),
+                (HoldKind::Release, HoldRefusal::DeviceBusy) => labels.hold_busy_said.to_owned(),
+                // Taken, and failed on the way: the hold is as the card says.
+                _ if !*denied => hold_failed_text(ui, labels, kind, Some(code.as_str())),
+                _ => {
+                    let words = hold_words(ui, labels, code);
+                    refusal_sentence(labels, hold_op_text(labels, kind), &words, *denied)
+                }
+            };
+            (text, true)
+        }
+        HoldOutcome::Interrupted { .. } => (labels.hold_interrupted.to_owned(), false),
+        HoldOutcome::Settled { said, .. } => hold_settled_text(ui, labels, at_ms, said),
+        HoldOutcome::NotSent { failure, .. } => {
+            let not_this_root = crate::identity::not_this_root(failure);
+            (not_sent(labels, labels.rescue_not_sent, not_this_root), true)
+        }
+        HoldOutcome::NotStored { error } => (fill(labels.hold_not_stored, &[error]), true),
+        HoldOutcome::Unconfirmed { .. } => (labels.hold_unconfirmed.to_owned(), true),
+    }
+}
+
+/// What a settlement came to, `at_ms` its time when it names none of its own.
+fn hold_settled_text(
+    ui: &Ui,
+    labels: &Labels,
+    at_ms: u64,
+    settled: &HoldSettled,
+) -> (String, bool) {
+    match settled {
+        HoldSettled::Done { kind: HoldKind::Acquire, restored, ended_by, record } => {
+            let text = match ended_by {
+                Some(source) => fill(labels.hold_acquired_ended, &[hold_by_text(labels, *source)]),
+                None if *restored => labels.hold_acquired_restored.to_owned(),
+                None => {
+                    let at = record.as_ref().and_then(|record| record.ended_ms).unwrap_or(at_ms);
+                    let cancelled = record.as_ref().and_then(|record| record.cancelled);
+                    acquired_text(labels, at, cancelled.unwrap_or(0))
+                }
+            };
+            (text, false)
+        }
+        HoldSettled::Done { kind: HoldKind::Release, record, .. } => {
+            match record.as_ref().and_then(|record| record.next.map(|next| (record, next))) {
+                Some((record, next)) => {
+                    let at = record.ended_ms.unwrap_or(at_ms);
+                    let failure = record.selfcheck_failure.as_deref();
+                    let startup = record.startup.unwrap_or(StartupDone::Nothing);
+                    (released_text(ui, labels, at, next, failure, startup), failure.is_some())
+                }
+                None => (labels.hold_released_plain.to_owned(), false),
+            }
+        }
+        HoldSettled::Failed { kind, code } => {
+            (hold_failed_text(ui, labels, *kind, code.as_deref()), true)
+        }
+        HoldSettled::NotPerformed { kind: HoldKind::Acquire } => {
+            (labels.hold_acquire_not_performed.to_owned(), false)
+        }
+        HoldSettled::NotPerformed { kind: HoldKind::Release } => {
+            (labels.hold_release_not_performed.to_owned(), false)
+        }
+        HoldSettled::EndedByOther { source } => {
+            (fill(labels.hold_ended_by_other, &[hold_by_text(labels, *source)]), false)
+        }
+        HoldSettled::Ended => (labels.hold_ended.to_owned(), false),
+        HoldSettled::Unsupported => (labels.hold_unsupported_said.to_owned(), true),
+        HoldSettled::Checking => (labels.hold_checking.to_owned(), false),
+        HoldSettled::Unconfirmed => (labels.hold_unconfirmed.to_owned(), true),
+    }
+}
+
+/// A take-over done, at `at_ms`, and whether a task was stopped early.
+fn acquired_text(labels: &Labels, at_ms: u64, cancelled: u32) -> String {
+    let template = if cancelled > 0 { labels.hold_acquired_cancelled } else { labels.hold_acquired };
+    fill(template, &[&format_second(at_ms)])
+}
+
+/// A hand-back done at `at_ms`: connected, connected and the device not (why), or ended under a
+/// pause; then what became of the startup package.
+fn released_text(
+    ui: &Ui,
+    labels: &Labels,
+    at_ms: u64,
+    next: HoldNext,
+    failure: Option<&str>,
+    startup: StartupDone,
+) -> String {
+    let at = format_second(at_ms);
+    let head = match (next, failure) {
+        (HoldNext::Reconnected, Some(code)) => {
+            fill(labels.hold_released_device_failed, &[&at, &hold_words(ui, labels, code)])
+        }
+        (HoldNext::Reconnected, None) => fill(labels.hold_released, &[&at]),
+        (HoldNext::InstancePaused | HoldNext::SchedulingPaused, _) => {
+            fill(labels.hold_released_paused, &[&at])
+        }
+    };
+    // Held behind the pause, it does not run first: that alone is said.
+    let startup = match startup {
+        StartupDone::Scheduled { withheld: false } => labels.hold_startup_scheduled,
+        StartupDone::Scheduled { withheld: true } => labels.hold_startup_withheld,
+        StartupDone::Cancelled => labels.hold_startup_cancelled,
+        StartupDone::Nothing => return head,
+    };
+    fill(labels.hold_and, &[&head, startup])
+}
+
+/// A take-over or a hand-back taken by the Runtime and failed on the way, why in plain words.
+fn hold_failed_text(ui: &Ui, labels: &Labels, kind: HoldKind, code: Option<&str>) -> String {
+    let words = match code {
+        Some(code) => hold_words(ui, labels, code),
+        None => labels.rescue_cause_unknown.to_owned(),
+    };
+    let template = match kind {
+        HoldKind::Acquire => labels.hold_acquire_failed,
+        HoldKind::Release => labels.hold_release_failed,
+    };
+    fill(template, &[&words])
+}
+
+/// The two operations as a refusal names them.
+fn hold_op_text(labels: &Labels, kind: HoldKind) -> &'static str {
+    match kind {
+        HoldKind::Acquire => labels.hold_op_take_over,
+        HoldKind::Release => labels.hold_op_hand_back,
+    }
+}
+
+/// A take-over's or a hand-back's reason in plain words, never its code: the hold's own words, then
+/// the bar's (`rescue_own_words`), then the code table's; else that it is not known here, which
+/// the log hears of once.
+fn hold_words(ui: &Ui, labels: &Labels, code: &str) -> String {
+    if let Some(words) = hold_own_words(labels, code) {
+        return words.to_owned();
+    }
+    if let Some(words) = code_words(labels, &[code]) {
+        return words;
+    }
+    let line = format!("no words for a take-over or a hand-back refused or failed with code {code}");
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log(RESCUE_LOG, &line);
+    }
+    labels.rescue_cause_unknown.to_owned()
+}
+
+/// The hold's own words for a code of the Runtime's (Runtime f6e2cd26
+/// `crates/runtime-host/src/codes.rs` 1007-1022), when it has any.
+fn hold_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
+    let words = match code {
+        PLAYER_HOLD_DRAIN_INCOMPLETE => labels.hold_why_drain_incomplete,
+        PLAYER_HOLD_HANDBACK_BUSY => labels.hold_why_handback_busy,
+        PLAYER_HOLD_PERSIST_FAILED => labels.hold_why_persist_failed,
+        PLAYER_HOLD_NOT_DURABLE => labels.hold_why_not_durable,
+        PLAYER_HOLD_ALREADY_HELD | PLAYER_HOLD_ACQUIRING | PLAYER_HOLD_RELEASING => {
+            labels.hold_already
+        }
+        _ => return None,
+    };
+    Some(words)
 }
 
 /// Why every device button of the account is off. An operation out says so on the line of what
@@ -1035,10 +1361,35 @@ fn stop_words(ui: &Ui, labels: &Labels, codes: &[&str]) -> String {
 
 /// The question a press that closes the game asks, naming the account, and its confirming
 /// button's words. A stop says too when the emulator's watch starts the emulator again, by the
-/// setting's own name, or that it may when that does not read.
+/// setting's own name, or that it may when that does not read. A take-over's (UI-3d); a
+/// hand-back's of a hold this console did not set this run, with who began it, and under a pause
+/// that it reconnects nothing.
 fn confirm_text(labels: &Labels, alias: &str, rows: &RescueRows) -> (String, &'static str) {
-    match rows.confirming {
-        Some(DeviceOp::EmulatorStop) => {
+    let Some(asked) = &rows.confirming else {
+        return (String::new(), "");
+    };
+    let op = match asked {
+        Asked::Device(op) => *op,
+        Asked::TakeOver => {
+            return (labels.hold_confirm_take_over.to_owned(), labels.hold_confirm_take_over_label);
+        }
+        Asked::HandBack { .. } => {
+            let (source, paused) = match rows.take_over.as_ref().map(|row| &row.why) {
+                Some(HoldWhy::HandBack { source, paused, .. }) => {
+                    (Some(hold_by_text(labels, *source)), *paused)
+                }
+                _ => (None, false),
+            };
+            let template = if paused {
+                labels.hold_confirm_hand_back_paused
+            } else {
+                labels.hold_confirm_hand_back
+            };
+            return (fill(template, &[source.unwrap_or("")]), labels.hold_confirm_hand_back_label);
+        }
+    };
+    match op {
+        DeviceOp::EmulatorStop => {
             let setting = labels.setting_start_emulator;
             let text = match rows.watch {
                 Watch::Restarts => fill(labels.rescue_confirm_stop_watched, &[alias, setting]),
@@ -1047,15 +1398,15 @@ fn confirm_text(labels: &Labels, alias: &str, rows: &RescueRows) -> (String, &'s
             };
             (text, labels.rescue_confirm_stop_button)
         }
-        Some(DeviceOp::EmulatorRestart) => {
+        DeviceOp::EmulatorRestart => {
             (fill(labels.rescue_confirm_restart, &[alias]), labels.rescue_confirm_restart_button)
         }
-        Some(DeviceOp::GameRestart) => {
+        DeviceOp::GameRestart => {
             let text = fill(labels.rescue_confirm_game_restart, &[alias]);
             (text, labels.rescue_confirm_restart_button)
         }
         // These go out at the first press.
-        Some(DeviceOp::SelfCheck | DeviceOp::EmulatorStart | DeviceOp::GameLaunch) | None => {
+        DeviceOp::SelfCheck | DeviceOp::EmulatorStart | DeviceOp::GameLaunch => {
             (String::new(), "")
         }
     }
@@ -1291,6 +1642,11 @@ fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
         PAIRED_BACKEND_OPEN_FAILED => labels.backend_cause_nemu_open,
         INPUT_CHECK_FAILED => labels.backend_cause_touch_check,
         CAPTURE_CHECK_FAILED => labels.backend_cause_capture_check,
+        // A person holds the device (UI-3d): on every channel a device's operation is refused so
+        // from the hold's `requesting` on, and a stop of a run only once the hold is past its
+        // drain, as it is taken while the hold requests or drains (Runtime f6e2cd26
+        // `contracts/player-hold.md` 518-526).
+        PLAYER_HOLD_ACTIVE => labels.rescue_player_held,
         _ => return None,
     };
     Some(words)
@@ -2162,6 +2518,7 @@ fn backend_item(
         | GroupState::KindUnread
         | GroupState::RowUnread
         | GroupState::Rereading
+        | GroupState::Held
         | GroupState::Rescuing
         | GroupState::Refreshing
         | GroupState::OtherWrite => (
@@ -2183,6 +2540,9 @@ fn backend_item(
         GroupState::Unconfirmed { over: true } | GroupState::Rereading => {
             (labels.backend_rereading, false)
         }
+        // The Runtime refuses a switch while the device is held too (Runtime f6e2cd26
+        // `crates/runtime-host/src/host/backend_switch.rs` 348-359): the same words as that refusal.
+        GroupState::Held => (labels.backend_player_held, false),
         GroupState::Rescuing => (labels.backend_rescuing, false),
         GroupState::Refreshing => (labels.backend_refreshing, false),
         GroupState::OtherWrite => (labels.backend_other_write, false),
@@ -2985,7 +3345,9 @@ pub fn tasks(ui: &Ui) {
     }
     let view = match tab {
         RightTab::Picture | RightTab::Goals => None,
-        RightTab::Tasks => Some(ui.model.borrow().tasks_view(Instant::now(), labels.tongue)),
+        RightTab::Tasks => {
+            Some(ui.model.borrow().tasks_view(Instant::now(), now_ms(), labels.tongue))
+        }
     };
     let (data, rows, fold) = match &view {
         Some(view) => tasks_data(ui, labels, view),
@@ -4473,7 +4835,7 @@ fn task_said_text(ui: &Ui, labels: &Labels, said: &TaskSaid) -> (String, TaskTon
             };
             let tone = match class.band() {
                 Band::Attention => TaskTone::Warning,
-                Band::Ok | Band::Offline => TaskTone::Plain,
+                Band::Ok | Band::Held | Band::Offline => TaskTone::Plain,
             };
             (text, tone)
         }
@@ -4530,6 +4892,7 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
         tone: match view.band {
             Band::Ok => StatusTone::Ok,
             Band::Attention => StatusTone::Attention,
+            Band::Held => StatusTone::Held,
             Band::Offline => StatusTone::Offline,
         },
         main: line_text(ui, labels, &view.main).into(),
@@ -4771,6 +5134,51 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
         }
         Line::NotEvaluated => labels.card_not_evaluated.to_owned(),
         Line::NotPlanned => labels.card_not_planned.to_owned(),
+        // A player hold (UI-3d): its times as clock times, never counted down; "since" to the
+        // minute, every other to the second.
+        Line::HoldRequesting => labels.card_hold_requesting.to_owned(),
+        Line::HoldDraining { package: Some(package) } => {
+            fill(labels.card_hold_draining, &[&package_name(ui, labels, package)])
+        }
+        Line::HoldDraining { package: None } => labels.card_hold_draining_any.to_owned(),
+        Line::HoldHandingBack { close_started: Some(at) } => {
+            fill(labels.card_hold_closing, &[&format_second(*at)])
+        }
+        Line::HoldHandingBack { close_started: None } => labels.card_hold_handing_back.to_owned(),
+        Line::HoldHeld { since } => fill(labels.card_hold_held, &[&format_minute(*since)]),
+        Line::HoldReleasing => labels.card_hold_releasing.to_owned(),
+        Line::HoldEndedPaused => labels.card_hold_ended_paused.to_owned(),
+        Line::HoldSource { source } => {
+            fill(labels.hold_started_by, &[hold_by_text(labels, *source)])
+        }
+        Line::HoldHandBackBy { source } => {
+            fill(labels.hold_handed_back_by, &[hold_by_text(labels, *source)])
+        }
+        Line::HoldDeadlines { drain, grace } => {
+            fill(labels.card_hold_deadlines, &[&format_second(*drain), &format_second(*grace)])
+        }
+        Line::HoldHandOverBy { grace } => {
+            fill(labels.card_hold_hand_over_by, &[&format_second(*grace)])
+        }
+        Line::HoldHandOverLate { grace } => {
+            fill(labels.card_hold_hand_over_late, &[&format_second(*grace)])
+        }
+        Line::HoldCloseUnbounded => labels.card_hold_close_unbounded.to_owned(),
+        Line::HoldCancelled => labels.card_hold_cancelled.to_owned(),
+        Line::HoldRestored { acquiring: true } => labels.card_hold_restored_acquiring.to_owned(),
+        Line::HoldRestored { acquiring: false } => labels.card_hold_restored_held.to_owned(),
+        Line::HoldFailed { at, code } => {
+            let words = hold_words(ui, labels, code);
+            fill(labels.card_hold_failed, &[&format_second(*at), &words])
+        }
+        Line::HoldReleaseFailed { at, code } => {
+            let words = hold_words(ui, labels, code);
+            fill(labels.card_hold_release_failed, &[&format_second(*at), &words])
+        }
+        Line::HoldDeviceNotBack { at, code } => {
+            let words = hold_words(ui, labels, code);
+            fill(labels.card_hold_device_not_back, &[&format_second(*at), &words])
+        }
     }
 }
 

@@ -350,7 +350,12 @@ export struct BackendGroupItem {
 // run the scheduler dispatched (UI-3e2b), whether it can be pressed, and what a press does or why
 // not; under it, and without it too, what the account's last stop came to, red when it failed. The question a press that closes the game asks, and its confirming button's
 // words. What the last operation came to, red when it failed. "Auto rules" at the first row's end
-// (UI-3e1-b), and whether the account's rules panel is open in the picture's place.
+// (UI-3e1-b), and whether the account's rules panel is open in the picture's place. On the first
+// row before "auto rules" (UI-3d) "Take Over", or "Resume Auto-Play" in its place
+// (`take-over-back`), whether it can be pressed, and under the row, with the latter, whether the
+// box that has a hand-back run the startup package first shows; under the rows in grey what it
+// does or why not; what the last take-over or
+// hand-back came to, red when it failed; and, while the picture is withdrawn, what its place says.
 export struct RescueBar {
     shown: bool,
     reason: string,
@@ -383,6 +388,14 @@ export struct RescueBar {
     failed: bool,
     rules-shown: bool,
     rules-open: bool,
+    take-over-shown: bool,
+    take-over-back: bool,
+    take-over-offered: bool,
+    take-over-note: string,
+    take-over-startup-shown: bool,
+    take-over-line: string,
+    take-over-failed: bool,
+    held-note: string,
 }
 
 // Which of the rescue bar's buttons was pressed.
@@ -642,6 +655,11 @@ export global Strings {
     in property <string> rescue-game-restart;
     in property <string> rescue-stop-run;
     in property <string> rescue-close-task;
+    // On the rescue bar's first row, before "auto rules" at its end (UI-3d): "Take Over", "Resume
+    // Auto-Play" in its place while the device is a person's, and the box under the latter.
+    in property <string> rescue-take-over;
+    in property <string> rescue-hand-back;
+    in property <string> rescue-take-over-startup;
     // "Auto rules" at the end of the rescue bar's first row, and on the rules panel that opens:
     // "close". Of either editor of quiet times, the account's on that panel and every account's on
     // the settings page, whose titles and notes are their data's: the button that opens the form
@@ -3538,6 +3556,9 @@ export component WorkbenchWindow inherits Window {
     in property <[OverlayItem]> picture-points;
     in property <bool> picture-overlay-shown;
     in-out property <bool> picture-overlays-on: true;
+    // The box under "Resume Auto-Play" on the rescue bar (UI-3d), of the account whose picture
+    // shows: whether a hand-back runs the startup package first. The console sets it as it paints.
+    in-out property <bool> take-over-startup: true;
     in property <bool> picture-overlays-offered;
     in property <string> picture-hint;
     // Under all that, while an account's picture shows: its refresh's button, whether it can be
@@ -3685,6 +3706,9 @@ export component WorkbenchWindow inherits Window {
     callback rescue-confirmed();
     callback rescue-cancelled();
     callback rescue-close-pressed();
+    // Its "Take Over" or "Resume Auto-Play" (UI-3d), and the box under the latter, as it is now.
+    callback rescue-take-over-pressed();
+    callback take-over-startup-toggled(bool);
     // The rescue bar's "auto rules", and the panel's "close". Of either editor of quiet times,
     // the panel's of its account or the settings page's of every account (UI-3e1-c), which each
     // names first: the form opened, a day's box ticked or not (0 Monday through 6 Sunday), its two
@@ -4134,20 +4158,22 @@ export component WorkbenchWindow inherits Window {
                             // What the frame leaves the rest of the live view: the rows it
                             // has while a run is on, each as tall as the constants above make
                             // it, never as tall as it is now, which would move the frame again.
-                            // The tabs; the check, with "auto rules" at its end; the emulator,
-                            // the game and "stop this run"; one line of why the buttons are
-                            // off; under the frame what took it, the refresh and in grey what a
-                            // refresh costs, on two lines, as it wraps in English at the larger
-                            // text sizes; and the 6px between the column's twelve items, its
-                            // notes at the top and the room at its foot among them.
+                            // The tabs; the check, with "Take Over" and "auto rules" at its end;
+                            // under it what "Take Over" does (UI-3d), on two lines, as it wraps in
+                            // English; the emulator, the game and "stop this run"; one line of why
+                            // the buttons are off; under the frame what took it, the refresh and
+                            // in grey what a refresh costs, on two lines, as it wraps in English
+                            // at the larger text sizes; and the 6px between the column's thirteen
+                            // items, its notes at the top and the room at its foot among them.
                             property <length> frame-reserve: (Scale.row + 6px)
                                 + max(self.button-height, Scale.row + 6px)
+                                + 2 * self.body-line
                                 + 3 * self.button-height
                                 + self.body-line
                                 + self.grey-line
                                 + self.button-height
                                 + 2 * self.grey-line
-                                + 11 * 6px;
+                                + 12 * 6px;
                             // Height over width, 16:9 until a picture has shown. The last
                             // picture's stays while none shows, so the frame keeps its size.
                             property <float> frame-ratio: root.picture-width > 0 && root.picture-height > 0
@@ -4162,6 +4188,27 @@ export component WorkbenchWindow inherits Window {
                             property <length> frame-height: max(160px,
                                 min((self.width - 24px) * self.frame-ratio,
                                     self.steady-height - 20px - self.frame-reserve));
+                            // Where the keyboard focus waits once the rescue bar's question is
+                            // answered or cancelled (as G3's `line-park`): at the card's top left
+                            // corner and of no size, outside the scroll view, which Tab never
+                            // reaches and where Return and Space do nothing. The question's two
+                            // buttons put the focus here before they act, so that as they go the
+                            // focus does not go round the window to the top bar's buttons that act
+                            // on every instance; Tab from here goes on into the card.
+                            take-over-park := FocusScope {
+                                x: 0px;
+                                y: 0px;
+                                width: 0px;
+                                height: 0px;
+                                focus-on-click: false;
+                                focus-on-tab-navigation: false;
+                                key-pressed(event) => {
+                                    if (event.text == Key.Return || event.text == Key.Space) {
+                                        return EventResult.accept;
+                                    }
+                                    return EventResult.reject;
+                                }
+                            }
                             // As tall as the card, or as the least all of it needs, whichever
                             // is taller: a scroll view's own default.
                             ScrollView {
@@ -4230,8 +4277,12 @@ export component WorkbenchWindow inherits Window {
                                     // that closes the game asks, and what the last operation came
                                     // to, which wrap. At the first row's end, a fixture's account's
                                     // as well, "auto rules" (UI-3e1-b), marked while its panel is
-                                    // open; UI-3d's way to take over goes before it.
-                                    if root.picture-tab && root.rescue.shown && (root.rescue.check-shown || root.rescue.rules-shown): HorizontalLayout {
+                                    // open; before it, of an account that drives a device of its
+                                    // own, "Take Over" or, while the device is a person's, "Resume
+                                    // Auto-Play" (UI-3d), whose box is on a row of its own under
+                                    // this one. The row stays while the device is a person's and no
+                                    // device button is drawn.
+                                    if root.picture-tab && root.rescue.shown && (root.rescue.check-shown || root.rescue.rules-shown || root.rescue.take-over-shown): HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         if root.rescue.check-shown: SkinButton {
@@ -4250,6 +4301,13 @@ export component WorkbenchWindow inherits Window {
                                             min-width: 0px;
                                             horizontal-stretch: 1;
                                         }
+                                        if root.rescue.take-over-shown: SkinButton {
+                                            text: root.rescue.take-over-back ? Strings.rescue-hand-back : Strings.rescue-take-over;
+                                            enabled: root.rescue.take-over-offered;
+                                            clicked => {
+                                                root.rescue-take-over-pressed();
+                                            }
+                                        }
                                         if root.rescue.rules-shown: SkinSegment {
                                             label: Strings.rescue-rules;
                                             selected: root.rescue.rules-open;
@@ -4258,10 +4316,30 @@ export component WorkbenchWindow inherits Window {
                                             }
                                         }
                                     }
+                                    // Under the first row, while the device is a person's, the box
+                                    // that has a hand-back run the startup package first (UI-3d): on
+                                    // a row of its own, as its words cannot be cut short and would
+                                    // push "auto rules" past the column at the larger text sizes.
+                                    if root.picture-tab && root.rescue.shown && root.rescue.take-over-startup-shown: HorizontalLayout {
+                                        alignment: start;
+                                        vertical-stretch: 0;
+                                        SkinCheckBox {
+                                            text: Strings.rescue-take-over-startup;
+                                            checked <=> root.take-over-startup;
+                                            toggled => {
+                                                root.take-over-startup-toggled(self.checked);
+                                            }
+                                        }
+                                    }
                                     // Under the check's row, which cuts its note short: the other
                                     // way to lift the fence (#402 HS-5c), which wraps.
                                     if root.picture-tab && root.rescue.shown && root.rescue.check-hint != "": Notice {
                                         text: root.rescue.check-hint;
+                                    }
+                                    // Under the first row, in grey, which wraps: what "Take Over" or
+                                    // "Resume Auto-Play" does, or why it cannot be pressed (UI-3d).
+                                    if root.picture-tab && root.rescue.shown && root.rescue.take-over-note != "": Notice {
+                                        text: root.rescue.take-over-note;
                                     }
                                     if root.picture-tab && root.rescue.shown && root.rescue.emulator-shown: HorizontalLayout {
                                         spacing: 8px;
@@ -4370,6 +4448,12 @@ export component WorkbenchWindow inherits Window {
                                         text: root.rescue.close-line;
                                         failed: root.rescue.close-failed;
                                     }
+                                    // What the last take-over or hand-back came to (UI-3d), red when
+                                    // it failed.
+                                    if root.picture-tab && root.rescue.shown && root.rescue.take-over-line != "": Notice {
+                                        text: root.rescue.take-over-line;
+                                        failed: root.rescue.take-over-failed;
+                                    }
                                     if root.picture-tab && root.rescue.shown && root.rescue.reason != "": Notice {
                                         text: root.rescue.reason;
                                     }
@@ -4387,12 +4471,14 @@ export component WorkbenchWindow inherits Window {
                                         SkinButton {
                                             text: root.rescue.confirm-label;
                                             clicked => {
+                                                take-over-park.focus();
                                                 root.rescue-confirmed();
                                             }
                                         }
                                         SkinButton {
                                             text: Strings.cancel;
                                             clicked => {
+                                                take-over-park.focus();
                                                 root.rescue-cancelled();
                                             }
                                         }
@@ -4490,11 +4576,22 @@ export component WorkbenchWindow inherits Window {
                                         empty: root.picture-empty;
                                         empty-failed: root.picture-empty-failed;
                                     }
-                                    // Taken down: UI-3d says why here, and offers to resume. As
-                                    // large as the frame it stands for.
+                                    // Taken down, the device a person's (UI-3d): why, whose and since
+                                    // when, in words only. Its button is the rescue bar's alone,
+                                    // "Resume Auto-Play", with its box under it. As large as the
+                                    // frame it stands for.
                                     if root.picture-tab && !root.rescue.rules-open && root.picture-withdrawn: Rectangle {
                                         height: right-card.frame-height;
                                         vertical-stretch: 0;
+                                        VerticalLayout {
+                                            alignment: start;
+                                            Text {
+                                                text: root.rescue.held-note;
+                                                font-size: Scale.body-font;
+                                                color: Look.text-secondary;
+                                                wrap: word-wrap;
+                                            }
+                                        }
                                     }
                                     // What took the frame shown, in grey.
                                     if root.picture-tab && !root.rescue.rules-open && root.picture-origin != "": Text {

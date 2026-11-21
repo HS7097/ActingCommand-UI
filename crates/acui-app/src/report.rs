@@ -87,6 +87,14 @@ fn unix_ms() -> u128 {
 /// `$HOME/.local/state`) elsewhere, plus `ActingCommand/logs`. `Err` names the
 /// variables that are not set. The directory is not created here.
 pub fn logs_dir() -> Result<PathBuf, &'static str> {
+    Ok(local_dir()?.join("logs"))
+}
+
+/// `%LOCALAPPDATA%\ActingCommand` on Windows, `$XDG_STATE_HOME` (or `$HOME/.local/state`)
+/// elsewhere, plus `ActingCommand`: where this program keeps what it writes for itself, its log
+/// and its record of the player hold requests it sent (`hold_file`), never inside a state root.
+/// `Err` names the variables that are not set. The directory is not created here.
+pub fn local_dir() -> Result<PathBuf, &'static str> {
     let base = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from).ok_or("%LOCALAPPDATA%")
     } else {
@@ -97,7 +105,7 @@ pub fn logs_dir() -> Result<PathBuf, &'static str> {
             })
             .ok_or("$XDG_STATE_HOME / $HOME")
     }?;
-    Ok(base.join("ActingCommand").join("logs"))
+    Ok(base.join("ActingCommand"))
 }
 
 /// Appends one entry, `<unix ms> <kind>: <text>`, creating the log first when

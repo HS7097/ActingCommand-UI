@@ -15,16 +15,26 @@
 //! its run still stops, or whose answer is not known, is asked again once a `Status` shows the run
 //! gone, so that its reset's result is read (`stop`).
 //!
+//! The bar's first row has "Take Over" (UI-3d) before "Auto Rules" at its end, "Resume Auto-Play"
+//! in its place while the account's device is a person's: the account's player hold, not an
+//! operation of its device. Its
+//! row, its presses and its requests are `hold`'s (`Holds::row`, which the `Model` hands over
+//! here), its tickets taken from the same count as these; while the account's picture is withdrawn
+//! the bar draws the hold's static words for the picture's place (`HeldPanel`).
+//!
 //! A button can be pressed only while the reads and the account's own presses let it
 //! (`Model::rescue_view`): never while another work of the same device is out from here, an
-//! operation, a refresh of its picture or a switch of its backends (`Model::device_busy`), and
+//! operation, a refresh of its picture or a switch of its backends, nor while its device is being
+//! handed over or is a person's (`Model::device_busy`), and
 //! not for `RESCUE_COOLDOWN` after an operation lands, whatever it came to, or after a restart
 //! let it go; the window never counts that down. So a press that lands after its button went
 //! off sends nothing. Stopping or restarting the emulator and restarting the game close the
 //! game, and take two presses: the first only asks, and the question goes once anything else of
 //! the device is pressed, "stop this run" too, it is cancelled, another account or page is
 //! picked, the Runtime starts again, or a `Status` read leaves the button off. A press of the same
-//! button again asks again: only the confirmation sends it.
+//! button again asks again: only the confirmation sends it. The question is one of the bar's,
+//! whatever it is of (`Asked`): "Take Over" asks one too, and "Resume Auto-Play" of a hold this
+//! console did not set this run, and only one question stands at a time.
 //!
 //! The only wait is the client's own for the receipt, on the operation's thread. A restart of
 //! the Runtime lets every ticket go: what was out may or may not have happened, and the next
@@ -40,10 +50,12 @@ use std::time::Duration;
 
 use acui_source::workbench::backends::Holder;
 use acui_source::workbench::device::{operate, DeviceDone, DeviceOp, DeviceOutcome};
+use acui_source::workbench::hold::HoldTarget;
 use acui_source::workbench::{InstanceLive, Unstated};
 use slint::Timer;
 
 use super::failure_line;
+use super::hold::{held_panel, HeldPanel, HoldRow, HoldWhy};
 use super::paint;
 use super::picture::Doing;
 use super::read::panic_message;
@@ -98,8 +110,19 @@ pub struct Rescue {
     issued: u64,
     /// By alias.
     slots: BTreeMap<String, RescueSlot>,
-    /// The operation of an account whose first press asked for the confirmation.
-    confirming: Option<(String, DeviceOp)>,
+    /// What of an account a first press asked the confirmation of: one at a time, whatever it is
+    /// of.
+    confirming: Option<(String, Asked)>,
+}
+
+/// What the bar's one question asks of: an operation of the device that closes the game; a
+/// take-over of the device (`hold`); a hand-back of the hold the person saw, `target`, which the
+/// confirmation sends as it was, so that a hold changed since is refused, not ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    Device(DeviceOp),
+    TakeOver,
+    HandBack { target: HoldTarget },
 }
 
 /// One account's: the operation out, if any; what the last came to; and the one whose cooldown
@@ -194,6 +217,15 @@ impl RescueView {
             Self::Online(rows) => rows.offers(op),
         }
     }
+
+    /// Whether the button `asked` is of is drawn and can be pressed now. Of a hand-back, whether
+    /// it is still the hold the person saw is the `Model`'s to say.
+    pub fn offers_asked(&self, asked: &Asked) -> bool {
+        match self {
+            Self::Offline { .. } => false,
+            Self::Online(rows) => rows.offers_asked(asked),
+        }
+    }
 }
 
 /// The bar's rows of an account the newest `Status` lists. A row or a button that is `None` is
@@ -222,8 +254,14 @@ pub struct RescueRows {
     pub stop: Option<StopLine>,
     /// Why every device button is off, if anything is.
     pub hold: Option<RescueHold>,
-    /// The operation whose confirmation is asked, while its button can be pressed.
-    pub confirming: Option<DeviceOp>,
+    /// "Take Over", or "Resume Auto-Play" in its place, on the first row before "Auto Rules" at
+    /// its end (UI-3d): of an instance that drives a device of its own (`Holds::row`).
+    pub take_over: Option<HoldRow>,
+    /// While the picture is withdrawn, its device a person's: what the picture's place says of the
+    /// hold (UI-3d).
+    pub held_panel: Option<HeldPanel>,
+    /// What the confirmation is asked of, while its button can be pressed.
+    pub confirming: Option<Asked>,
     /// What the account's last operation came to, if one was pressed this run.
     pub said: Option<Rescued>,
     /// Whether the emulator's watch would start the emulator again after a stop: what the
@@ -259,6 +297,19 @@ impl RescueRows {
             DeviceOp::GameRestart => self.game.map(|row| row.restart),
         };
         button.is_some_and(|button| button.offered)
+    }
+
+    /// Whether the button `asked` is of is drawn and can be pressed now: a device's, or "Take
+    /// Over" or "Resume Auto-Play" as the hold's row offers it.
+    pub fn offers_asked(&self, asked: &Asked) -> bool {
+        let row = self.take_over.as_ref().filter(|row| row.offered);
+        match asked {
+            Asked::Device(op) => self.offers(*op),
+            Asked::TakeOver => row.is_some_and(|row| row.why == HoldWhy::TakeOver),
+            Asked::HandBack { .. } => {
+                row.is_some_and(|row| matches!(row.why, HoldWhy::HandBack { .. }))
+            }
+        }
     }
 }
 
@@ -320,14 +371,14 @@ impl Rescue {
         self.slots.get(alias)?.said.as_ref()
     }
 
-    /// The operation of `alias` whose confirmation is asked, if any.
-    pub fn confirming(&self, alias: &str) -> Option<DeviceOp> {
-        self.confirming.as_ref().filter(|(asked, _)| asked == alias).map(|(_, op)| *op)
+    /// What of `alias` the confirmation is asked of, if any.
+    pub fn confirming(&self, alias: &str) -> Option<&Asked> {
+        self.confirming.as_ref().filter(|(of, _)| of == alias).map(|(_, asked)| asked)
     }
 
     /// The confirmation asked, of whichever account.
-    pub fn asked(&self) -> Option<(&str, DeviceOp)> {
-        self.confirming.as_ref().map(|(alias, op)| (alias.as_str(), *op))
+    pub fn asked(&self) -> Option<(&str, &Asked)> {
+        self.confirming.as_ref().map(|(alias, asked)| (alias.as_str(), asked))
     }
 
     /// The confirmation asked goes, whatever it was of.
@@ -335,11 +386,12 @@ impl Rescue {
         self.confirming = None;
     }
 
-    fn ask(&mut self, alias: &str, op: DeviceOp) {
-        self.confirming = Some((alias.to_owned(), op));
+    /// `asked` of `alias` is the one question now, whatever was asked before.
+    pub fn ask(&mut self, alias: &str, asked: Asked) {
+        self.confirming = Some((alias.to_owned(), asked));
     }
 
-    fn take_asked(&mut self) -> Option<(String, DeviceOp)> {
+    fn take_asked(&mut self) -> Option<(String, Asked)> {
         self.confirming.take()
     }
 
@@ -409,7 +461,10 @@ impl Rescue {
     /// `file_value_lifts`, that a switch back to the file's backends lifts the fence too. "Stop
     /// this run" or "close this task" (`close`) and what the last stop came to (`stop`) are the
     /// account's stops' to say (`Stops::row`, `Stops::said`), the row drawn but while the picture
-    /// is withdrawn; `hold` holds that button back no more than a stop holds the others.
+    /// is withdrawn; `hold` holds that button back no more than a stop holds the others. "Take
+    /// Over" or "Resume Auto-Play" (`take_over`) is the account's hold's (`Holds::row`); while the
+    /// picture is withdrawn the bar says, for the picture's place, whose the hold is and since when
+    /// (`held_panel`).
     #[allow(clippy::too_many_arguments)]
     pub fn view(
         &self,
@@ -420,6 +475,7 @@ impl Rescue {
         file_value_lifts: bool,
         close: Option<CloseRow>,
         stop: Option<StopLine>,
+        take_over: Option<HoldRow>,
     ) -> RescueRows {
         let alias = instance.alias.as_str();
         let drawn = instance.physical && !withdrawn;
@@ -449,12 +505,14 @@ impl Rescue {
             close,
             stop,
             hold,
+            take_over,
+            held_panel: if withdrawn { held_panel(instance) } else { None },
             confirming: None,
             said: self.said(alias).cloned(),
             watch,
             unstated: instance.unstated,
         };
-        let confirming = self.confirming(alias).filter(|op| rows.offers(*op));
+        let confirming = self.confirming(alias).filter(|asked| rows.offers_asked(asked)).cloned();
         RescueRows { confirming, ..rows }
     }
 }
@@ -549,19 +607,26 @@ pub fn press(ui: &Ui, alias: &str, op: DeviceOp) {
         return;
     }
     if asks_first(op) {
-        ui.model.borrow_mut().rescue_mut().ask(alias, op);
+        ui.model.borrow_mut().rescue_mut().ask(alias, Asked::Device(op));
         repaint(ui);
         return;
     }
     send(ui, alias, op);
 }
 
-/// The confirmation's button: the operation it asked about goes out once, when its button can
-/// still be pressed; the question goes either way.
+/// The confirmation's button: what it asked about goes out once, when its button can still be
+/// pressed; the question goes either way. A take-over's or a hand-back's is `hold`'s to send.
 pub fn confirmed(ui: &Ui) {
     let asked = ui.model.borrow_mut().rescue_mut().take_asked();
-    let Some((alias, op)) = asked else {
+    let Some((alias, asked)) = asked else {
         return;
+    };
+    let op = match asked {
+        Asked::Device(op) => op,
+        asked @ (Asked::TakeOver | Asked::HandBack { .. }) => {
+            super::hold::confirmed(ui, &alias, asked);
+            return;
+        }
     };
     let offered = ui.model.borrow().rescue_view(&alias).is_some_and(|view| view.offers(op));
     if offered {

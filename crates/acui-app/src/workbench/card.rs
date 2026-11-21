@@ -6,9 +6,11 @@
 //! it is not the main line, it is in the small print. A card never says nothing:
 //! the last cases cover every account the reads name.
 //!
-//! `fault` and `held` are not colours of a card yet: nothing the reads carry says a
-//! self-check failed or an emulator closed unexpectedly, and a player's hold is
-//! UI-3d's. So a card is green, amber or grey.
+//! A player's hold of the account's device (UI-3d) is a colour of its own, `held`, and the
+//! first case of all: from its acquire's entry until its release ends it (`Band::Held`). `fault`
+//! is not a colour of a card yet: nothing the reads carry says a self-check failed or an emulator
+//! closed unexpectedly. So a card is green, amber, the hold's or grey. A hold's times are said as
+//! clock times, never counted down.
 //!
 //! Whether a card is the one picked, whose picture the right column shows, is no read's:
 //! the caller says (`picture`); nor is the card's own button, of its account's pause, which the
@@ -16,6 +18,9 @@
 
 use std::collections::BTreeMap;
 
+use acui_source::workbench::hold::{
+    HoldFact, HoldKind, HoldNext, HoldPhase, HoldSource, RecordState, Restored,
+};
 use acui_source::workbench::{
     ActivityFact, ActivityKind, FenceFact, InstanceExplain, InstanceLive, Obstacle,
     CONSOLE_PAUSE_ACCOUNT,
@@ -52,6 +57,8 @@ pub struct CardView {
 pub enum Band {
     Ok,
     Attention,
+    /// A player's hold of the device, from its acquire's entry until its release ends it (UI-3d).
+    Held,
     Offline,
 }
 
@@ -335,6 +342,37 @@ pub enum Line {
     NotEvaluated,
     /// The latest evaluation decided nothing for this account.
     NotPlanned,
+    /// A player hold of the device (UI-3d), as the main line: asking; its in-flight runs draining,
+    /// with the task the status names; the device being handed over, and when its session's close
+    /// began once it did; the device a person's, since it was handed over (or the acquire was taken,
+    /// of a hold restored from a stop during its acquire); being handed back; and ended, with the
+    /// pause it ended under still the same, so that automatic scheduling stays paused.
+    HoldRequesting,
+    HoldDraining { package: Option<String> },
+    HoldHandingBack { close_started: Option<u64> },
+    HoldHeld { since: u64 },
+    HoldReleasing,
+    HoldEndedPaused,
+    /// A hold's small print: who began it; while it asks or drains, from when its runs stop at their
+    /// next checkpoint and by when the take-over fails if they have not; while it hands the device
+    /// over, by when the take-over fails if it is not handed over, or that this time has passed and
+    /// the take-over is about to fail, or once the close began that it has no time limit; once
+    /// held, that a task was stopped early and that a start restored it, from its acquire or held;
+    /// and what the last operation came to: an acquire that did not go through, a hand-back that
+    /// did not, the hold still standing, and a hand-back whose reconnect failed (each when, and the
+    /// code, for its words only). And, of a release still reconnecting once its hold was lifted,
+    /// who sent it.
+    HoldSource { source: HoldSource },
+    HoldHandBackBy { source: HoldSource },
+    HoldDeadlines { drain: u64, grace: u64 },
+    HoldHandOverBy { grace: u64 },
+    HoldHandOverLate { grace: u64 },
+    HoldCloseUnbounded,
+    HoldCancelled,
+    HoldRestored { acquiring: bool },
+    HoldFailed { at: u64, code: String },
+    HoldReleaseFailed { at: u64, code: String },
+    HoldDeviceNotBack { at: u64, code: String },
 }
 
 /// An account no Runtime answers about now: grey, with nothing an earlier answer
@@ -356,7 +394,7 @@ pub fn down_view(alias: &str, down: Down, selected: bool, account: AccountView) 
 /// An account of the newest `Status`, its server in the newest fact snapshot or, when that
 /// names none, the one last seen this owner epoch (`server_last_seen`), that read's global
 /// pause, and what the schedule explanation reads leave; who lifts a pause by `elsewhere`; its
-/// own button as the reads and the presses leave it (`account`).
+/// own button as the reads and the presses leave it (`account`); `now_ms` as `said` takes it.
 #[allow(clippy::too_many_arguments)]
 pub fn card_view(
     instance: &InstanceLive,
@@ -367,8 +405,9 @@ pub fn card_view(
     selected: bool,
     elsewhere: &ResumeElsewhere,
     account: AccountView,
+    now_ms: u64,
 ) -> CardView {
-    let (band, main, notes) = said(instance, global, schedule, elsewhere);
+    let (band, main, notes) = said(instance, global, schedule, elsewhere, now_ms);
     CardView {
         alias: instance.alias.clone(),
         game: instance.game_id.clone(),
@@ -383,8 +422,166 @@ pub fn card_view(
 }
 
 /// The band, the main line and the small print: the first case that applies. The daily task
-/// list says the account's pause or fence above its rows as this says it (`tasks::held`).
+/// list says the account's pause, fence or hold above its rows as this says it (`tasks::held`).
+///
+/// A player hold comes first (UI-3d), before any pause: it is the first of the instance's control
+/// gates (Runtime f6e2cd26 contract `player_hold.rs` 705-710). `now_ms` only tells whether a hold
+/// handing the device over is past its grace deadline; the card counts nothing down. With no hold
+/// to say, what the account's last hold operation came to is added to the small print: an acquire
+/// that did not go through, or a hand-back whose reconnect failed.
 pub(super) fn said(
+    instance: &InstanceLive,
+    global: Option<&PauseFact>,
+    schedule: Schedule<'_>,
+    elsewhere: &ResumeElsewhere,
+    now_ms: u64,
+) -> (Band, Line, Vec<Line>) {
+    if let Some(fact) = &instance.hold {
+        if let Some(said) = hold_said(instance, fact, global, elsewhere, now_ms) {
+            return said;
+        }
+    }
+    let (band, main, mut notes) = said_without_hold(instance, global, schedule, elsewhere);
+    notes.extend(instance.hold.as_ref().and_then(hold_after));
+    (band, main, notes)
+}
+
+/// A hold to say, as the card's first case, when there is one (`said`):
+///
+/// 1. a hold in any phase, or an acquire entered before its hold: the hold's band, its phase as
+///    the main line (the record's phase while there is no hold yet), and in the small print who
+///    began it, its deadlines while it asks or drains, while it hands the device over by when or
+///    that the close began, once held what its acquire stopped early, a restart that restored it
+///    and a hand-back of it that did not go through; then the pauses and the fence;
+/// 2. a release still reconnecting after its hold was lifted: the hold's band, "handing back", who
+///    sent the release, the global pause and the fence;
+/// 3. a hold that ended under a pause still the same: amber, the pause still holding automatic
+///    scheduling, and in the small print that pause, what the instance does, and the fence.
+fn hold_said(
+    instance: &InstanceLive,
+    fact: &HoldFact,
+    global: Option<&PauseFact>,
+    elsewhere: &ResumeElsewhere,
+    now_ms: u64,
+) -> Option<(Band, Line, Vec<Line>)> {
+    let fence = || instance.fence.as_ref().map(fence_line);
+    let global_line = || global.map(|pause| paused_line(pause, true, elsewhere));
+    let own_pause = || instance.pause.as_ref().map(|pause| paused_line(pause, false, elsewhere));
+    let record = fact.record.as_ref();
+    let running = |kind: HoldKind| {
+        record.filter(|record| record.state == RecordState::Running && record.kind == kind)
+    };
+    let entered = running(HoldKind::Acquire).filter(|_| fact.hold.is_none());
+    let (phase, source) = match (&fact.hold, entered) {
+        (Some(hold), _) => (hold.phase, hold.source),
+        (None, Some(record)) => (record.phase.unwrap_or(HoldPhase::Requesting), record.source),
+        (None, None) => {
+            if let Some(record) = running(HoldKind::Release) {
+                // The record's source is who sent the release, not who began the hold.
+                let mut notes = vec![Line::HoldHandBackBy { source: record.source }];
+                notes.extend(global_line());
+                notes.extend(fence());
+                return Some((Band::Held, Line::HoldReleasing, notes));
+            }
+            if fact.ended_with_pause {
+                let doing =
+                    instance.activity.as_ref().map(|activity| doing_line(activity, global.is_some()));
+                let notes =
+                    own_pause().into_iter().chain(global_line()).chain(doing).chain(fence()).collect();
+                return Some((Band::Attention, Line::HoldEndedPaused, notes));
+            }
+            return None;
+        }
+    };
+    let hold = fact.hold.as_ref();
+    let main = match phase {
+        HoldPhase::Requesting => Line::HoldRequesting,
+        HoldPhase::Draining => Line::HoldDraining {
+            package: instance.activity.as_ref().and_then(|activity| activity.package_id.clone()),
+        },
+        HoldPhase::HandingBack => {
+            Line::HoldHandingBack { close_started: hold.and_then(|hold| hold.close_started_ms) }
+        }
+        HoldPhase::Held => {
+            let since = hold.map_or(0, |hold| hold.reached_held_ms.unwrap_or(hold.since_ms));
+            Line::HoldHeld { since }
+        }
+        HoldPhase::Releasing => Line::HoldReleasing,
+    };
+    let mut notes = vec![Line::HoldSource { source }];
+    let deadlines = hold.and_then(|hold| hold.drain_deadline_ms.zip(hold.grace_deadline_ms));
+    match phase {
+        HoldPhase::Requesting | HoldPhase::Draining => {
+            if let Some((drain, grace)) = deadlines {
+                notes.push(Line::HoldDeadlines { drain, grace });
+            }
+        }
+        HoldPhase::HandingBack => {
+            if hold.and_then(|hold| hold.close_started_ms).is_some() {
+                notes.push(Line::HoldCloseUnbounded);
+            } else if let Some((_, grace)) = deadlines {
+                // Past the grace with no close begun: the Runtime is about to fail the take-over
+                // `player_hold_handback_busy` (Runtime f6e2cd26 `contracts/player-hold.md`
+                // 176-178), which the card says ahead of it.
+                if now_ms > grace {
+                    notes.push(Line::HoldHandOverLate { grace });
+                } else {
+                    notes.push(Line::HoldHandOverBy { grace });
+                }
+            }
+        }
+        HoldPhase::Held => {
+            let of_hold = record.filter(|record| record.of_hold);
+            let stopped_early = of_hold
+                .filter(|record| record.kind == HoldKind::Acquire)
+                .and_then(|record| record.cancelled)
+                .is_some_and(|cancelled| cancelled > 0);
+            if stopped_early {
+                notes.push(Line::HoldCancelled);
+            }
+            if let Some(restored) = hold.and_then(|hold| hold.restored) {
+                notes.push(Line::HoldRestored { acquiring: restored == Restored::Acquiring });
+            }
+            let release_failed = of_hold.filter(|record| {
+                record.kind == HoldKind::Release && record.state == RecordState::Failed
+            });
+            if let Some(record) = release_failed {
+                if let Some(at) = record.ended_ms {
+                    let code = record.code.clone().unwrap_or_default();
+                    notes.push(Line::HoldReleaseFailed { at, code });
+                }
+            }
+        }
+        HoldPhase::Releasing => {}
+    }
+    notes.extend(own_pause());
+    notes.extend(global_line());
+    notes.extend(fence());
+    Some((Band::Held, main, notes))
+}
+
+/// With no hold to say, what the account's last hold operation of this owner epoch came to, for
+/// the small print's end: an acquire that did not go through, or a hand-back that reconnected and
+/// whose device did not connect; each with when it ended.
+fn hold_after(fact: &HoldFact) -> Option<Line> {
+    let record = fact.record.as_ref().filter(|_| fact.hold.is_none())?;
+    let at = record.ended_ms?;
+    match (record.kind, record.state) {
+        (HoldKind::Acquire, RecordState::Failed) => {
+            Some(Line::HoldFailed { at, code: record.code.clone().unwrap_or_default() })
+        }
+        (HoldKind::Release, RecordState::Completed)
+            if record.next == Some(HoldNext::Reconnected) =>
+        {
+            let code = record.selfcheck_failure.clone()?;
+            Some(Line::HoldDeviceNotBack { at, code })
+        }
+        _ => None,
+    }
+}
+
+/// `said` but for a player hold.
+fn said_without_hold(
     instance: &InstanceLive,
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,

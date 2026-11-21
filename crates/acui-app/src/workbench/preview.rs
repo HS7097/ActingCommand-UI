@@ -1154,17 +1154,16 @@ pub fn thread_failed(ui: &Ui, why: String) {
     ui.paint_log_notes();
 }
 
-/// UI-3d, before it asks for `alias`'s device for a person: the picture stops reading it
-/// from then on, and stays on the last frame.
-#[allow(dead_code)] // UI-3d's.
+/// UI-3d, as a take-over of `alias`'s device is pressed, before it is sent: the picture stops
+/// reading it from then on, and stays on the last frame.
 pub fn halt(ui: &Ui, alias: &str) {
     ui.model.borrow_mut().pictures_mut().set_halted(alias, true);
     sync(ui);
     paint::picture(ui);
 }
 
-/// UI-3d, once that ask failed or the device is handed back: the picture reads it again.
-#[allow(dead_code)] // UI-3d's.
+/// UI-3d, once that take-over did nothing, or once the `Status` after its answer came: from then
+/// on the account's hold as that `Status` says it decides whether the picture reads it.
 pub fn release(ui: &Ui, alias: &str) {
     ui.model.borrow_mut().pictures_mut().set_halted(alias, false);
     sync(ui);

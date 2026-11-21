@@ -111,7 +111,8 @@ struct Known {
     unreadable: Option<(u64, Unread)>,
     /// The newest capture of it that failed after any frame known.
     capture_failed: Option<CaptureFailure>,
-    /// UI-3d asked for its device: the picture does not read it (`preview::halt`).
+    /// This console asked for its device (UI-3d): the picture does not read it, from the press
+    /// until the `Status` after the answer, or at once when the ask did nothing (`preview::halt`).
     halted: bool,
     /// Its refresh: the one out, what the last came to, and its cooldown.
     refresh: RefreshSlot,
@@ -171,8 +172,10 @@ pub enum RefreshHold {
     Hidden,
     /// No Runtime answers, or none has yet.
     NotOnline,
-    /// Its gate is shut (UI-3d).
+    /// Its gate is shut (UI-3d): frozen, the device being handed over.
     GateShut,
+    /// Its picture is withdrawn, the device a person's (UI-3d).
+    Held,
     /// It runs a task, whose frames the picture follows by itself.
     Running,
     /// It does something else the Runtime names, or this console has its device's work out.
@@ -246,15 +249,15 @@ enum Follow {
     Fault(Fault),
 }
 
-/// Whether the picture may read an account now (B.2). In UI-3c only a halt shuts it, which
-/// nothing asks for yet; UI-3d fills this from the account's player hold.
+/// Whether the picture may read an account now (UI-3d, `Model::preview_gate`): from the account's
+/// player hold as the newest `Status` says it, and this console's own ask for its device. When a
+/// freeze began is the card's to say; the picture says when the frame it stays on was captured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // `Withdrawn`, and when a freeze began: UI-3d's.
 pub enum PreviewGate {
     Open,
-    /// Not read: the picture stays on its last frame, dimmed.
-    Freeze { since_ms: Option<u64> },
-    /// Not read, and nothing of it shows.
+    /// Not read: the picture stays on its last frame, dimmed. The device is being handed over.
+    Freeze,
+    /// Not read, and nothing of it shows: the device is a person's.
     Withdrawn,
 }
 
@@ -817,7 +820,7 @@ impl Pictures {
             LinkNow::Offline(offline) => Some(offline),
             LinkNow::Pending | LinkNow::Online(_) => None,
         };
-        let frozen = matches!(gate, PreviewGate::Freeze { .. });
+        let frozen = gate == PreviewGate::Freeze;
         let fault = match &self.follow {
             Follow::Fault(fault) => Some(fault.clone()),
             Follow::Idle | Follow::Looking | Follow::Following | Follow::Interrupted(_) => None,
