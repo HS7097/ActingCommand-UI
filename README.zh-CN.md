@@ -24,21 +24,21 @@
   `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
   `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
   里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
-  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime v0.12.76
-  （`f6e2cd26`），是发布版本。
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime v0.12.77
+  （`3285143f`），是发布版本。
 - **可与 v0.12.73 起的 0.12 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 9]、`runtime-client`
-  [12, 14] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.73、v0.12.74、v0.12.75 和 v0.12.76：这四版的 `ledger` 上限都在
+  [12, 14] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.73、v0.12.74、v0.12.75、v0.12.76 和 v0.12.77：这五版的 `ledger` 上限都在
   [3, 9] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集（`runtime-client` 依次是 [3, 12]、[3, 12]、
-  [12, 13]、[12, 14]，`actingd-config` 依次是 [5, 33]、[5, 34]、[5, 34]、[5, 35]，见「数据来源」一节）。`runtime-client` 从 12 起，是因为它发出的
+  [12, 13]、[12, 14]、[12, 14]，`actingd-config` 依次是 [5, 33]、[5, 34]、[5, 34]、[5, 35]、[5, 35]，见「数据来源」一节）。`runtime-client` 从 12 起，是因为它发出的
   每一次暂停都带修订 12 的请求成员 `pause_mode`；到 14 止，是因为它所基于的契约库读得了修订 14，也就是状态成员 `unavailable`，
-  Runtime v0.12.76 对哪个实例都不答它。在它之前的修订 13 是 iOS 手机只读观察里的取帧后端
+  Runtime v0.12.76 和 v0.12.77 对哪个实例都不答它。在它之前的修订 13 是 iOS 手机只读观察里的取帧后端
   `acib_screen_capture`，以及比例和基准差不到一个像素的显示缩到基准的帧。它不适配 v0.12.72 及更早：这些版本的
   `runtime-client` 最多到 11，解不开带 `pause_mode` 的暂停，会直接断开连接、不给回答，也不设任何暂停（见「数据来源」一节）。
   所以要先把 Runtime 升到 v0.12.73 或更新，再换这个监控台。Runtime v0.12.75 对每个实例暂停都答 `pause_mode`，所以
   `runtime-client` 低于 12 的监控台（只到 11 或更低，即钉在 v0.12.71 或更早）一读到带实例暂停的状态就失败、锁住连接：Runtime 升到 v0.12.75
   之前，要先把这种监控台换成读得了 12 的。钉在 v0.12.73、v0.12.74 的监控台（UI v0.12.25、v0.12.26）配 v0.12.75 照常能用，
   读不了的只有 iOS 手机的观察和那种尺寸显示的投影；配 iOS 手机之前，每个监控台都要是修订 13 或更新的，这个就是。
-  钉在 v0.12.75 的监控台配 v0.12.76 不用换钉。第一次答 `unavailable` 的那一版 Runtime 会把 `runtime-client` 的下限升到 14：
+  钉在 v0.12.75 的监控台配 v0.12.76 不用换钉，钉在 v0.12.76 的配 v0.12.77 也不用（这一版一个区间都没动）。第一次答 `unavailable` 的那一版 Runtime 会把 `runtime-client` 的下限升到 14：
   在它之前，每个监控台都要讲 14，这个就讲。游戏根从 v0.12.68 起用 `pack-catalog.json`
   取代 `ui.json`（见「数据来源」一节）：安装向导铺 `pack-catalog.json`，拒收带 `ui.json` 的旧包。例外是以前的安装向导
   或 v0.12.68 以前的 Runtime 铺好、根里还留着 `ui.json` 的游戏根：`actingctl packs` 见到它就发警告，
@@ -188,8 +188,22 @@
 「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
 这样就不用游标往下读。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.76（`f6e2cd26`），是发布版本，以预发布发出。
-相对上一个钉点 v0.12.75（`945727d4`），v0.12.76 动了三个区间，下限都没动：`runtime-client` 从 [12, 13] 变成 [12, 14]，
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.77（`3285143f`），是发布版本，以预发布发出。
+相对上一个钉点 v0.12.76（`f6e2cd26`），v0.12.77 一个区间都没动：`runtime-client` [12, 14]、`actingd-config` [5, 35]、
+`package` [3, 21]、`ledger` [3, 9]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都照旧，控制台的区间也照旧。Runtime 的
+Cargo.toml 和 Cargo.lock 一个都没改，所以两把锁都只换提交号。控制台链接的 Runtime crate 里只有两个改了：契约库加了两个结果键，
+`entry_recovery_end`（词表，公开投影留着）和 `trigger_rule`（名字，公开投影丢掉），另改了目标检查那段遍历的两处注释；runtime-config
+加了 `LadderConfig::classify_unexcluded`。runtime-client 依赖、控制台不调用的 policy crate，改成会判睡着的实例的候选，也不再给
+能做不可逆事的任务打标记。这些都碰不到控制台构造、匹配或实现的东西。契约库嵌入的结果码目录里，v0.12.77 加了 9 个码、
+2 个位置（`instance_entry_block`、`take_up_entry_recoveries`）和词表 `entry_recovery_end`（3 个词），退役 1 个码
+`resource_target_package_irreversible`（控制台从没用过它），新名字里没有 `console_`、`setup_`。9 个里有 4 个是候选没被派出的原因，
+实例卡片和每日任务表现在用自己的话说：`instance_entry_blocked`（这个实例上有一次运行进不了任务入口，实例在等它恢复）、
+`instance_entry_task_waiting`（这个任务没进去入口，过一会儿再试，带最早时间）、`instance_entry_task_set_aside`（别的任务能进去，
+它却老进不了入口，这个活动时段结束前先放下，琥珀色）、`instance_asleep_wake_due`（闲置动作停掉的模拟器正为这个任务被叫醒）。
+3 个是进不了入口的实例的 `runtime.failed` 警告，账本窗口现在会说（见「启动器」一节「进不了入口的实例」）。剩下两个照它们类别的通用说法：
+`instance_idle_stop_withheld`（`device_state_observed` 警告：一次唤醒开了模拟器、之后没有运行被放进来，所以空闲检查不再把它停掉）、
+`recovery_rung_skipped_emulator_restarted_in_stretch`（这一段里模拟器已经重启过，恢复阶梯跳过重启那一级的结果）。上一个钉点
+v0.12.76（`f6e2cd26`）相对 v0.12.75（`945727d4`），v0.12.76 动了三个区间，下限都没动：`runtime-client` 从 [12, 13] 变成 [12, 14]，
 `actingd-config` 从 [5, 34] 变成 [5, 35]，`package` 从 [3, 20] 变成 [3, 21]；`ledger` [3, 9]、`install-control` [0, 0]、
 `runtime-outcomes` [1, 1] 都不变。控制台的 `runtime-client` 改成 [12, 14]：它所基于的契约库解得了修订 14，也就是状态成员
 `unavailable`（`InstanceUnavailable`），控制台还不显示它；v0.12.76 对哪个实例都不答它，因为 14 以下的读者读到带它的状态会拒收，
@@ -426,7 +440,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 14、账本修订 9）：
 
 ```
-rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd"
+rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0"
 ```
 
 七个 crate（contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -650,7 +664,7 @@ MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 
 或在线设置及其时间、入口）和这个实例最近一次自检的结果。iOS 手机条目（Runtime v0.12.74 起，`device.system: "ios"`）
 不写后端，所以没有这一组；v0.12.75 起它的帧来自 `<安装根>\tools\acib.exe`，这也不是设置项。按「应用」后，这个实例空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-钉住的 v0.12.76 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+钉住的 v0.12.77 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带实例；拒绝照原因写人话：这个实例正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这个实例没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
@@ -1241,7 +1255,7 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   （`instance add`，Runtime INST-5）后给刚加进来的实例挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
   挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
-  暂停，0.12.52 起才有，钉住的 0.12.76 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
+  暂停，0.12.52 起才有，钉住的 0.12.77 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
   `instance.added`（#453 S2）。钉住的 Runtime 还会在这种条目那次启动时已经被别的理由的暂停按着、而 Runtime 运行中那个暂停
   解除时（包括人在这个窗口里恢复）改挂 `instance.added`，所以它不一定是这个实例的第一次暂停。实例的 `instance.added` 暂停那一行写「新加实例的暂停」，
   不写「被其他工具暂停」，理由、修订和起始时间照写；给不给恢复、由谁解除和上面说的一样。
@@ -1294,6 +1308,15 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   「实例的事实快满了」：这个实例自己的事实已到上限的八成；上限放不下新键时，带新键的事实会被拒收，只更新已有键的照常收下。公开投影里这几条只留码、`operation` 和
   `failure_code`，所以行上说不出是第几次体检、已经不可用多久、下次几点再体检。三条警告级的也在「错误」页签里。状态成员 `unavailable`
   （修订 14）控制台解得了，但还不显示，留给后面一片（#489）。
+- **进不了入口的实例（账本窗口）**：Runtime v0.12.77 起，又有三种记在实例名下的 `runtime.failed` 记录（都是警告级）照同样的做法配了控制台的话。
+  它们来自进不了任务入口的运行，游戏停在没有哪个包认得的画面：实例被挡住，它的候选都在等，Runtime 自己去恢复它。
+  `instance_entry_blocked_awaiting_person`「任务老进不了入口，等人处理」：这个实例上的任务一直进不了入口、中间没有任务跑进去，已到设置的提醒时限；
+  请把游戏切回认得的画面，再在这个实例上跑一个任务，或者暂停再恢复它。`instance_entry_blocked_recovery_failed`「进不了入口，自动恢复没成功」，
+  详情按记录的 `entry_recovery_end` 说恢复怎么结束的：走完了也没恢复（`exhausted`），过一阵自己再试，间隔越来越长；游戏弹出了更新提示
+  （`update_dialog`），任务重新跑进去之前不再自动恢复，要先更新游戏；做恢复的程序自己出了错（`worker_panicked`），这一次不再自动恢复。
+  `instance_entry_task_set_aside_reported`「一个任务老进不了入口，这个时段先放下」：别的任务能进去，这一个却一再进不了入口、到了失败门槛，
+  所以它的活动时段结束前不再安排它；修好它的任务包再放上去，就会马上重新安排。记录带了进不了入口的那次失败，就作为原因码带上。公开投影只留
+  `operation`、`failure_code` 和 `entry_recovery_end`，其余都丢掉，所以行上说不出是哪个任务、挡了多久、下次几点再试。
 
 ## 实例配置
 
@@ -1319,7 +1342,7 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 （提交号要与安装集写的一致）；按 Runtime `contracts/component-interfaces.md` 核监控台和 Runtime 两份清单里的
 `interfaces`：`runtime-client`、`actingd-config` 两边要有交集，`ledger`、`runtime-outcomes` 要 Runtime 的最高
 修订落在监控台的区间里（这个监控台声明 `runtime-client` [12, 14]，所以 Runtime 最多只声明到 11 的安装集，即 v0.12.72 及更早，
-会被拒绝，v0.12.73 到 v0.12.76 都能通过）；每个标准包核它的 `bundle.json`、`applications.json`、`schedule.json` 与
+会被拒绝，v0.12.73 到 v0.12.77 都能通过）；每个标准包核它的 `bundle.json`、`applications.json`、`schedule.json` 与
 `interfaces.json`（`package` 修订要落在这一版 Runtime 声明的区间里）。视觉文件必须带上 ONNX Runtime 的两个文件，
 而且要和 Runtime 钉住的一模一样（`ort/onnxruntime.dll`，17,328,152 字节，SHA-256 `e7eedec6…bff40`；
 `ort/onnxruntime_providers_shared.dll`，22,040 字节，`265c8daf…ec3b6`）。用显卡（DirectML）时 Runtime 会拒绝别的版本；

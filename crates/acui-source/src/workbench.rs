@@ -82,7 +82,8 @@
 //! What a ledger record of a pause's life says (Runtime 0.12.74, #480 PG-2d) is read here too,
 //! as what a pause's receipt says is ([`pause_moment`], beside `pause_answer`); and so is what the
 //! Runtime's records of an unavailable instance's probes and of an instance's facts nearing their
-//! bound say (Runtime 0.12.76, #489 AVAIL-1 and #498; [`runtime_notice`]). Both are for the ledger
+//! bound say (Runtime 0.12.76, #489 AVAIL-1 and #498), and of an entry-blocked instance (0.12.77,
+//! #490 ENTRY-A; [`runtime_notice`]). Both are for the ledger
 //! window, which finds such records in its own pages: no lane reads them, and nothing on the
 //! workbench shows them.
 
@@ -827,18 +828,32 @@ const PANIC_CAUGHT: &str = "panic_caught";
 /// The value these records name a cause by (contract `outcome/keys.rs` 104 at f6e2cd26: a code,
 /// which the public projection keeps).
 const FAILURE_CODE: &str = "failure_code";
+/// The codes of the records the Runtime writes of an entry-blocked instance, one whose runs fail
+/// at their entry (Workflow #490 ENTRY-A, Runtime 0.12.77), the host's own spellings (runtime-host
+/// `codes.rs` 305, 313 and 341 at 3285143f).
+const ENTRY_AWAITING_PERSON: &str = "instance_entry_blocked_awaiting_person";
+const ENTRY_RECOVERY_FAILED: &str = "instance_entry_blocked_recovery_failed";
+const ENTRY_TASK_SET_ASIDE: &str = "instance_entry_task_set_aside_reported";
+/// The value that says how such a recovery ended (contract `outcome/keys.rs` 942 at 3285143f: a
+/// vocabulary token, `exhausted`, `update_dialog` or `worker_panicked`, runtime-host `codes.rs`
+/// 3828-3840, which the public projection keeps).
+const ENTRY_RECOVERY_END: &str = "entry_recovery_end";
 
 /// One record the Runtime writes, from 0.12.76 on, of an instance unavailable to the scheduler by
-/// its device self-check and probed again, or of an instance's own facts nearing their bound: a
+/// its device self-check and probed again, or of an instance's own facts nearing their bound, and
+/// from 0.12.77 on of an instance whose runs fail at their entry (the last three variants, whose
+/// records are written as these are, `host/entry_blocks.rs` 1618-1651 at 3285143f): a
 /// `runtime.failed` record linked to the instance (a probe's under the probe's own request links,
 /// `host/unavailable_probe.rs` 785-787; one of the facts of an alias no registered instance has, to
 /// none, `host/facts.rs` 711-721), whose outcome's code says which and whose severity is that
 /// code's category (runtime-host `host/unavailable_probe.rs` 562-590, `record_unavailable`, and
 /// `host/facts.rs` 698-749 at f6e2cd26; contract `event/envelope.rs` 583-594, `record_severity`),
-/// so that the passed probe is an info and the other three are warnings, and so in the Errors tab
-/// (contract `event/views.rs` 111). The ledger window reads it, as it reads a [`PauseMoment`], in
-/// the public projection, which keeps of that outcome the code and of its values only the
-/// registered names, `operation` and `failure_code`, and drops `instance_id`, `attempts`,
+/// so that the passed probe is an info and every other one a warning (an entry block's are written
+/// at Warning, `host/entry_blocks.rs` 1631 at 3285143f), and so in the Errors tab (contract
+/// `event/views.rs` 111). The ledger window reads it, as it reads a [`PauseMoment`], in the public
+/// projection, which keeps of that outcome the code and of its values only the registered names,
+/// `operation`, `failure_code` and an entry recovery's `entry_recovery_end` (contract
+/// `outcome.rs` 931-939 and 1278-1308 at 3285143f), and drops `instance_id`, `attempts`,
 /// `elapsed_ms`, `limit_ms`, `count`, `limit_count` and `next_occurrence_unix_ms` (contract
 /// `outcome.rs` 931-939 and 1278-1308, `event/payload.rs` 13575 and 13702 at f6e2cd26): which
 /// probe, for how long and when the next one is due, no row can say. `cause` is the record's
@@ -871,6 +886,27 @@ pub enum RuntimeNotice {
     /// 3746-3751; `fact_store.rs` 151-153). A key the full bound has no room for is refused
     /// `fact_store_capacity_exceeded` (`codes.rs` 731).
     FactShareReached,
+    /// `instance_entry_blocked_awaiting_person` (warning, Runtime 0.12.77, Workflow #490
+    /// ENTRY-A): runs on the instance kept failing at their entry, with no run let in between, for
+    /// `scheduling.unavailable_probe.attention_after_ms`, and a person is told, once per such
+    /// stretch; the instance's candidates stay deferred (runtime-host `codes.rs` 300-305;
+    /// `host/entry_blocks.rs` 1570-1587 and 1843-1854 at 3285143f). `cause`: the latest failure at
+    /// the entry. The projection drops `elapsed_ms`, `limit_ms`, `task_id` and `decision_id`.
+    EntryAwaitingPerson { cause: Option<String> },
+    /// `instance_entry_blocked_recovery_failed` (warning): one of the block's own recoveries ended
+    /// without recovering, once per block, and the instance stays blocked (`codes.rs` 306-313;
+    /// `entry_blocks.rs` 1589-1616). `end`: how, the record's `entry_recovery_end`; after
+    /// `exhausted` the block climbs again by itself, after `update_dialog` not in the stretch,
+    /// after `worker_panicked` not in the block. `cause` as above. The projection drops
+    /// `trigger_rule` and `next_occurrence_unix_ms`.
+    EntryRecoveryFailed { end: Option<String>, cause: Option<String> },
+    /// `instance_entry_task_set_aside_reported` (warning): a task kept failing at its entry on the
+    /// instance although other runs got in, and is set aside there until its activity window
+    /// ends; a person is told once per task, instance and window (`codes.rs` 333-341;
+    /// `entry_blocks.rs` 1545-1568). Which task and until when, the projection drops (`task_id`,
+    /// `window_end_unix_ms`, `count`, `limit_count`). `cause`: the failure that reached the
+    /// threshold.
+    EntryTaskSetAside { cause: Option<String> },
 }
 
 impl RuntimeNotice {
@@ -881,13 +917,16 @@ impl RuntimeNotice {
             Self::ProbePassed { .. } => PROBE_PASSED,
             Self::AwaitingPerson { .. } | Self::ProbesStopped => AWAITING_PERSON,
             Self::FactShareReached => FACT_SHARE_REACHED,
+            Self::EntryAwaitingPerson { .. } => ENTRY_AWAITING_PERSON,
+            Self::EntryRecoveryFailed { .. } => ENTRY_RECOVERY_FAILED,
+            Self::EntryTaskSetAside { .. } => ENTRY_TASK_SET_ASIDE,
         }
     }
 }
 
 /// The notice `event` records ([`RuntimeNotice`]), read as [`pause_moment`] reads a record: a
 /// `runtime.failed` record of the Runtime's family whose public projection's outcome has one of the
-/// four codes on top. Any other record is none, every other `runtime.failed` among them (the
+/// seven codes on top. Any other record is none, every other `runtime.failed` among them (the
 /// scheduler driver's `contained_task_cancelled` after a stopped run), and shows as before.
 pub fn runtime_notice(event: &ProjectedEvent) -> Option<RuntimeNotice> {
     if event.event_type != EventType::RuntimeFailed {
@@ -912,6 +951,12 @@ fn notice_of(outcome: &Outcome) -> Option<RuntimeNotice> {
         AWAITING_PERSON if cause.as_deref() == Some(PANIC_CAUGHT) => RuntimeNotice::ProbesStopped,
         AWAITING_PERSON => RuntimeNotice::AwaitingPerson { cause },
         FACT_SHARE_REACHED => RuntimeNotice::FactShareReached,
+        ENTRY_AWAITING_PERSON => RuntimeNotice::EntryAwaitingPerson { cause },
+        ENTRY_RECOVERY_FAILED => {
+            let end = outcome.value(ENTRY_RECOVERY_END).and_then(|value| value.as_str());
+            RuntimeNotice::EntryRecoveryFailed { end: end.map(str::to_owned), cause }
+        }
+        ENTRY_TASK_SET_ASIDE => RuntimeNotice::EntryTaskSetAside { cause },
         _ => return None,
     })
 }
@@ -2859,6 +2904,69 @@ mod tests {
             assert_eq!(notice.code(), code);
             assert_eq!(notice_of(&record), Some(notice), "{code} {failure:?}");
         }
+        // An entry-blocked instance's records (Runtime 0.12.77), as `host/entry_blocks.rs`
+        // 1545-1616 and 1843-1854 at 3285143f write them, with the values the projection drops.
+        let entry_record = |code: &str, extra: serde_json::Value| {
+            let mut values = serde_json::json!({
+                "operation": "instance_entry_block",
+                "task_id": "daily_mail",
+                "decision_id": "d-1",
+                "observed_at_unix_ms": 1_763_700_000_000_u64,
+                "failure_code": "contained_task_page_unknown",
+            });
+            for (key, value) in extra.as_object().expect("an object") {
+                values[key] = value.clone();
+            }
+            let written: Outcome = serde_json::from_value(serde_json::json!({
+                "code": code,
+                "category": "warning",
+                "values": values,
+            }))
+            .expect("a record outcome's form");
+            written.codes_only()
+        };
+        let entry_cause = || Some("contained_task_page_unknown".to_owned());
+        let waited = entry_record(
+            "instance_entry_blocked_awaiting_person",
+            serde_json::json!({"elapsed_ms": 3_600_000_u64, "limit_ms": 3_600_000_u64}),
+        );
+        assert!(waited.value("elapsed_ms").is_none());
+        assert!(waited.value("task_id").is_none());
+        assert_eq!(
+            notice_of(&waited),
+            Some(RuntimeNotice::EntryAwaitingPerson { cause: entry_cause() })
+        );
+        for end in ["exhausted", "update_dialog", "worker_panicked"] {
+            let failed = entry_record(
+                "instance_entry_blocked_recovery_failed",
+                serde_json::json!({
+                    "entry_recovery_end": end,
+                    "trigger_rule": "page_unknown",
+                    "next_occurrence_unix_ms": 1_763_700_600_000_u64,
+                }),
+            );
+            assert!(failed.value("next_occurrence_unix_ms").is_none());
+            assert_eq!(
+                notice_of(&failed),
+                Some(RuntimeNotice::EntryRecoveryFailed {
+                    end: Some(end.to_owned()),
+                    cause: entry_cause()
+                }),
+                "{end}"
+            );
+        }
+        let set_aside = entry_record(
+            "instance_entry_task_set_aside_reported",
+            serde_json::json!({
+                "count": 3,
+                "limit_count": 3,
+                "window_end_unix_ms": 1_763_740_000_000_u64,
+            }),
+        );
+        assert!(set_aside.value("window_end_unix_ms").is_none());
+        let notice = RuntimeNotice::EntryTaskSetAside { cause: entry_cause() };
+        assert_eq!(notice.code(), "instance_entry_task_set_aside_reported");
+        assert_eq!(notice_of(&set_aside), Some(notice));
         // Another `runtime.failed` record: the scheduler driver's after a stopped run.
         let stopped = Outcome::new(host("contained_task_cancelled")).codes_only();
         assert_eq!(notice_of(&stopped), None);
