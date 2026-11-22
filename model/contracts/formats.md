@@ -2414,8 +2414,8 @@ wrote it (the Runtime's `standard-pack-schedule` reads both; only Provenance rea
     `limited_by` the limit rules one run uses up, sorted, at the rule), a difference `apply` writes, `"limited": true`;
   - a limited value whose rule declares no `consumes`: the warning `limited_without_consumes` (`limited_by`, at the
     rule); nothing is written, and a mark the rule writes stays;
-  - a rule that writes `"limited": true` while its value is not limited: the warning `limited_unmodelled` (at the
-    mark); it is never removed;
+  - a rule that writes `"limited": true` while its value is not limited and no limit that counts it is undecided: the
+    warning `limited_unmodelled` (at the mark); it is never removed;
   - a `limited` that is not `true` (the Runtime refuses anything else): `limited_invalid` (exit 6, `found`, at the
     member), which `apply` refuses and never rewrites.
   The mark has no origin member: the Runtime's contract gives it none.

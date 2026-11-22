@@ -853,7 +853,8 @@ VAGUE = {  # an interval unknown: a limit whose max reads it shows a range, no o
 def limited_repo(folder: Path, most: str = "3", *, shared: bool = True, vague: bool = False) -> Path:
     """The fixture with the limits that count act.make: limit.make, its own, `most` a day (3 unless given), and, unless
     `shared` is false, limit.shared, of another activity and shared with it, one a day; with `vague`, limit.vague too,
-    whose max is the interval unknown unk.vague (3 to 4 a day). val.make (1600, pool.b its declared cost) and
+    whose max is the interval unknown unk.vague (3 to 4 a week: a week, since a second limit of act.make a day would
+    conflict with limit.make, `rule_conflict`). val.make (1600, pool.b its declared cost) and
     val.make.spent (2150) count one execution of act.make a run (once a run; once a week over one run a week), so one
     run uses up limit.shared (one a day) and limit.make only at one a day, never at three (#466 W3 fix2); val.a.day
     (2448) counts a resource only, so it is never limited."""
@@ -865,7 +866,7 @@ def limited_repo(folder: Path, most: str = "3", *, shared: bool = True, vague: b
         if shared:
             doc["rules"].append(limit("limit.shared", "act.other", "1", "day", shared_with=["act.make"]))
         if vague:
-            vague_limit = limit("limit.vague", "act.make", "unknown:unk.vague", "day")
+            vague_limit = limit("limit.vague", "act.make", "unknown:unk.vague", "week")
             doc["rules"].append({**vague_limit, "unknowns": ["unk.vague"]})
             doc["unknowns"].append(VAGUE)
 
@@ -955,7 +956,7 @@ def test_limited_marks_only_a_limit_one_run_uses_up(tmp_path, acmodel, most, sha
 
 
 def test_a_limit_whose_max_is_no_one_number_decides_nothing(tmp_path, acmodel):
-    """limit.vague's max reads an interval unknown (3 to 4 a day), so whether one run uses it up is not known: the
+    """limit.vague's max reads an interval unknown (3 to 4 a week), so whether one run uses it up is not known: the
     warning `limited_undecided` on each rule whose value it counts, one a limit, and it writes or removes nothing;
     limit.shared still marks them (fix2)."""
     folder = limited_repo(tmp_path, vague=True)
@@ -1035,7 +1036,7 @@ def test_the_codes_of_w3_are_registered_each_of_its_category():
         "valuation_rounds_to_zero": ("error", 5), "valuation_out_of_range": ("error", 5),
         "precision_low": ("warning", 0), "valuation_pending_marker": ("error", 6), "valuations_stale": ("warning", 0),
         "limited_missing": ("error", 6), "limited_invalid": ("error", 6), "limited_without_consumes": ("warning", 0),
-        "limited_unmodelled": ("warning", 0),
+        "limited_unmodelled": ("warning", 0), "limited_undecided": ("warning", 0),  # the last, fix2
     }
     assert {code: (CODES[code]["category"], CODES[code]["exit"]) for code in new} == new
     assert {code: EXIT_STATUS[code] for code in new} == {code: exit_status for code, (_, exit_status) in new.items()}

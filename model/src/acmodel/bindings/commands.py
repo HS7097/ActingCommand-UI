@@ -677,7 +677,8 @@ class _ValuePlan:
         on a rule without `consumes` it is only reported; and a mark the model does not hold is only reported, never
         removed. Fix2: each limit that counts the value but whose `max` is no one number is reported
         (`limited_undecided`, one warning a limit, with why), beside whichever of these holds; it neither writes nor
-        removes a mark."""
+        removes a mark. While a limit is undecided, a mark the decided limits do not hold is not `limited_unmodelled`:
+        the undecided one may hold it."""
         rule, rule_ref = self.rule, self.rule_ref
         consumes = rule.get("consumes")
         declared = isinstance(consumes, list) and bool(consumes)
@@ -689,7 +690,7 @@ class _ValuePlan:
         elif self.limited_by and mark is MISSING:
             self.differences.append(error(LIMITED_MISSING, self._detail(limited_by=self.limited_by), rule_ref))
             self.insert_limited = True
-        elif not self.limited_by and mark is True:
+        elif not self.limited_by and not self.undecided and mark is True:
             self.warnings.append(error(LIMITED_UNMODELLED, self._detail(), at(rule_ref, LIMITED)))
         for limit_id, why in self.undecided:
             self.warnings.append(error(LIMITED_UNDECIDED, self._detail(limit=limit_id, reason=why), rule_ref))

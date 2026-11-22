@@ -186,11 +186,12 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   the coverage of the prices `export prices` delivered, as `schedule.json` meets it (`data.coverage`; `prices_stale`
   when `out/prices.json` is of another version of the model), without computing a steady state. It writes nothing.
   A value binding ties a rule's `fixed_value_milli` to a value of exports.json and its `fixed_value_origin` to
-  `"model"`, and on a rule that declares `consumes` the mark `"limited": true` to whether a `limit` rule of the model
-  counts the value's activities (otherwise only reported, never removed); a valuation binding ties a pool's
-  `valuation.base_weight_milli` to the W of `export valuations` and its `valuation_origin` to `"model"`. An origin
-  `"model"` that no binding names is refused (`origin_unbound`), and `data.values` and `data.valuations` say whether
-  `out/values.json` and `out/valuations.json` are current. A `hand` entry records a fixed value a person wrote, with its
+  `"model"`, and on a rule that declares `consumes` the mark `"limited": true` to whether one run of the rule uses up
+  a `limit` rule of the model (the run's executions of what the limit counts reach its `max`; a limit whose `max` is
+  no one number is the warning `limited_undecided`; otherwise only reported, never removed); a valuation binding ties
+  a pool's `valuation.base_weight_milli` to the W of `export valuations` and its `valuation_origin` to `"model"`.
+  An origin `"model"` that no binding names is refused (`origin_unbound`), and `data.values` and `data.valuations`
+  say whether `out/values.json` and `out/valuations.json` are current. A `hand` entry records a fixed value a person wrote, with its
   `status` and `ref` (texts the tool stores and never reads): a rule is named once among the value bindings and the hand
   entries, a hand entry's value by no threshold binding or fixed entry either, and a hand entry's rule writes a value in
   1..2^53 − 1 and no origin (a value outside that range is an error, and a warning on a held package's rule, which the

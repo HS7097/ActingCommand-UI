@@ -856,4 +856,4 @@ def test_every_warning_says_its_kind():
     }
     assert kinds == {code: ["first" if code.startswith("held_") else "second"] for code in kinds}
     assert {"prices_stale", "values_stale", "valuations_stale", "precision_low", "limited_without_consumes",
-            "limited_unmodelled"} <= set(kinds)
+            "limited_unmodelled", "limited_undecided"} <= set(kinds)
