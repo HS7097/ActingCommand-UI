@@ -174,6 +174,16 @@ pub enum ReasonClass {
     DependencyWait,
     WithinTolerance,
     Budget,
+    /// Runtime 0.12.77 on (#490 ENTRY-A, #486 ASLEEP-1; runtime-host `codes.rs` 291-299,
+    /// 314-332 and policy `codes.rs` 369 at 3285143f): a run on the instance failed at its entry
+    /// and the instance waits for its recovery; this task failed at its entry and waits before it
+    /// is tried again; this task kept failing at its entry while others got in, and is set aside
+    /// until its activity window ends, which a person is told of; the instance's emulator stands
+    /// stopped by its idle action, and it is being woken for this task.
+    EntryBlocked,
+    EntryRetryWait,
+    EntrySetAside,
+    Waking,
     /// The Runtime gave a decision no reason: its fault, which the log hears of.
     ReasonMissing,
     /// No sentence of its own: a general one says it is not scheduled now, and the log
@@ -262,6 +272,11 @@ impl ReasonClass {
             "dependency_already_served" => Self::DependencyWait,
             "benefit_within_tolerance" => Self::WithinTolerance,
             "policy_budget_exhausted" => Self::Budget,
+            // Runtime 0.12.77 on; strings on the wire, read as the pinned client reads any.
+            "instance_entry_blocked" => Self::EntryBlocked,
+            "instance_entry_task_waiting" => Self::EntryRetryWait,
+            "instance_entry_task_set_aside" => Self::EntrySetAside,
+            "instance_asleep_wake_due" => Self::Waking,
             "decision_reason_missing" => Self::ReasonMissing,
             other if other.starts_with("perf_") => Self::Paced,
             _ => Self::Unlisted,
@@ -277,6 +292,7 @@ impl ReasonClass {
             | Self::RefreshUnbound
             | Self::LinesInvalid
             | Self::LinesUnspendable
+            | Self::EntrySetAside
             | Self::ReasonMissing => Band::Attention,
             _ => Band::Ok,
         }

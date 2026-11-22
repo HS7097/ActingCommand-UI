@@ -759,6 +759,27 @@ pub struct Labels {
     pub notice_probes_stopped_detail: &'static str,
     pub notice_fact_share_reached: &'static str,
     pub notice_fact_share_reached_detail: &'static str,
+    /// The same of the Runtime's `runtime.failed` records of an entry-blocked instance, one whose
+    /// runs fail at their entry (Runtime 0.12.77, #490 ENTRY-A; the codes and the Runtime's lines
+    /// are at `acui_source::workbench::RuntimeNotice`): blocked for the reminder time, a person is
+    /// told (`instance_entry_blocked_awaiting_person`); one of the block's own recoveries ended
+    /// without recovering (`instance_entry_blocked_recovery_failed`), short, then the detail by how
+    /// it ended (`entry_recovery_end`): ran out, tried again by itself later; the game asked for an
+    /// update, no more tries in that stretch; the worker failed, no more tries in that block; and
+    /// one for a record that does not say; a task kept failing at its entry while others got in,
+    /// set aside until its activity window ends (`instance_entry_task_set_aside_reported`). Each
+    /// names its cause code, the failure at the entry, only when one was named (runtime-host
+    /// `host/entry_blocks.rs` 1563-1566 and 1850-1853 at 3285143f). The ways out are the
+    /// catalog's (`handling`); no task, time or count, which the public projection drops.
+    pub notice_entry_awaiting_person: &'static str,
+    pub notice_entry_awaiting_person_detail: &'static str,
+    pub notice_entry_recovery_failed: &'static str,
+    pub notice_entry_recovery_exhausted_detail: &'static str,
+    pub notice_entry_recovery_update_detail: &'static str,
+    pub notice_entry_recovery_panicked_detail: &'static str,
+    pub notice_entry_recovery_failed_detail: &'static str,
+    pub notice_entry_task_set_aside: &'static str,
+    pub notice_entry_task_set_aside_detail: &'static str,
     /// The same of "pause this account": watched, confirmed late, did not hold, held and was
     /// lifted later by a resume; and still on its way, its runs finishing up or its device being
     /// handed back, once it has been watched for its longest, which is neither confirmed nor
@@ -1179,6 +1200,13 @@ pub struct Labels {
     pub card_why_dependency_wait: &'static str,
     pub card_why_within_tolerance: &'static str,
     pub card_why_budget: &'static str,
+    /// Runtime 0.12.77 on: a run could not get into its task, waiting for the recovery; this task
+    /// could not get in, tried again later; this task keeps failing to get in, set aside for this
+    /// period; the emulator is being woken for it.
+    pub card_why_entry_blocked: &'static str,
+    pub card_why_entry_retry_wait: &'static str,
+    pub card_why_entry_set_aside: &'static str,
+    pub card_why_waking: &'static str,
     pub card_why_reason_missing: &'static str,
     pub card_why_unlisted: &'static str,
     /// The right column's second tab, the account's daily task list (UI-3f1), and what it says
@@ -2511,6 +2539,15 @@ pub const ZH: Labels = Labels {
     notice_probes_stopped_detail: "Runtime 的自动体检自己出了错，这个实例这次不可用期间不再自动体检，直到 Runtime 重启；人来体检或恢复它，通过了就恢复可用",
     notice_fact_share_reached: "实例的事实快满了",
     notice_fact_share_reached_detail: "这个实例自己的事实已到上限的八成；上限放不下新键时，带新键的事实会被拒收，只更新已有键的照常收下",
+    notice_entry_awaiting_person: "任务老进不了入口，等人处理",
+    notice_entry_awaiting_person_detail: "这个实例上的任务一直进不了入口，中间没有任务跑进去，已到设置的提醒时限；请把游戏切回认得的画面，再在这个实例上跑一个任务，或者暂停再恢复它；带原因码时，它是最近一次进不了入口的原因",
+    notice_entry_recovery_failed: "进不了入口，自动恢复没成功",
+    notice_entry_recovery_exhausted_detail: "这个实例的任务进不了入口，Runtime 为它做的恢复走完了也没恢复；它会过一阵自己再试，间隔越来越长；带原因码时，它是进不了入口的原因",
+    notice_entry_recovery_update_detail: "这个实例的任务进不了入口，恢复途中游戏弹出了更新提示；在任务重新跑进去之前不再自动恢复，要先更新游戏（有商店更新任务的会自己去做）；带原因码时，它是进不了入口的原因",
+    notice_entry_recovery_panicked_detail: "这个实例的任务进不了入口，做恢复的程序自己出了错；这一次不再自动恢复，请看一下这个实例；带原因码时，它是进不了入口的原因",
+    notice_entry_recovery_failed_detail: "这个实例的任务进不了入口，Runtime 为它做的一次恢复没成功；带原因码时，它是进不了入口的原因",
+    notice_entry_task_set_aside: "一个任务老进不了入口，这个时段先放下",
+    notice_entry_task_set_aside_detail: "这个实例上有一个任务，别的任务能跑进去，它却一再进不了入口，已到它的失败门槛；这个时段结束前不再安排它，其他任务照常；修好它的任务包再放上去，就会马上重新安排；带原因码时，它是进不了入口的原因",
     account_pause_watching: "还没收到确认，正在看它立住没有…",
     account_pause_late: "确认得晚：这个实例已暂停调度",
     account_pause_not_held: "这次暂停没有立住：现在这个实例没有暂停，可以再按一次",
@@ -2817,6 +2854,10 @@ pub const ZH: Labels = Labels {
     card_why_dependency_wait: "等前面的任务再完成一次",
     card_why_within_tolerance: "收获和花费差不多，先不安排",
     card_why_budget: "按标准包规则，本时段暂不安排",
+    card_why_entry_blocked: "有任务进不了入口，等它恢复",
+    card_why_entry_retry_wait: "这个任务没进去入口，过一会儿再试",
+    card_why_entry_set_aside: "这个任务老进不了入口，本时段先放下",
+    card_why_waking: "正在叫醒模拟器来跑它",
     card_why_reason_missing: "原因没写明（程序的问题，已记入日志）",
     card_why_unlisted: "现在不安排",
     tasks_tab: "日常任务",
@@ -3888,6 +3929,15 @@ pub const EN: Labels = Labels {
     notice_probes_stopped_detail: "The Runtime's automatic check itself failed with an internal error, so this instance gets no more automatic checks in this unavailability until the Runtime restarts; a check or resume by a person that passes makes it available again",
     notice_fact_share_reached: "Instance Facts Nearly Full",
     notice_fact_share_reached_detail: "This instance's own facts have reached four fifths of their limit; facts bringing new keys the limit has no room for are refused, while those only updating keys it already holds are still taken",
+    notice_entry_awaiting_person: "Tasks Keep Failing to Get In, Needs a Person",
+    notice_entry_awaiting_person_detail: "Tasks on this instance have kept failing to get in, with none getting in between, for the configured reminder time; bring the game to a known screen, then run a task on the instance, or pause and resume it; a cause code, when given, is why the latest one could not get in",
+    notice_entry_recovery_failed: "Could Not Get In, Automatic Recovery Did Not Help",
+    notice_entry_recovery_exhausted_detail: "Tasks on this instance could not get in, and the Runtime's recovery for it ran out without recovering; it tries again by itself, on a growing interval; a cause code, when given, is why they could not get in",
+    notice_entry_recovery_update_detail: "Tasks on this instance could not get in, and the game asked for an update during the recovery; no more automatic recovery is tried until a task gets in again, so the game must be updated first (a store update task does it where there is one); a cause code, when given, is why they could not get in",
+    notice_entry_recovery_panicked_detail: "Tasks on this instance could not get in, and the worker doing the recovery failed with an internal error; no more automatic recovery is tried this time, so please look at the instance; a cause code, when given, is why they could not get in",
+    notice_entry_recovery_failed_detail: "Tasks on this instance could not get in, and one of the Runtime's recoveries for it did not recover; a cause code, when given, is why they could not get in",
+    notice_entry_task_set_aside: "A Task Keeps Failing to Get In, Set Aside for Now",
+    notice_entry_task_set_aside_detail: "A task on this instance keeps failing to get in while other tasks get in, and reached its failure threshold; it is not scheduled again before its activity window ends, and the other tasks go on; placing its mended package schedules it again at once; a cause code, when given, is why it could not get in",
     account_pause_watching: "Not confirmed yet: watching whether the pause took hold…",
     account_pause_late: "Confirmed late: this instance's scheduling is paused",
     account_pause_not_held: "This pause did not take hold: this instance is not paused now. You can press it again",
@@ -4194,6 +4244,10 @@ pub const EN: Labels = Labels {
     card_why_dependency_wait: "Waiting for the task before it to finish once more",
     card_why_within_tolerance: "What it gains and what it costs are about even; not scheduled for now",
     card_why_budget: "By the standard pack's rules, not scheduled in this period for now",
+    card_why_entry_blocked: "A task could not get in; waiting for the recovery",
+    card_why_entry_retry_wait: "This task could not get in; it tries again in a while",
+    card_why_entry_set_aside: "This task keeps failing to get in; set aside for this period",
+    card_why_waking: "Waking the emulator to run it",
     card_why_reason_missing: "No reason was given (a program problem; written to the log)",
     card_why_unlisted: "Not scheduled right now",
     tasks_tab: "Daily Tasks",

@@ -4855,6 +4855,10 @@ fn reason_words(ui: &Ui, labels: &Labels, class: ReasonClass, why: &str) -> Stri
         ReasonClass::DependencyWait => labels.card_why_dependency_wait,
         ReasonClass::WithinTolerance => labels.card_why_within_tolerance,
         ReasonClass::Budget => labels.card_why_budget,
+        ReasonClass::EntryBlocked => labels.card_why_entry_blocked,
+        ReasonClass::EntryRetryWait => labels.card_why_entry_retry_wait,
+        ReasonClass::EntrySetAside => labels.card_why_entry_set_aside,
+        ReasonClass::Waking => labels.card_why_waking,
         ReasonClass::ReasonMissing => {
             let line = format!("the Runtime gave a decision no reason: {why}");
             if ui.model.borrow_mut().first_told(&line) {

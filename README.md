@@ -30,15 +30,15 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now Runtime v0.12.76 (`f6e2cd26`), a release.
+  of Runtime v0.12.47; the pin is now Runtime v0.12.77 (`3285143f`), a release.
 - **Works with the 0.12 Runtime from v0.12.73 on**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
-  `runtime-client` [12, 14] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73, v0.12.74, v0.12.75
-  and v0.12.76: each declares a `ledger` maximum within [3, 9] and an `actingd-config` and a
-  `runtime-client` range that meet the console's (`runtime-client` [3, 12], [3, 12], [12, 13] and
-  [12, 14]; `actingd-config` [5, 33], [5, 34], [5, 34] and [5, 35]; see "Data source"). Its
+  `runtime-client` [12, 14] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73, v0.12.74, v0.12.75,
+  v0.12.76 and v0.12.77: each declares a `ledger` maximum within [3, 9] and an `actingd-config` and a
+  `runtime-client` range that meet the console's (`runtime-client` [3, 12], [3, 12], [12, 13], [12, 14]
+  and [12, 14]; `actingd-config` [5, 33], [5, 34], [5, 34], [5, 35] and [5, 35]; see "Data source"). Its
   `runtime-client` starts at 12 because every pause it sends carries the request member `pause_mode` of
   revision 12, and ends at 14 because the contract crate it is built on reads revision 14: the status
-  member `unavailable`, which Runtime v0.12.76 answers for no instance. Revision 13 before it is the
+  member `unavailable`, which Runtime v0.12.76 and v0.12.77 answer for no instance. Revision 13 before it is the
   capture backend `acib_screen_capture` of an iOS handset's read-only observation, and the frame reduced
   to the base of a display within a pixel of the base's shape. It does
   not fit v0.12.72 or earlier, which declare `runtime-client` at most 11: such a Runtime cannot decode a
@@ -49,7 +49,8 @@ and guesses nothing.
   console to one that reads 12 before the Runtime goes to v0.12.75. A console pinned to v0.12.73 or v0.12.74 (UI
   v0.12.25, v0.12.26) keeps working with v0.12.75, all but an iOS handset's observation and the
   projection of a display of such a size; before an iOS handset is configured, every console must be one
-  of revision 13 or later, as this one is. A console pinned to v0.12.75 needs no new pin for v0.12.76.
+  of revision 13 or later, as this one is. A console pinned to v0.12.75 needs no new pin for v0.12.76,
+  nor one pinned to v0.12.76 for v0.12.77, which moves no range.
   The release whose Runtime first answers `unavailable` raises the `min` of `runtime-client` to 14:
   before it, every console must speak 14, as this one does. From v0.12.68 a game root carries
   `pack-catalog.json` in place of `ui.json` (see "Data source"): the setup wizard lays `pack-catalog.json` and
@@ -263,8 +264,32 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.76 (`f6e2cd26`), a
-release, published as a pre-release. Against v0.12.75 (`945727d4`), the pin before, v0.12.76 moves three
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.77 (`3285143f`), a
+release, published as a pre-release. Against v0.12.76 (`f6e2cd26`), the pin before, v0.12.77 moves no
+range: `runtime-client` [12, 14], `actingd-config` [5, 35], `package` [3, 21], `ledger` [3, 9],
+`install-control` [0, 0] and `runtime-outcomes` [1, 1] stay, and so do the console's ranges. No Cargo.toml
+or Cargo.lock of the Runtime changed, so both locks change only in the rev. Of the Runtime crates the
+console links, only two changed: the contract crate adds two outcome keys, `entry_recovery_end` (a
+vocabulary, kept in the public projection) and `trigger_rule` (a name, which it drops), and rewords two
+comments of the goal check's walk; runtime-config adds `LadderConfig::classify_unexcluded`. The policy
+crate, which runtime-client depends on and the console does not call, now judges an asleep instance's
+candidates and no longer marks a task that can do something irreversible. Those touch nothing the
+console builds, matches or implements. In the outcome-code catalog it embeds, v0.12.77 adds
+nine codes, two locations (`instance_entry_block`, `take_up_entry_recoveries`) and the vocabulary
+`entry_recovery_end` (3 words), and retires one code, `resource_target_package_irreversible`, which the
+console never named; no new name is `console_` or `setup_`. Of the nine, four are reasons a candidate is
+not dispatched, which an instance card and the daily task list now say in words of their own:
+`instance_entry_blocked` (a run on the instance failed at its entry, and the instance waits for its
+recovery), `instance_entry_task_waiting` (this task failed at its entry and is tried again later, its
+earliest time shown), `instance_entry_task_set_aside` (it keeps failing at its entry while other tasks
+get in, so it is set aside until its activity window ends, in amber) and `instance_asleep_wake_due` (the
+emulator its idle action stopped is being woken for the task). Three are `runtime.failed` warnings of an
+entry-blocked instance, which the ledger window now names (see "Launcher", "An entry-blocked
+instance"). The other two keep the words every code of their category has: `instance_idle_stop_withheld`
+(a `device_state_observed` warning: a wake started the emulator and no run was admitted since, so the
+idle check does not stop it again) and `recovery_rung_skipped_emulator_restarted_in_stretch` (the
+outcome of a recovery rung skipped because the emulator was restarted already in the stretch). The pin
+before, v0.12.76 (`f6e2cd26`), against v0.12.75 (`945727d4`): v0.12.76 moves three
 ranges and no lower end: `runtime-client` from [12, 13] to [12, 14], `actingd-config` from [5, 34] to
 [5, 35] and `package` from [3, 20] to [3, 21]; `ledger` [3, 9], `install-control` [0, 0] and
 `runtime-outcomes` [1, 1] stay. The console's `runtime-client` moves to [12, 14]: the contract crate it is
@@ -652,7 +677,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 14, ledger revision 9):
 
 ```
-rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd"
+rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0"
 ```
 
 The seven crates (contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -988,7 +1013,7 @@ v0.12.74 on, `device.system: "ios"`) names no backend, so it has no such group; 
 come from `<root>\tools\acib.exe`, which is no setting either. Apply switches that instance at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.76, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.77, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1940,7 +1965,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.76
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.77
   has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). The pinned Runtime also sets it on such an entry that start found held by a
   pause of another reason, when that pause is released while the Runtime runs (a person's resume from
@@ -2042,6 +2067,24 @@ through or was stopped.
   when the next check is due. The three warnings are in
   the Errors tab too. The status member `unavailable` (revision 14) the console decodes but does not show
   yet: that is a later slice (#489).
+- **An entry-blocked instance (ledger window)**: from Runtime v0.12.77 three more kinds of
+  `runtime.failed` record under an instance, all warnings, get the console's own words the same way. They
+  come of runs that fail at their entry, the game left on a screen no package knows: the instance is
+  blocked, its candidates wait, and the Runtime recovers it by itself.
+  `instance_entry_blocked_awaiting_person`, "Tasks Keep Failing to Get In, Needs a Person": tasks on the
+  instance have kept failing to get in, with none getting in between, for the configured reminder time;
+  bring the game to a known screen, then run a task on the instance, or pause and resume it.
+  `instance_entry_blocked_recovery_failed`, "Could Not Get In, Automatic Recovery Did Not Help", whose
+  detail says how the recovery ended by the record's `entry_recovery_end`: it ran out (`exhausted`) and
+  is tried again by itself on a growing interval; the game asked for an update (`update_dialog`), so no
+  more recovery is tried until a task gets in again, and the game must be updated first; or the worker
+  doing it failed with an internal error (`worker_panicked`), so no more is tried this time.
+  `instance_entry_task_set_aside_reported`, "A Task Keeps Failing to Get In, Set Aside for Now": one task
+  keeps failing to get in while other tasks get in, and reached its failure threshold, so it is not
+  scheduled again before its activity window ends; placing its mended package schedules it again at once.
+  Each names the failure at the entry as its cause code when the record does. The public projection
+  keeps `operation`, `failure_code` and `entry_recovery_end` and drops the rest, so a row cannot say
+  which task, for how long, or when the next try is.
 
 ## Instance configuration
 
@@ -2075,7 +2118,7 @@ names), the `interfaces` of the console's and the Runtime's manifests as the Run
 `contracts/component-interfaces.md` checks them (`runtime-client` and `actingd-config` must overlap, the
 Runtime's highest `ledger` and `runtime-outcomes` revisions must lie in the console's range; this console
 declares `runtime-client` [12, 14], so a set whose Runtime declares at most 11, v0.12.72 or earlier, is
-refused, and v0.12.73 to v0.12.76 pass), and each
+refused, and v0.12.73 to v0.12.77 pass), and each
 standard pack's `bundle.json`, `applications.json`, `schedule.json` and `interfaces.json` (its `package`
 revision must lie within the range this Runtime declares). The vision files must carry ONNX Runtime's
 two files exactly as the Runtime pins them (`ort/onnxruntime.dll`, 17,328,152 bytes, SHA-256

@@ -75,7 +75,8 @@
 //! alone ([`answered`]): a version conflict (`current_version`), a Runtime without the write, the
 //! goal refused with its `goal_problem` word and the values that locate it, or another refusal.
 //!
-//! What the page says, all at the pinned Runtime (0.12.76, f6e2cd26;
+//! What the page says, all at the pinned Runtime (0.12.77, 3285143f, where neither goals file changed
+//! from 0.12.76;
 //! `contracts/runtime-interface.md`, "Goal request kinds";
 //! `crates/actingcommand-contract/src/runtime/goals.rs`):
 //!
