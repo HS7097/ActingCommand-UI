@@ -4616,6 +4616,10 @@ fn account_said_text(
                 ResumedDevice::PlayerHolds => {
                     (labels.account_resumed_player_hold.to_owned(), !informs)
                 }
+                // The emulator was off: nothing to connect yet, no failure.
+                ResumedDevice::EmulatorNotRunning => {
+                    (labels.account_resumed_emulator_off.to_owned(), false)
+                }
                 ResumedDevice::ReconnectFailed(code) => {
                     (coded(labels.account_resumed_device_failed, code), true)
                 }
@@ -4762,8 +4766,16 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
         Line::LadderHold => labels.card_ladder_hold.to_owned(),
         Line::ScheduleUnreadable => labels.card_schedule_unreadable.to_owned(),
         Line::Preparing => labels.card_preparing.to_owned(),
-        Line::Reason { class, why, wake } => {
+        Line::Reason { class, why, wake, task } => {
             let words = reason_words(ui, labels, *class, why);
+            // The task the reason is of, by its title, else its package's id, else its own id.
+            let words = match task {
+                Some(task) => {
+                    let name = row_task_name(ui, labels, task);
+                    fill(labels.card_why_of_task, &[&name, &words])
+                }
+                None => words,
+            };
             match wake {
                 Some(wake) => fill(labels.card_with_wake, &[&words, &format_minute(*wake)]),
                 None => words,
@@ -4790,6 +4802,17 @@ fn task_name(ui: &Ui, labels: &Labels, package: &Option<String>) -> String {
     match package {
         Some(package) => package_name(ui, labels, package),
         None => labels.card_task_unnamed.to_owned(),
+    }
+}
+
+/// A not-running row's task `task`, as the daily task list names its row: the package the newest
+/// `packs` answer puts the task to, by its name in the language shown or its id; while no answer
+/// puts it to one, the task's own id.
+fn row_task_name(ui: &Ui, labels: &Labels, task: &str) -> String {
+    let package = ui.model.borrow().package_of_task(task).map(str::to_owned);
+    match package {
+        Some(package) => package_name(ui, labels, &package),
+        None => task.to_owned(),
     }
 }
 

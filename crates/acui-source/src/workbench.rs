@@ -1616,6 +1616,10 @@ pub struct InstanceExplain {
     pub why: String,
     pub gap: Option<String>,
     pub hold: Option<String>,
+    /// The task of the row, its first due candidate's; none with no due row
+    /// (`due_task_missing`), which names the instance (contract `runtime/schedule_explanation.rs`
+    /// 97-109 at 3285143f).
+    pub task_id: Option<String>,
     /// That row's own wake in unix ms; with no due row (`due_task_missing`) the
     /// instance's earliest wake, which is the only one there is then.
     pub next_wake: Option<u64>,
@@ -2470,6 +2474,7 @@ fn instance_explain(entry: &ScheduleExplanationInstance) -> InstanceExplain {
         why: why.code().as_str().to_owned(),
         gap: reason_value(why, BENEFIT_GAP),
         hold: reason_value(why, POOL_LINE_HOLD),
+        task_id: entry.not_running.task_id.clone(),
         next_wake: entry.not_running.next_wake_unix_ms.or(entry.next_wake_unix_ms),
         preparing: entry.selected.as_ref().is_some_and(|selected| {
             match selected.dispatch_state {

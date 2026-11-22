@@ -2196,6 +2196,10 @@ fn resume_cause(outcome: &Outcome) -> Option<ResumeCause> {
 /// at 1067dfaf).
 const DISPATCH_PAUSED_INSTANCE: &str = "dispatch_paused_instance";
 const PLAYER_HOLD_ACTIVE: &str = "player_hold_active";
+/// The code of a self-check that saw no emulator process, or whose status read failed while the
+/// Runtime held the binding pending (runtime-host `codes.rs` 836 and `host/selfcheck_emulator.rs`
+/// 330-342 at 3285143f): the instance's emulator is not running, which is no failure of a resume.
+const INSTANCE_NOT_RUNNING: &str = "instance_not_running";
 
 /// What an instance resume says of the account's device: by the cause its receipt carries, which
 /// says why no reconnect ran and decides when it is one this console reads ([`ResumeCause`]); else
@@ -2222,6 +2226,10 @@ pub enum ResumedDevice<'a> {
     /// `player_hold_active`: a player holds the device, so the lift reconnected nothing, which
     /// the contract calls the expected, not a failure (`contracts/scheduling-pause.md` 806-817).
     PlayerHolds,
+    /// `instance_not_running`: the self-check saw no emulator running, so nothing connected. The
+    /// pause is lifted all the same, and the instance connects when its emulator runs: no failure
+    /// of the resume (the owner's ruling of 11-22, on a resume pressed while the emulator was off).
+    EmulatorNotRunning,
     /// Any other: the code of the reconnect's failing step.
     ReconnectFailed(&'a str),
 }
@@ -2239,6 +2247,7 @@ pub fn resumed_device<'a>(
         (_, None) => ResumedDevice::Fine,
         (_, Some(DISPATCH_PAUSED_INSTANCE)) => ResumedDevice::HeldAgain,
         (_, Some(PLAYER_HOLD_ACTIVE)) => ResumedDevice::PlayerHolds,
+        (_, Some(INSTANCE_NOT_RUNNING)) => ResumedDevice::EmulatorNotRunning,
         (_, Some(code)) => ResumedDevice::ReconnectFailed(code),
     }
 }
@@ -2552,6 +2561,20 @@ mod tests {
             ResumedDevice::HeldAgain
         );
         assert_eq!(resumed_device(None, Some("player_hold_active")), ResumedDevice::PlayerHolds);
+    }
+
+    #[test]
+    fn an_emulator_not_running_is_no_reconnect_failure() {
+        assert_eq!(
+            resumed_device(None, Some("instance_not_running")),
+            ResumedDevice::EmulatorNotRunning
+        );
+        // A cause that says why nothing reconnected still says it first.
+        let unquiet = ResumeCause::WithoutReconnect;
+        assert_eq!(
+            resumed_device(Some(&unquiet), Some("instance_not_running")),
+            ResumedDevice::WithoutReconnect
+        );
     }
 
     #[test]

@@ -1281,10 +1281,11 @@ impl Actions {
         // pause of the account whose answer said nothing.
         let thread = AccountWrite::Pause.thread();
         for (alias, slot) in &mut self.accounts {
-            let pause = instances
-                .iter()
-                .find(|instance| instance.alias == *alias)
-                .and_then(|instance| instance.pause.as_ref());
+            let live = instances.iter().find(|instance| instance.alias == *alias);
+            let pause = live.and_then(|instance| instance.pause.as_ref());
+            // What the instance does now, by the status's `activity`: the line of a resume that
+            // connected nothing is over once it starts its emulator or runs.
+            let doing = live.and_then(|instance| instance.activity.as_ref()).map(|now| now.kind);
             let seen = PauseSeen::of(pause, CONSOLE_PAUSE_ACCOUNT);
             // What this read says is in its way, for the log only; of a Runtime that answers the
             // mode (0.12.75 on), else none answered.
@@ -1342,6 +1343,12 @@ impl Actions {
                 Some(AccountSaid::Resumed { cause, device_failure }) => {
                     match resumed_device(cause.as_ref(), device_failure.as_deref()) {
                         ResumedDevice::HeldAgain => !paused,
+                        // Its emulator was off: over once the instance does anything, its
+                        // emulator's start or the startup run among them.
+                        ResumedDevice::EmulatorNotRunning => paused || doing.is_some(),
+                        // Its reconnect failed: over once a run is on the device, which connected
+                        // it after all.
+                        ResumedDevice::ReconnectFailed(_) => paused || doing.is_some_and(runs),
                         _ => paused,
                     }
                 }
@@ -2699,6 +2706,12 @@ fn unread_cause(cause: Option<&ResumeCause>) -> String {
     }
 }
 
+/// Whether an instance doing `kind` runs something on its device: a scheduled or direct run, or
+/// the Runtime's own (its startup flow among them), each of which needs the device connected.
+fn runs(kind: ActivityKind) -> bool {
+    matches!(kind, ActivityKind::PolicyRun | ActivityKind::DirectRun | ActivityKind::HostRun)
+}
+
 /// The code a refusal is known by: the host's own when the receipt names it, which
 /// is the one that says why; else the class, else the client's.
 fn refusal(failure: &ClientFailure) -> &str {
@@ -2880,6 +2893,13 @@ impl AccountWritten {
                         &format!(
                             "{prefix}: resumed at revision {revision}; a player holds the \
                              device, so nothing reconnected: player_hold_active{unread}"
+                        ),
+                    ),
+                    ResumedDevice::EmulatorNotRunning => report::log_quiet(
+                        thread,
+                        &format!(
+                            "{prefix}: resumed at revision {revision}; its emulator is not \
+                             running, so nothing connected: instance_not_running{unread}"
                         ),
                     ),
                     ResumedDevice::ReconnectFailed(code) => report::log(

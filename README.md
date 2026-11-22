@@ -985,8 +985,10 @@ The main window is the **workbench**. Its top bar has a lamp with the Runtime in
 "Troubleshooting and Ledger" button and, at its far end, Settings; under it is the plain-words result of
 the last press. Then one of two pages. The main page has two columns: the left one is for the instances,
 with an "Add Instance" button that is off (see "Instance configuration"); the right one has the
-settings file's problems, what falls short of the theme and where the technical log is. Settings switches
-to the settings page, where the same button reads "Back to Workbench": first those same lines, then the
+settings file's problems, what falls short of the theme and, only when it cannot be written, the
+technical log. Settings switches
+to the settings page, where the same button reads "Back to Workbench": first those same lines, with
+where the technical log is, then the
 Runtime's settings, then "Runtime" (Request Shutdown, "Start the Runtime again automatically") and
 "Appearance" (the text size, the language and the theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
 groups, "Everyday" and "Advanced": which keys show and in which group is the Runtime's own tiering, and the
@@ -1058,7 +1060,10 @@ package; where the dispatch stands while the task selected for the instance is o
 else the words of the package's first candidate row in the Runtime's own order, chosen by its reason
 code (a `benefit_unknown` by its `benefit_gap`, a `pool_line_held` by its `pool_line_hold`), with
 "(earliest hh:mm)" when that row has a wake, and under it the other sentences of its tasks once each. The
-instance cards say a reason in the same words. No reason code, count or scheduler number shows: a code
+instance cards say a reason in the same words, and when the reason is the task's own, not one of the
+instance or the Runtime that holds every task of it alike (its pause, its device, quiet hours, the host
+short of resources, an entry block), the task's name before it, "Mail: This task is closed", by the
+package the task runs as named here, else the task's id. No reason code, count or scheduler number shows: a code
 the console has no words for says "Not scheduled right now", and the technical log hears of it once.
 With that file the rows go by its groups and its order, the rest under "Other"; without one, by name.
 Which package a task runs comes from the `task_ids` of the same `actingctl packs` run the names come from:
@@ -1499,8 +1504,9 @@ are and which settings file is used, and in root mode one more line when the glo
 but not used, or used because it names this installation folder; these are no failures, and on their own
 they put no word of the log on the windows. A
 read face that does not open is no failed start: the ledger window stays and says why in its ledger area
-(see above). Once it exists, the top of every window says where it is; when it
-cannot be written, the windows say that instead.
+(see above). Once it exists, the settings page and the top of every ledger window say where it is,
+and the workbench's main page does not, which keeps that line out of the work area; when it cannot be
+written, every window says that instead, the main page too.
 
 ## Interface language, text size and theme
 
@@ -1844,7 +1850,12 @@ resume's self-check name no failed reconnect, and the card says what they mean, 
 category is not informing: `dispatch_paused_instance`, an instance added while the Runtime was stopped whose
 first-start pause was not applied yet, so the Runtime holds it again with that pause (`instance.added`) and
 the card says it is resumed but held again by it; and `player_hold_active`, a player holding the device, so
-nothing reconnected. What a press came to is said on the card: done (a resume done while a global pause holds adds that no task is scheduled for the
+nothing reconnected. A third, `instance_not_running`, says the emulator was off when the resume checked the
+device: the card says the instance's scheduling is resumed and that, its emulator not running, no device
+was connected this time, which is no failure and never red. That line goes by itself once the status shows
+the instance doing anything (its emulator's start or its startup flow among them); a line of a reconnect
+that failed goes once the status shows a run on the instance, which needed the device connected. What a
+press came to is said on the card: done (a resume done while a global pause holds adds that no task is scheduled for the
 instance until that one is lifted too); a pause that already holds, which keeps its reason; a refusal,
 in red, its code verbatim and the code's words (a fixture instance, for one, is refused with
 `fixture_execution_scope_forbidden`); or not confirmed, which is not sent again. While
@@ -2015,7 +2026,9 @@ through or was stopped.
   `dispatch_paused_instance` says that the instance, added while the Runtime was stopped, is held again by its
   first-start pause, and one naming `player_hold_active` that a player holds the device, so it was not
   connected again; each with the code and its words, in red only when the code's category is not
-  informing. Each line shows its pause's reason verbatim, whatever the operator wrote.
+  informing. One naming `instance_not_running` says that the emulator is not running, so no device was
+  connected this time, which is no failure, never in red. Each line shows its pause's reason verbatim,
+  whatever the operator wrote.
 - **A pause's life (ledger window)**: from Runtime v0.12.74 (#480 PG-2d) each moment of an instance
   pause's life that its answer and its stage do not tell is one `runtime.lifecycle_observed` record of
   phase `device_state_observed`, under the instance and the links of the pause's own request (an iOS
