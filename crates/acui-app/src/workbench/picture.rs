@@ -66,8 +66,10 @@ pub struct Pictures {
     generation: Arc<AtomicU64>,
     /// The account the thread was last told to follow, if any.
     sent: Option<Target>,
-    /// A person turned the recognition's boxes and the inputs' points off, for this run.
-    overlays_off: bool,
+    /// A person turned the recognition's boxes and the inputs' points on, for this run. Off until
+    /// then (the owner's ruling of 11-22: dozens of boxes on a loading screen's black read as a
+    /// broken picture); a person ticks it while looking into a run.
+    overlays_on: bool,
     /// How many refreshes were pressed this run: the last one's ticket.
     refreshes_issued: u64,
 }
@@ -520,11 +522,11 @@ impl Pictures {
 
     /// Whether the recognition's boxes and the inputs' points are drawn, as a person left it.
     pub fn overlays_on(&self) -> bool {
-        !self.overlays_off
+        self.overlays_on
     }
 
     pub fn set_overlays(&mut self, on: bool) {
-        self.overlays_off = !on;
+        self.overlays_on = on;
     }
 
     /// Following goes on: whether it had stopped short before, for the log.
@@ -873,7 +875,7 @@ impl Pictures {
             known.and_then(|known| newer(known, shown.frame.sequence))
         };
         let overlay = match &shown.overlay {
-            _ if self.overlays_off => OverlayView::Off,
+            _ if !self.overlays_on => OverlayView::Off,
             // Only a task recognizes, and only on a task's frame is anything drawn.
             _ if origin != Origin::Task => OverlayView::NotOnThisFrame,
             None => OverlayView::NotOnThisFrame,

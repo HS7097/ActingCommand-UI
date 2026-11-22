@@ -1824,6 +1824,15 @@ impl Model {
         self.told_codes.insert(line.to_owned())
     }
 
+    /// The package the newest `packs` answer puts `task` to, while it gave one
+    /// (`tasks::package_of`).
+    pub fn package_of_task(&self, task: &str) -> Option<&str> {
+        match &self.names {
+            Names::Ready { packs, .. } => packs.package_of(task),
+            Names::NotAsked | Names::Unreadable => None,
+        }
+    }
+
     /// `package`'s task name in `language`, when the names have one.
     pub fn task_title(&self, package: &str, language: Language) -> Option<&str> {
         match &self.names {

@@ -3537,7 +3537,7 @@ export component WorkbenchWindow inherits Window {
     in property <[TargetItem]> picture-targets;
     in property <[OverlayItem]> picture-points;
     in property <bool> picture-overlay-shown;
-    in-out property <bool> picture-overlays-on: true;
+    in-out property <bool> picture-overlays-on: false;
     in property <bool> picture-overlays-offered;
     in property <string> picture-hint;
     // Under all that, while an account's picture shows: its refresh's button, whether it can be
@@ -4171,10 +4171,12 @@ export component WorkbenchWindow inherits Window {
                                     padding-left: 12px;
                                     padding-right: 12px;
                                     spacing: 6px;
+                                    // Where the technical log is shows on the settings page and in
+                                    // the ledger window only; here, only that it cannot be written.
                                     WindowNotes {
                                         settings-errors: root.settings-errors;
                                         settings-warnings: root.settings-warnings;
-                                        log-note: root.log-note;
+                                        log-note: root.log-failed ? root.log-note : "";
                                         log-failed: root.log-failed;
                                     }
                                     // The three tabs (UI-3f1, Workflow #455), and whose picture, tasks

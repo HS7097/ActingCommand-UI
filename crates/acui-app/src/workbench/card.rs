@@ -283,6 +283,27 @@ impl ReasonClass {
         }
     }
 
+    /// Whether the reason is the row's task's own, so that a card names the task before it (the
+    /// owner's ruling of 11-22: "this task is closed" alone reads as if the whole instance were):
+    /// all but those of the instance or of the whole Runtime, which hold every task of it alike,
+    /// and the two that name no task.
+    pub(super) fn names_task(self) -> bool {
+        !matches!(
+            self,
+            Self::ControlGate
+                | Self::Held
+                | Self::Unavailable
+                | Self::DeviceBusy
+                | Self::Quiet
+                | Self::QuietSoon
+                | Self::HostShort
+                | Self::NoProfile
+                | Self::NoTask
+                | Self::EntryBlocked
+                | Self::ReasonMissing
+        )
+    }
+
     /// A person is the one to act, or is the reason: amber, on a card and on the task list.
     pub(super) fn band(self) -> Band {
         match self {
@@ -346,8 +367,10 @@ pub enum Line {
     /// A task is selected and its dispatch has not ended.
     Preparing,
     /// A not-running row: `why` is its code, with the value that chose its words
-    /// (`reason_logged`), for the log of an `Unlisted` one, and `wake` that row's own time.
-    Reason { class: ReasonClass, why: String, wake: Option<u64> },
+    /// (`reason_logged`), for the log of an `Unlisted` one, and `wake` that row's own time;
+    /// `task` the row's task when its reason is the task's own ([`ReasonClass::names_task`]),
+    /// which the card names before the reason.
+    Reason { class: ReasonClass, why: String, wake: Option<u64>, task: Option<String> },
     NotEvaluated,
     /// The latest evaluation decided nothing for this account.
     NotPlanned,
@@ -484,7 +507,8 @@ fn reason_line(row: &InstanceExplain) -> Line {
     let class = row_class(row);
     let wake = if class == ReasonClass::ControlGate { None } else { row.next_wake };
     let why = reason_logged(&row.why, row.gap.as_deref(), row.hold.as_deref());
-    Line::Reason { class, why, wake }
+    let task = row.task_id.clone().filter(|_| class.names_task());
+    Line::Reason { class, why, wake, task }
 }
 
 fn fence_line(fence: &FenceFact) -> Line {

@@ -488,6 +488,8 @@ fn outcome_text(labels: &Labels, scope: &str, outcome: &ResumeOutcome) -> (Strin
             let why = match device {
                 ResumedDevice::WithoutReconnect => Some(labels.resume_without_reconnect),
                 ResumedDevice::WithoutBackend => Some(labels.resume_without_backend),
+                // The emulator was off: nothing to connect yet, no failure.
+                ResumedDevice::EmulatorNotRunning => Some(labels.resume_emulator_off),
                 _ => None,
             };
             if let Some(why) = why {
@@ -507,6 +509,7 @@ fn outcome_text(labels: &Labels, scope: &str, outcome: &ResumeOutcome) -> (Strin
                 ResumedDevice::Fine
                 | ResumedDevice::WithoutReconnect
                 | ResumedDevice::WithoutBackend
+                | ResumedDevice::EmulatorNotRunning
                 | ResumedDevice::ReconnectFailed(_) => (labels.resume_device_failed, true),
             };
             text.push_str(&fill(template, &[&words]));
@@ -645,6 +648,9 @@ fn log_text(id: u64, target: &PauseTarget, outcome: &ResumeOutcome) -> String {
                 ResumedDevice::PlayerHolds => {
                     "a player holds the device, so nothing reconnected, player_hold_active"
                         .to_owned()
+                }
+                ResumedDevice::EmulatorNotRunning => {
+                    "nothing connected, its emulator not running, instance_not_running".to_owned()
                 }
                 ResumedDevice::ReconnectFailed(code) => format!("device failure {code}"),
             };
