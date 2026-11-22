@@ -111,6 +111,9 @@ LIMITED_MISSING = "limited_missing"  # bindings check: a bound consumer the mode
 LIMITED_INVALID = "limited_invalid"  # bindings check|apply: a bound rule's limited is not true
 LIMITED_WITHOUT_CONSUMES = "limited_without_consumes"  # a warning: limited by the model, no consumes; not written
 LIMITED_UNMODELLED = "limited_unmodelled"  # a warning: the rule says limited, the model does not; not removed
+# #466 W3 fix2 (the coordinator's reading of 11-22): a limit marks a value only when one run uses it up, so its `max`
+# must be one number; a limit whose `max` the run shows as none decides nothing.
+LIMITED_UNDECIDED = "limited_undecided"  # a warning: a limit counts the value, its max is no one number; nothing done
 # #466 W4a, the fixed values written by hand (`hand` of bindings.json), `bindings check --strict-values`, and the fixed
 # values the Runtime refuses beside another member of their rule. Each code is one reason.
 HAND_ALSO_BOUND = "hand_also_bound"  # a hand entry's rule is a value binding's too
@@ -242,6 +245,7 @@ EXIT_STATUS = {
     LIMITED_INVALID: 6,
     LIMITED_WITHOUT_CONSUMES: 0,
     LIMITED_UNMODELLED: 0,
+    LIMITED_UNDECIDED: 0,
     HAND_ALSO_BOUND: 1,
     HAND_DUPLICATE: 1,
     HAND_VALUE_MISSING: 6,

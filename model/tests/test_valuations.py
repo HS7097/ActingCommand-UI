@@ -844,18 +844,30 @@ MARKED = (
 )
 
 
-def limited_repo(folder: Path) -> Path:
-    """The fixture with two limits that count act.make: limit.make, its own, and limit.shared, of another activity and
-    shared with it. val.make (1600, pool.b its declared cost) and val.make.spent (2150) count act.make; val.a.day (2448)
-    counts a resource only, so it is never limited."""
+VAGUE = {  # an interval unknown: a limit whose max reads it shows a range, no one number
+    "id": "unk.vague", "kind": "interval", "question": "fixture", "interval": {"low": "3", "high": "4"},
+    "status": "provisional", "provenance": [{"kind": "pending_check", "ref": "fixture"}],
+}
+
+
+def limited_repo(folder: Path, most: str = "3", *, shared: bool = True, vague: bool = False) -> Path:
+    """The fixture with the limits that count act.make: limit.make, its own, `most` a day (3 unless given), and, unless
+    `shared` is false, limit.shared, of another activity and shared with it, one a day; with `vague`, limit.vague too,
+    whose max is the interval unknown unk.vague (3 to 4 a day). val.make (1600, pool.b its declared cost) and
+    val.make.spent (2150) count one execution of act.make a run (once a run; once a week over one run a week), so one
+    run uses up limit.shared (one a day) and limit.make only at one a day, never at three (#466 W3 fix2); val.a.day
+    (2448) counts a resource only, so it is never limited."""
     values_repo(folder, [MAKE, MAKE_SPENT, DAY_RUN])
 
     def add(doc: dict[str, Any]) -> None:
         doc["entities"].append(activity("act.other"))
-        doc["rules"].extend([
-            limit("limit.make", "act.make", "3", "day"),
-            limit("limit.shared", "act.other", "1", "day", shared_with=["act.make"]),
-        ])
+        doc["rules"].append(limit("limit.make", "act.make", most, "day"))
+        if shared:
+            doc["rules"].append(limit("limit.shared", "act.other", "1", "day", shared_with=["act.make"]))
+        if vague:
+            vague_limit = limit("limit.vague", "act.make", "unknown:unk.vague", "day")
+            doc["rules"].append({**vague_limit, "unknowns": ["unk.vague"]})
+            doc["unknowns"].append(VAGUE)
 
     edit(base(folder) / "rules" / "economy.json", add)
     write_prices(folder)  # of the model's versions now
@@ -866,12 +878,13 @@ def limited_repo(folder: Path) -> Path:
 def test_limited_is_written_on_a_consumer_and_only_reported_elsewhere_never_removed(tmp_path, acmodel):
     """rule.consumer declares `consumes` and the model counts its value as limited: `limited_missing`, and `apply` writes
     `"limited": true` right after the origin. rule.plain is limited too but consumes nothing: only reported. rule.marked
-    writes the mark while its value is not limited: only reported, never removed."""
+    writes the mark while its value is not limited: only reported, never removed. Only limit.shared, which one run uses
+    up, marks them; limit.make (three a day) leaves them repeatable (fix2)."""
     folder = limited_repo(tmp_path)
     path = folder / "schedule.json"
     path.write_bytes(one_line([CONSUMER.replace("@MARK@", ""), PLAIN, MARKED.replace("@LIMITED@", "true")]))
     where = str(path)
-    by = ["limit.make", "limit.shared"]
+    by = ["limit.shared"]
 
     def detail(index: int, value: str, rule_id: str, **values: Any) -> dict[str, Any]:
         return {"path": where, "entry": f"/bindings/{index}", "value": value, "rule_id": rule_id, **values}
@@ -902,6 +915,81 @@ def test_limited_is_written_on_a_consumer_and_only_reported_elsewhere_never_remo
     assert (status, doc["errors"], doc["warnings"]) == (0, [], reported)
     assert [(found["limited"], found["limited_by"]) for found in doc["data"]["bindings"]] == [
         (True, by), (True, by), (False, [])]
+
+
+@pytest.mark.parametrize(("most", "shared", "by"), [
+    ("3", False, []),  # one execution a run under three a day: repeatable, so nothing is marked
+    ("1", False, ["limit.make"]),  # one a day: one run uses it up
+    ("1", True, ["limit.make", "limit.shared"]),
+])
+def test_limited_marks_only_a_limit_one_run_uses_up(tmp_path, acmodel, most, shared, by):
+    """#466 W3 fix2 (the coordinator's reading of 11-22): limited is a task that, done once in the period, brings
+    nothing more if done again. One execution of act.make a run uses up a limit of one a day, never one of three a day;
+    a rule that no limit marks is repeatable, and the mark it writes is only reported."""
+    folder = limited_repo(tmp_path, most, shared=shared)
+    path = folder / "schedule.json"
+    path.write_bytes(one_line([CONSUMER.replace("@MARK@", ""), PLAIN, MARKED.replace("@LIMITED@", "true")]))
+
+    def found(entries: list[dict[str, Any]]) -> list[tuple[str, str, Any]]:
+        return [(entry["code"], entry["detail"]["rule_id"], entry["detail"].get("limited_by")) for entry in entries]
+
+    status, doc = bindings(acmodel, folder, "check")
+
+    reported = [("limited_without_consumes", "rule.plain", by)] if by else []
+    assert (status, found(doc["errors"]), found(doc["warnings"])) == (
+        6 if by else 0,
+        [("limited_missing", "rule.consumer", by)] if by else [],
+        [*reported, ("limited_unmodelled", "rule.marked", None)],
+    )
+
+    if by:
+        status, doc = bindings(acmodel, folder, "apply")
+
+        assert (status, doc["errors"]) == (0, [])
+
+        status, doc = bindings(acmodel, folder, "check")
+
+    assert (status, doc["errors"]) == (0, [])
+    shown = [(entry["limited"], entry["limited_by"], entry["limited_undecided"]) for entry in doc["data"]["bindings"]]
+    assert shown == [(bool(by), by, []), (bool(by), by, []), (False, [], [])]
+
+
+def test_a_limit_whose_max_is_no_one_number_decides_nothing(tmp_path, acmodel):
+    """limit.vague's max reads an interval unknown (3 to 4 a day), so whether one run uses it up is not known: the
+    warning `limited_undecided` on each rule whose value it counts, one a limit, and it writes or removes nothing;
+    limit.shared still marks them (fix2)."""
+    folder = limited_repo(tmp_path, vague=True)
+    path = folder / "schedule.json"
+    consumer = CONSUMER.replace("@MARK@", '"limited":true,')
+    path.write_bytes(one_line([consumer, PLAIN, MARKED.replace("@LIMITED@", "true")]))
+    before = path.read_bytes()
+    where = str(path)
+
+    def detail(index: int, value: str, rule_id: str, **values: Any) -> dict[str, Any]:
+        return {"path": where, "entry": f"/bindings/{index}", "value": value, "rule_id": rule_id, **values}
+
+    def undecided(index: int, value: str, rule_id: str) -> dict[str, Any]:
+        found = detail(index, value, rule_id, limit="limit.vague", reason="not_single")
+        return {"code": "limited_undecided", "detail": found, "ref": f"/rules/{index}"}
+
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["warnings"] == [
+        undecided(0, "val.make", "rule.consumer"),
+        {"code": "limited_without_consumes",
+         "detail": detail(1, "val.make.spent", "rule.plain", limited_by=["limit.shared"]), "ref": "/rules/1"},
+        undecided(1, "val.make.spent", "rule.plain"),
+        {"code": "limited_unmodelled", "detail": detail(2, "val.a.day", "rule.marked"), "ref": "/rules/2/limited"},
+    ]
+    vague = [{"limit": "limit.vague", "reason": "not_single"}]
+    assert [(entry["limited_by"], entry["limited_undecided"]) for entry in doc["data"]["bindings"]] == [
+        (["limit.shared"], vague), (["limit.shared"], vague), ([], [])]
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["errors"], doc["data"]["changed"]) == (0, [], [])
+    assert path.read_bytes() == before
 
 
 def test_limited_goes_in_with_the_origin_when_both_are_absent(tmp_path, acmodel):
