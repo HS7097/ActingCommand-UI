@@ -40,13 +40,13 @@ serde_json = "1"
 # through; setup shares the bundle contract and offline package qualifications. The display
 # adapter is the product's own conversion an effect intent's points are put on the device
 # frame by, for the picture and the ledger window alike; the console converts nothing itself.
-actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
-actingcommand-display-adapter = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
-actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
-actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
-actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
-actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
-actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "f6e2cd26ce3d3198dbffa9d69ca4bcdae57653fd" }
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0" }
+actingcommand-display-adapter = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0" }
+actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0" }
+actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0" }
+actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0" }
+actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding, and the console does decode: the capture
