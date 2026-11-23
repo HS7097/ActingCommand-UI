@@ -75,8 +75,9 @@
 //! alone ([`answered`]): a version conflict (`current_version`), a Runtime without the write, the
 //! goal refused with its `goal_problem` word and the values that locate it, or another refusal.
 //!
-//! What the page says, all at the pinned Runtime (0.12.77, 3285143f, where neither goals file changed
-//! from 0.12.76;
+//! What the page says, as read at Runtime 0.12.77 (3285143f, where neither goals file changed from
+//! 0.12.76; the pin is 0.12.81 now, 8923a701, whose page adds one reading, a variable each rule
+//! decides, `VariableLine::ruled`; the line numbers below are 3285143f's;
 //! `contracts/runtime-interface.md`, "Goal request kinds";
 //! `crates/actingcommand-contract/src/runtime/goals.rs`):
 //!
@@ -544,6 +545,14 @@ pub struct VariableLine {
     /// The value the next run reads, in words; for a variable not offered, the value stored under
     /// its name, which nothing reads; none when there is neither.
     pub value: Option<Shown>,
+    /// The rule of the task that runs decides the value: rules of the catalog's tasks bound on
+    /// the application carry values for the variable and no value stored applies, so the page
+    /// names no value, no source and no display (Runtime 0.12.81, Workflow #500 SV-2;
+    /// `contracts/package-variables.md` 688-695 and `contracts/runtime-interface.md` 644-650 at
+    /// 8923a701). Before 0.12.81 an offered variable always named what the next run reads, a
+    /// value not applied the default with a word (`runtime-interface.md` 638-642), so a line with
+    /// neither is this one. A value set that applies decides again, and the line is as before.
+    pub ruled: bool,
     /// The pack's default, while a value set is in effect instead.
     pub default: Option<Shown>,
     /// Who set the value stored under its name, when one is.
@@ -1553,6 +1562,11 @@ fn variable_line(entry: &GoalViewEntry, shared: bool, tongue: Tongue) -> Variabl
         }
         Some(GoalValueSource::Default) | None => None,
     };
+    // Each rule's own value decides (0.12.81): an offered variable whose next run's value the page
+    // does not name, nor where it comes from.
+    let ruled = !matches!(state, VariableState::NotOffered)
+        && entry.effective_json.is_none()
+        && entry.source.is_none();
     let gone = match (&declaration, &state, entry.value_json.as_deref()) {
         (Declared::Ordered(rule), VariableState::NotApplied { .. }, Some(json)) => {
             gone_keys(rule, json)
@@ -1563,6 +1577,7 @@ fn variable_line(entry: &GoalViewEntry, shared: bool, tongue: Tongue) -> Variabl
         name: entry.name.clone(),
         title,
         value,
+        ruled,
         default,
         set: entry.set.as_ref().map(set_by),
         state,
@@ -2397,14 +2412,24 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
         }
         // A value stored that the next run does not take is lost as another is set: asked.
         (GoalLine::Variable(line), GoalAct::Pick(index)) if line.settable() => {
-            let ValueControl::Choice { options, chosen } = &line.control else {
-                return None;
+            let json = match &line.control {
+                ValueControl::Choice { options, chosen } => {
+                    let option = options.get(*index)?;
+                    if chosen.as_deref() == Some(option.value.as_str()) {
+                        return None;
+                    }
+                    choice_json(&option.value)
+                }
+                // A switch with no value the next run reads (each rule's own decides, 0.12.81)
+                // is drawn as its two segments, on then off, neither picked: either sets.
+                ValueControl::Switch { on: None } => match index {
+                    0 => switch_json(true),
+                    1 => switch_json(false),
+                    _ => return None,
+                },
+                _ => return None,
             };
-            let option = options.get(*index)?;
-            if chosen.as_deref() == Some(option.value.as_str()) {
-                return None;
-            }
-            let write = GoalWrite::set(&line.name, choice_json(&option.value));
+            let write = GoalWrite::set(&line.name, json);
             Some(Press { write, asks: line.unused().cloned().map(Loses::Replaced) })
         }
         (GoalLine::Variable(line), GoalAct::Switch(on)) if line.settable() => {
@@ -3045,6 +3070,7 @@ mod tests {
             name: name.to_owned(),
             title: Some(title.to_owned()),
             value: Some(Shown::Switch(false)),
+            ruled: false,
             default: None,
             set: None,
             state: VariableState::InEffect,
@@ -3190,6 +3216,7 @@ mod tests {
                     name: "pick".to_owned(),
                     title: Some("Item".to_owned()),
                     value: Some(Shown::Words("Item A".to_owned())),
+                    ruled: false,
                     default: Some(Shown::Words("Item B".to_owned())),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Console }),
                     state: VariableState::InEffect,
@@ -3531,6 +3558,7 @@ mod tests {
                     name: "rounds".to_owned(),
                     title: Some("Rounds".to_owned()),
                     value: Some(Shown::Number(0)),
+                    ruled: false,
                     default: None,
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Mcp }),
                     state: VariableState::NotApplied {
@@ -3550,6 +3578,7 @@ mod tests {
                     name: "extra".to_owned(),
                     title: Some("Also the extra".to_owned()),
                     value: Some(Shown::Switch(false)),
+                    ruled: false,
                     default: None,
                     set: None,
                     state: VariableState::NotApplied {
@@ -3566,6 +3595,7 @@ mod tests {
                     name: "later".to_owned(),
                     title: Some("Later".to_owned()),
                     value: Some(Shown::Switch(false)),
+                    ruled: false,
                     default: None,
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Console }),
                     state: VariableState::NotApplied {
@@ -3582,6 +3612,7 @@ mod tests {
                     name: "route".to_owned(),
                     title: Some("Item".to_owned()),
                     value: Some(Shown::Words("Item A".to_owned())),
+                    ruled: false,
                     default: None,
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::CommandLine }),
                     state: VariableState::NotOffered,
@@ -3597,6 +3628,7 @@ mod tests {
                     name: "order".to_owned(),
                     title: Some("Order".to_owned()),
                     value: Some(Shown::List(vec!["Item A".to_owned()])),
+                    ruled: false,
                     default: Some(Shown::List(vec!["Item B".to_owned(), "Item A".to_owned()])),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Mcp)) }),
                     state: VariableState::InEffect,
@@ -4168,6 +4200,7 @@ mod tests {
                     name: "wait".to_owned(),
                     title: Some("Rounds".to_owned()),
                     value: Some(Shown::Time { amount: 90, unit: TimeUnit::Minute }),
+                    ruled: false,
                     default: Some(Shown::Time { amount: 1500, unit: TimeUnit::Millisecond }),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Rescue)) }),
                     state: VariableState::InEffect,
@@ -4188,6 +4221,7 @@ mod tests {
                     name: "count".to_owned(),
                     title: Some("Rounds".to_owned()),
                     value: Some(Shown::Words("3 rounds".to_owned())),
+                    ruled: false,
                     default: Some(Shown::Words("0 rounds".to_owned())),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Watchdog)) }),
                     state: VariableState::InEffect,
@@ -4605,6 +4639,80 @@ mod tests {
         ] {
             assert_eq!(amount(text), expected, "{text:?}");
         }
+    }
+
+    #[test]
+    fn a_variable_each_rule_decides_names_no_value_and_either_switch_segment_sets_it() {
+        // Runtime 0.12.81 (Workflow #500 SV-2): rules of the bound tasks carry values for it, and no
+        // value stored applies, so the page names no value, source or display; a value stored and
+        // not applied keeps its state and word. A value that applies, and a placement not offered,
+        // are as before.
+        let view = view(
+            state("accepted"),
+            json!([
+                variable("hard", true, switch("hard", "Hard"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "state": "in_effect",
+                })),
+                variable("stage", true, choice("stage"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "value_json": "\"item_z\"",
+                    "state": "not_applied",
+                    "variable_problem": "not_an_option",
+                })),
+                variable("extra", true, switch("extra", "Extra"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "value_json": "true",
+                    "effective_json": "true",
+                    "source": "set",
+                    "state": "in_effect",
+                })),
+                {
+                    "name": "route",
+                    "entry_type": "variable",
+                    "placed": true,
+                    "entry": {"name": "route", "type": "variable"},
+                    "variable": choice("route"),
+                    "unbound_packages": ["pack.b"],
+                    "value_json": "\"item_a\"",
+                    "state": "not_offered",
+                },
+            ]),
+            json!({}),
+            targets(json!([]), json!([]), None),
+        );
+        let page = read(&view);
+        let line = |key: &str| match page.line(key) {
+            Some(GoalLine::Variable(line)) => line.clone(),
+            other => panic!("{key}: {other:?}"),
+        };
+        let hard = line("variable:hard");
+        assert!(hard.ruled);
+        assert_eq!((hard.value.clone(), hard.default.clone()), (None, None));
+        assert_eq!(hard.control, ValueControl::Switch { on: None });
+        let stage = line("variable:stage");
+        assert!(stage.ruled);
+        assert!(matches!(stage.state, VariableState::NotApplied { stored: Some(_), .. }));
+        assert_eq!(stage.value, None);
+        assert!(!line("variable:extra").ruled);
+        assert!(!line("variable:route").ruled);
+
+        let set_of = |name: &str, json: &str| GoalWrite {
+            name: name.to_owned(),
+            change: GoalChange::Set(json.to_owned()),
+        };
+        // Drawn as two segments, on then off, neither picked: either sets; nothing past them.
+        assert_eq!(press(&GoalLine::Variable(hard.clone()), &GoalAct::Pick(0)), Some(Press {
+            write: set_of("hard", "true"),
+            asks: None,
+        }));
+        assert_eq!(press(&GoalLine::Variable(hard.clone()), &GoalAct::Pick(1)), Some(Press {
+            write: set_of("hard", "false"),
+            asks: None,
+        }));
+        assert_eq!(press(&GoalLine::Variable(hard.clone()), &GoalAct::Pick(2)), None);
+        // A switch with a value is a switch: a segment's pick is no press of it.
+        assert_eq!(press(&GoalLine::Variable(line("variable:extra")), &GoalAct::Pick(0)), None);
     }
 
     /// A page to press on: resource entries with a goal this console set, one set elsewhere that
