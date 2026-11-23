@@ -290,6 +290,22 @@ def _single(shown: dict[str, Any]) -> Fraction | None:
     return None if value is None or isinstance(value, bool) else Fraction(value)
 
 
+def rule_number(run: Run, rule_id: str) -> tuple[Fraction | None, str | None]:
+    """#466 W3 fix2: the one number `rule:<id>` reads (a limit's `max`, for the limited mark of `bindings check|apply`)
+    as the run shows it, whatever its status: whether one run uses a limit up is answered by a provisional number as by
+    a confirmed one. None, with why, when it gives none: `blocked`, `per_account` (it read the account state, so it is
+    no one number for every account) or `not_single` (more than one, or a range)."""
+    output = RULE + rule_id
+    shown = output_result(run, output)
+    if shown["status"] == BLOCKED:
+        return None, "blocked"
+    document = assemble(run, output)
+    if shown["per_account"] or any(node["node"] in STATE_NODES for node in document["nodes"].values()):
+        return None, "per_account"
+    number = _single(shown)
+    return (None, "not_single") if number is None else (number, None)
+
+
 def _expected(run: Run, nodes: dict[str, dict[str, Any]]) -> bool:
     """Whether a quantity is an expected value: it read a random rule (a drop's chance, a pity chain's expected pulls) or
     a derive with an `estimate` (formats.md, "Declared zeros and estimates")."""
@@ -325,6 +341,9 @@ class Valued:
     nodes: dict[str, dict[str, Any]] = field(default_factory=dict)  # the provenance nodes of what it read
     roots: list[str] = field(default_factory=list)  # the outputs and flow amounts it read, and the prices
     priced: list[str] = field(default_factory=list)  # the pools whose entry of prices.json it read (pending ones too)
+    # #466 W3 fix2: each activity's executions in one run of the rule (its terms' times per run, summed), which the
+    # limited mark of `bindings check|apply` compares with a limit's `max`.
+    executions: dict[str, Fraction] = field(default_factory=dict)
 
     @property
     def ref(self) -> str:
@@ -504,6 +523,8 @@ class _Evaluation:
             if times is None or parts is None:
                 complete = False
                 continue
+            executed = times.number * factor
+            valued.executions[term["activity"]] = valued.executions.get(term["activity"], Fraction(0)) + executed
             for pool, amount_of, expected in parts:
                 self.add(pool, amount_of * times.number * factor, expected or times.expected)
         if valued.refusals:

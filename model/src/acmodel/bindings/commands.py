@@ -26,9 +26,15 @@ value's `cost_paid_by_pool` (`value_consumes_mismatch`); and `schedule.json`'s `
 member a rule lacks (the fixed value after `package_id`, the origin after the fixed value; `splice`), each in the style of
 the member it follows (`insert_style_unknown` when there is none to copy). It never removes a member.
 
-**The limited mark** (#466 W3). A value binding whose value counts an activity that a `limit` rule of the model counts (its
-subject, or one it is `shared_with`) is limited: on a rule that declares `consumes`, `apply` writes `"limited": true`
-right after the origin (`limited_missing` until then). A limited value on a rule without `consumes` is only reported
+**The limited mark** (#466 W3; fix2, the coordinator's reading of 11-22: limited is a task that, done once in the
+period, brings nothing more if done again). A value binding is limited when one run of its rule uses up a `limit` rule
+of the model: the run's executions of the activities that limit counts (its subject, or one it is `shared_with`; each
+the value's terms' times per run, `export values`' `executions`) add up to at least the limit's `max`. A limit one run
+does not use up (three a day, one execution a run) leaves the rule repeatable, and an income cap never marks it (a
+weekly or monthly cap one run cannot fill is repeatable; the tool does not judge a cap). A limit whose `max` is not one
+number the run shows (blocked, per account, a range) decides nothing: the warning `limited_undecided`, and no mark is
+written or removed for it. On a rule that declares `consumes`, `apply` writes `"limited": true` right after the origin
+(`limited_missing` until then). A limited value on a rule without `consumes` is only reported
 (`limited_without_consumes`), and so is a rule's mark the model does not hold (`limited_unmodelled`): never written, never
 removed. A mark that is not `true` is `limited_invalid`, which `apply` refuses and never rewrites.
 
@@ -93,8 +99,9 @@ is the export's. Without the file it is null; a file of other versions of the mo
 whether `out/values.json` is of the current inputs (`data.values`; the warning `values_stale` otherwise, #464 W1), and
 `out/valuations.json` (`data.valuations`; `valuations_stale`, #466 W3).
 
-The warnings `precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three `held_fixed_value_beside_…` and
-`held_hand_value_out_of_range` are reported with the errors too, when there are any; `prices_stale`, `values_stale`
+The warnings `precision_low`, `limited_without_consumes`, `limited_unmodelled`, `limited_undecided`, the three
+`held_fixed_value_beside_…` and `held_hand_value_out_of_range` are reported with the errors too, when there are any;
+`prices_stale`, `values_stale`
 and `valuations_stale` only when there are none (the files are read after the bindings check).
 """
 
@@ -105,7 +112,7 @@ import json
 import os
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator
+from typing import Any, BinaryIO, Iterable, Iterator
 
 from acmodel.bindings import defaults, splice
 from acmodel.bindings.scanner import MISSING, parent, resolve, tokens
@@ -150,6 +157,7 @@ from acmodel.codes import (
     INSERT_STYLE_UNKNOWN,
     LIMITED_INVALID,
     LIMITED_MISSING,
+    LIMITED_UNDECIDED,
     LIMITED_UNMODELLED,
     LIMITED_WITHOUT_CONSUMES,
     MODEL_ID_DUPLICATE,
@@ -413,15 +421,32 @@ def _valuated(
     return weighed, errors
 
 
-def _limits(run: Run) -> dict[str, list[str]]:
+class _Limits:
     """The `limit` rules of the model (#466 W3) that count each activity's runs, by activity: a limit counts its subject
-    and the activities it is `shared_with`, as the economy counts them."""
-    checker, found = run.checker, {}
-    for rule in checker.rules:
-        if checker.active(rule) and rule.kind == "limit":
-            for activity in (rule.doc["subject"], *rule.doc["logic"].get("shared_with", ())):
-                found.setdefault(activity, []).append(rule.id)
-    return found
+    and the activities it is `shared_with`, as the economy counts them. Fix2: each limit's `max`, as the run shows it
+    (`value_export.rule_number`), is read once, when a bound value first meets the limit."""
+
+    def __init__(self, run: Run) -> None:
+        self.run = run
+        self.by_activity: dict[str, list[tuple[str, frozenset[str]]]] = {}
+        self.read: dict[str, tuple[Fraction | None, str | None]] = {}
+        checker = run.checker
+        for rule in checker.rules:
+            if checker.active(rule) and rule.kind == "limit":
+                counts = frozenset((rule.doc["subject"], *rule.doc["logic"].get("shared_with", ())))
+                for activity in sorted(counts):
+                    self.by_activity.setdefault(activity, []).append((rule.id, counts))
+
+    def counting(self, activities: Iterable[str]) -> dict[str, frozenset[str]]:
+        """The limits that count any of `activities`, each with every activity it counts."""
+        return {rule_id: counts for activity in activities for rule_id, counts in self.by_activity.get(activity, ())}
+
+    def most(self, rule_id: str) -> tuple[Fraction | None, str | None]:
+        """The limit's `max`, one number, or None with why it decides nothing (`blocked`, `per_account` or
+        `not_single`)."""
+        if rule_id not in self.read:
+            self.read[rule_id] = value_export.rule_number(self.run, rule_id)
+        return self.read[rule_id]
 
 
 def _held(schedule: Target | None) -> frozenset[str]:
@@ -576,8 +601,7 @@ class _ValuePlan:
     conflicts of a held rule); the edits that write the differences, and the members they insert."""
 
     def __init__(
-        self, literal: _Literal, valued: value_export.Valued, layouts: _Layouts, limits: dict[str, list[str]],
-        held: frozenset[str],
+        self, literal: _Literal, valued: value_export.Valued, layouts: _Layouts, limits: _Limits, held: frozenset[str],
     ) -> None:
         self.literal, self.valued = literal, valued
         self.problems: list[dict[str, Any]] = []
@@ -587,9 +611,18 @@ class _ValuePlan:
         self.inserted: list[str] = []
         self.rule_ref: str | None = None if literal.ref is None else parent(literal.ref)
         self.origin: Any = MISSING
-        # #466 W3: the limit rules that count an activity of the value (a resource's term shows no activity).
-        activities = [term["activity"] for term in valued.definition["terms"] if "activity" in term]
-        self.limited_by = sorted({rule for activity in activities for rule in limits.get(activity, ())})
+        # #466 W3: the limit rules that count an activity of the value (a resource's term shows no activity); fix2: of
+        # them, those one run uses up (the run's executions of what the limit counts reach its max) mark the rule, and
+        # those whose max is no one number decide nothing (`limited_undecided`).
+        executed = valued.executions
+        self.limited_by: list[str] = []
+        self.undecided: list[tuple[str, str | None]] = []
+        for limit_id, counts in sorted(limits.counting(executed).items()):
+            most, why = limits.most(limit_id)
+            if most is None:
+                self.undecided.append((limit_id, why))
+            elif sum((executed.get(activity, Fraction(0)) for activity in counts), Fraction(0)) >= most:
+                self.limited_by.append(limit_id)
         self.insert_limited = False
         if self.rule_ref is None:  # no rule of that id
             self.problems.append(literal.mismatch("literal_missing"))
@@ -642,7 +675,10 @@ class _ValuePlan:
         repository writes"): a mark that is not `true` is refused (the Runtime refuses it too) and never rewritten; a value
         the model counts as limited, on a rule that declares `consumes` and has no mark, is a difference `apply` writes;
         on a rule without `consumes` it is only reported; and a mark the model does not hold is only reported, never
-        removed."""
+        removed. Fix2: each limit that counts the value but whose `max` is no one number is reported
+        (`limited_undecided`, one warning a limit, with why), beside whichever of these holds; it neither writes nor
+        removes a mark. While a limit is undecided, a mark the decided limits do not hold is not `limited_unmodelled`:
+        the undecided one may hold it."""
         rule, rule_ref = self.rule, self.rule_ref
         consumes = rule.get("consumes")
         declared = isinstance(consumes, list) and bool(consumes)
@@ -654,8 +690,10 @@ class _ValuePlan:
         elif self.limited_by and mark is MISSING:
             self.differences.append(error(LIMITED_MISSING, self._detail(limited_by=self.limited_by), rule_ref))
             self.insert_limited = True
-        elif not self.limited_by and mark is True:
+        elif not self.limited_by and not self.undecided and mark is True:
             self.warnings.append(error(LIMITED_UNMODELLED, self._detail(), at(rule_ref, LIMITED)))
+        for limit_id, why in self.undecided:
+            self.warnings.append(error(LIMITED_UNDECIDED, self._detail(limit=limit_id, reason=why), rule_ref))
 
     def _edits(self, layout: splice.Layout) -> None:
         """The literal replaced in place when it differs, and each absent member inserted right after the member before
@@ -701,7 +739,8 @@ class _ValuePlan:
     def described(self) -> dict[str, Any]:
         """What `check` shows of the binding: the literal and the origin as they are (null when absent), the value as
         `export values` computes it, its status, the acceptances it rests on and what it leaves out, and whether the model
-        counts it as limited, by which limit rules (#466 W3)."""
+        counts it as limited, by which limit rules (#466 W3; fix2: the limits one run uses up), and the limits that
+        decide nothing, each with why."""
         literal, valued = self.literal, self.valued
         entry = valued.entry()
         return {
@@ -715,6 +754,7 @@ class _ValuePlan:
             "exclude": entry["exclude"],
             "limited": bool(self.limited_by),
             "limited_by": self.limited_by,
+            "limited_undecided": [{"limit": limit_id, "reason": why} for limit_id, why in self.undecided],
         }
 
     def changed(self) -> dict[str, Any]:
@@ -1184,7 +1224,7 @@ def check_bindings(
     bound, fixed, hands, shown_defaults, warnings = [], [], [], [], []
     differing: list[Target] = []  # the files with a difference `apply` writes
     layouts = _Layouts()
-    limits = _limits(run)
+    limits = _Limits(run)
     held = _held(targets.get(SCHEDULE_FILE))
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)
@@ -1377,7 +1417,7 @@ def apply_bindings(
     expected: dict[str, Any] = {}  # the document each edited file must read back as
     changed, warnings = [], []
     layouts = _Layouts()
-    limits = _limits(run)
+    limits = _Limits(run)
     held = _held(targets.get(SCHEDULE_FILE))
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)

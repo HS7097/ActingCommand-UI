@@ -936,7 +936,26 @@
         "rule_id": {"type": "token", "required": true},
         "limited_by": {"type": "list:token", "required": true}
       },
-      "description": "acmodel bindings check (#466 W3): the value (value, of exports.json) that a binding (entry) ties to the rule rule_id of schedule.json (path) counts an activity whose runs a limit rule of the model counts (limited_by: those limit rules, sorted; a limit counts its subject and the activities it is shared_with), and the rule declares consumes, so the Runtime's capped order is to see it as limited; but it has no limited mark. bindings apply writes \"limited\": true, inserted right after fixed_value_origin, as it writes a differing value. The model writes the mark only on a rule that declares consumes (limited_without_consumes otherwise). The error's ref is the rule."
+      "description": "acmodel bindings check (#466 W3; fix2): one run of the rule rule_id of schedule.json (path), whose value (value, of exports.json) a binding (entry) ties to it, uses up a limit rule of the model: the run's executions of the activities that limit counts (its subject and the activities it is shared_with; the value's terms' times per run) reach the limit's max (limited_by: those limit rules, sorted). Done once in the limit's period, the rule brings nothing more if done again (the coordinator's reading of limited, 11-22), and the rule declares consumes, so the Runtime's capped order is to see it as limited; but it has no limited mark. A limit one run does not use up leaves the rule repeatable, and an income cap never marks it. bindings apply writes \"limited\": true, inserted right after fixed_value_origin, as it writes a differing value. The model writes the mark only on a rule that declares consumes (limited_without_consumes otherwise). The error's ref is the rule."
+    },
+    "limited_undecided": {
+      "category": "warning",
+      "exit": 0,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "value": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "limit": {"type": "token", "required": true},
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["blocked", "per_account", "not_single"]
+        }
+      },
+      "description": "acmodel bindings check|apply (a warning; #466 W3 fix2): the limit rule limit of the model counts an activity of the value (value, of exports.json) that a binding (entry) ties to the rule rule_id of schedule.json (path), but its max is no one number the run shows, so whether one run uses it up is not known: blocked (the run computes no value for it), per_account (it read the account state, so it is no one number for every account) or not_single (more than one, or a range, as a max that reads an unknown shows). That limit decides nothing: no mark is written or removed for it, and the other limits that count the value decide as they do; while one is undecided, a mark the others do not hold is not limited_unmodelled. One warning a limit, in the order of the limits' ids. It changes no exit status. The warning's ref is the rule. A warning of the second kind (formats.md, Errors and warnings): neither the Runtime nor the Lab refuses it, and the one who writes should look at it."
     },
     "limited_unmodelled": {
       "category": "warning",
@@ -949,7 +968,7 @@
         "value": {"type": "token", "required": true},
         "rule_id": {"type": "token", "required": true}
       },
-      "description": "acmodel bindings check|apply (a warning; #466 W3): the rule rule_id of schedule.json (path) writes \"limited\": true, but the value (value, of exports.json) its binding (entry) ties to it counts no activity that a limit rule of the model counts (a resource's term shows no activity, so such a value is never limited). The mark is reported, never removed: the resource side decides whether it stays (the model may lack the limit, or the mark be stale). It changes no exit status. The warning's ref is the mark. A warning of the second kind (formats.md, Errors and warnings): neither the Runtime nor the Lab refuses it, and the one who writes should look at it."
+      "description": "acmodel bindings check|apply (a warning; #466 W3): the rule rule_id of schedule.json (path) writes \"limited\": true, but one run of it uses up no limit rule of the model for the value (value, of exports.json) its binding (entry) ties to it (fix2: no limit counts an activity of the value, or none that does reaches its max in one run, and none that does is undecided, limited_undecided; a resource's term shows no activity, so such a value is never limited). The mark is reported, never removed: the resource side decides whether it stays (the model may lack the limit, or the mark be stale). It changes no exit status. The warning's ref is the mark. A warning of the second kind (formats.md, Errors and warnings): neither the Runtime nor the Lab refuses it, and the one who writes should look at it."
     },
     "limited_without_consumes": {
       "category": "warning",
@@ -963,7 +982,7 @@
         "rule_id": {"type": "token", "required": true},
         "limited_by": {"type": "list:token", "required": true}
       },
-      "description": "acmodel bindings check|apply (a warning; #466 W3): the value (value, of exports.json) its binding (entry) ties to the rule rule_id of schedule.json (path) counts an activity a limit rule of the model counts (limited_by, sorted), but the rule declares no consumes. The limited mark is written only on a consumer (the Runtime's standard-pack-schedule, the consumer's row of What a resource repository writes), so nothing is written: the resource side decides whether the rule consumes a pool. A mark the rule already writes is left as it is. It changes no exit status. The warning's ref is the rule. A warning of the second kind (formats.md, Errors and warnings): neither the Runtime nor the Lab refuses it, and the one who writes should look at it."
+      "description": "acmodel bindings check|apply (a warning; #466 W3): the value (value, of exports.json) its binding (entry) ties to the rule rule_id of schedule.json (path) is limited, one run of the rule using up a limit rule of the model (limited_by, sorted; as limited_missing says), but the rule declares no consumes. The limited mark is written only on a consumer (the Runtime's standard-pack-schedule, the consumer's row of What a resource repository writes), so nothing is written: the resource side decides whether the rule consumes a pool. A mark the rule already writes is left as it is. It changes no exit status. The warning's ref is the rule. A warning of the second kind (formats.md, Errors and warnings): neither the Runtime nor the Lab refuses it, and the one who writes should look at it."
     },
     "location_refused": {
       "category": "error",

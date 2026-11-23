@@ -2296,7 +2296,8 @@ They are of none of the three kinds above.
   lifted);
 - **the second kind: what neither the Runtime nor the Lab refuses, and the one who writes should look at**: a file that
   is not of the current inputs (`prices_stale`, `values_stale`, `valuations_stale`), a rounding that is not exact
-  (`precision_low`), a mark that is not written or not removed (`limited_without_consumes`, `limited_unmodelled`).
+  (`precision_low`), a mark that is not written or not removed (`limited_without_consumes`, `limited_unmodelled`,
+  `limited_undecided`).
 
 A new code follows the rule; the codes of #466 V-a are all errors. Each code's entry in `codes.json` says its category
 and its exit status, and the description of each warning says its kind; the warnings of the tool's other commands (the
@@ -2397,16 +2398,24 @@ wrote it (the Runtime's `standard-pack-schedule` reads both; only Provenance rea
 - **The word.** `schedule.json`'s `requires` must hold `benefit_fixed_value` (`requires_word_missing`, at `/requires`, or
   at the document without one). The tool never adds it.
 - **The limited mark** (#466 W3; the Runtime's `standard-pack-schedule`, "The limited mark": whether a limit counts a
-  rule's runs is the model's to say). A value is **limited** when one of its terms is an activity that a `limit` rule of
-  the model counts: the limit's `subject`, or an activity of its `shared_with`, as the economy counts them (a resource's
-  term shows no activity, so it is never limited). The Runtime gives the mark to a consumer of a regenerating pool only
-  ("What a resource repository writes"), so:
+  rule's runs is the model's to say). Fix2 (the coordinator's reading of 11-22, from Alice's ruling 138 behind the
+  Runtime's capped order): limited is a task that, done once in the period, brings nothing more if done again; a task
+  whose income has a weekly or monthly cap that one run is far from filling is repeatable. So a value is **limited** when
+  one run of its rule uses up a `limit` rule of the model: the run's executions of the activities the limit counts (the
+  limit's `subject` and the activities of its `shared_with`, as the economy counts them; for each, the value's terms'
+  `times` per run, "`acmodel export values`" step 4, summed) are at least the limit's `max` (`rule:<limit>`, as the run
+  shows it, whatever its status). One execution a run under a limit of three a day leaves the rule repeatable. A
+  resource's term shows no activity, so a value of resources only is never limited, and an income cap never marks a
+  value: the tool does not judge whether one run fills a cap. A limit whose `max` is no one number (blocked, per
+  account, a range) decides nothing: the warning `limited_undecided` (`limit`, `reason` `blocked`, `per_account` or
+  `not_single`, at the rule; one a limit), and no mark is written or removed for it. The Runtime gives the mark to a
+  consumer of a regenerating pool only ("What a resource repository writes"), so:
   - a limited value whose rule declares `consumes` (a non-empty list) and has no `limited`: `limited_missing` (exit 6,
-    `limited_by` the limit rules, sorted, at the rule), a difference `apply` writes, `"limited": true`;
+    `limited_by` the limit rules one run uses up, sorted, at the rule), a difference `apply` writes, `"limited": true`;
   - a limited value whose rule declares no `consumes`: the warning `limited_without_consumes` (`limited_by`, at the
     rule); nothing is written, and a mark the rule writes stays;
-  - a rule that writes `"limited": true` while its value is not limited: the warning `limited_unmodelled` (at the
-    mark); it is never removed;
+  - a rule that writes `"limited": true` while its value is not limited and no limit that counts it is undecided: the
+    warning `limited_unmodelled` (at the mark); it is never removed;
   - a `limited` that is not `true` (the Runtime refuses anything else): `limited_invalid` (exit 6, `found`, at the
     member), which `apply` refuses and never rewrites.
   The mark has no origin member: the Runtime's contract gives it none.
@@ -2715,15 +2724,16 @@ says `greater_than_or_equal`).
 - **A part already there** (#466 V-a): beside a file with a difference `apply` writes, a `<file>.part` that another
   write left is `part_file_present` (exit 5, `path` the file, `part` the part), as `apply` refuses it ("Writing").
 - **It writes nothing.** Every problem is reported at once, and the exit status is the first error's. The warnings
-  (`precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three `held_fixed_value_beside_…`, #466 W4a,
-  and `held_hand_value_out_of_range`, fix3) are reported with the errors too.
+  (`precision_low`, `limited_without_consumes`, `limited_unmodelled`, `limited_undecided` (#466 W3 fix2), the three
+  `held_fixed_value_beside_…`, #466 W4a, and `held_hand_value_out_of_range`, fix3) are reported with the errors too.
 - **`data`** holds `path`, `model_id`, `state`, `repo`, `strict` and `strict_values` (#466 W4a), and:
   - `bindings`: each with `entry` (its pointer in `bindings.json`), `threshold`, `form`, `file`, [`rule_id` or
     `pool_id`], `path` and `literal`; a value binding (#464 W1) with `entry`, `value`, `file`, `rule_id`, `path`,
     `literal` and `origin` (as the rule holds them, null when absent), `milli` (the value as `export values` computes
     it), `status` (`confirmed` or `provisional`), `acceptances` (each `{output, ref, until}` it rests on: what to look at
     again, and when), `partial` and `exclude` (what it leaves out, each with its reason), `limited` (whether the model
-    counts it as limited, #466 W3) and `limited_by` (the limit rules that count it, sorted); a valuation binding (#466
+    counts it as limited, #466 W3), `limited_by` (the limit rules one run uses up, sorted; fix2) and `limited_undecided`
+    (the limits that count it but decide nothing, each `{limit, reason}`, sorted by limit; fix2); a valuation binding (#466
     W3) with `entry`, `valuation`, `file`, `pool_id`, `path`, `round`, `literal` (W as the pool holds it), `origin` (null
     when absent), `weight` (W as `export valuations` computes it), `scale` (Q as read), `status`, `acceptances` and
     `precision` (null within the bound, else `{error, bound, suggested_scale}`);
@@ -2784,7 +2794,8 @@ says `greater_than_or_equal`).
   so does a hand entry's problem, a fixed value the Runtime would refuse (#466 W4a: "A value written by hand", "Fixed
   values the Runtime refuses"), a declaration or a number the Runtime would refuse, a control.json that is not canonical
   (#466 V-a) and a part already there (`part_file_present`). The warnings (`precision_low`, `limited_without_consumes`,
-  `limited_unmodelled`, the three `held_fixed_value_beside_…`, `held_hand_value_out_of_range`) refuse nothing; they are
+  `limited_unmodelled`, `limited_undecided`, the three `held_fixed_value_beside_…`, `held_hand_value_out_of_range`)
+  refuse nothing; they are
   reported. It does not scan for unbound literals or unregistered fixed values; `check --strict` and `check
   --strict-values` do that afterwards. It never writes a hand entry's value.
 - **Before anything is written**, the edited bytes of each file are read back with the strict reader and must be
