@@ -89,10 +89,8 @@ use crate::workbench::card::shown_in_the_way;
 use crate::workbench::paint::in_the_way_text;
 use crate::{launcher, report, ui, LedgerWindow, PauseItem};
 
-/// The reasons of a deployment's pause, which the installer lifts: acsetup's
-/// update (UI-2c1) and `install restart` without `--hold` (R-15b v4); and the
-/// operator's own deployments, by their prefix.
-const DEPLOY_REASONS: [&str; 2] = ["acsetup_update", "install_restart"];
+/// The prefix of the reason of a deployment's pause, which the installer lifts:
+/// the operator's own deployments.
 const DEPLOY_PREFIX: &str = "deploy-";
 
 /// The words of the Lab rescue module's own pause reasons, `lab-<word>-<unix ms>`,
@@ -179,7 +177,7 @@ pub(crate) enum Lifter {
 
 pub(crate) fn lifter(pause: &PauseFact, elsewhere: &ResumeElsewhere) -> Lifter {
     let reason = pause.reason.as_str();
-    if DEPLOY_REASONS.contains(&reason) || reason.starts_with(DEPLOY_PREFIX) {
+    if reason.starts_with(DEPLOY_PREFIX) {
         Lifter::Installer
     } else if lab_rescue(reason) {
         Lifter::LabRescue

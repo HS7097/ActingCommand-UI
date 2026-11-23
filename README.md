@@ -14,11 +14,10 @@ It is not part of the Runtime; it is the Runtime's **external, detachable client
 > an install set into one new folder; see "Setup wizard acsetup". The releases carry it from UI v0.12.17
 > on; with an earlier one, install with `actingctl install`.
 
-This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup") and the fixed
-entry `acforward`, through which an A/B installation starts its programs. Like the Runtime, these
-programs know no game: they hold no game logic and no game data. A game is supported through the
-resource packs (one standard pack per game) the Runtime loads; the wizard reads what a pack declares
-and guesses nothing.
+This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup"). Like the
+Runtime, these programs know no game: they hold no game logic and no game data. A game is supported
+through the resource packs (one standard pack per game) the Runtime loads; the wizard reads what a
+pack declares and guesses nothing.
 
 ## Current release
 
@@ -26,8 +25,8 @@ and guesses nothing.
   `acui-windows-<sha>.zip` with `SHA256SUMS` on this repository's
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases). Every release is a pre-release, so
   GitHub marks none as "Latest": take the newest tag. The zip holds `acui.exe` (the console),
-  `acsetup.exe` (the setup wizard, from UI v0.12.17 on), `acforward.exe` (the fixed entry), `LICENSE`,
-  `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
+  `acsetup.exe` (the setup wizard, from UI v0.12.17 on), `LICENSE`, `README.md` and the
+  `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
   of Runtime v0.12.47; the pin is now Runtime v0.12.77 (`3285143f`), a release.
@@ -680,7 +679,7 @@ v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-c
 rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0"
 ```
 
-The seven crates (contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
+The six crates (contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config) share this one rev.
 The embedded typed client reads optional `resource_dispositions` groups in online lifecycle-failure
 pages; the offline ledger reader accepts them in full failure and `ResourceQuiescence` records.
 Historical records without the field keep their meaning. Strict validation and explicit read errors
@@ -1043,7 +1042,7 @@ The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
 when `--tab` or `--source` is given. There is at most one per source (the default `auto`, `online`,
 `offline`); asking again restores the one open (Slint 1.17 has no call that brings a window to the
-front). `--state-root` alone opens none, since the fixed entry passes it on every start. A closed ledger
+front). `--state-root` alone opens none. A closed ledger
 window's reader stops after the page in hand; opening it again is a new window and a new session. Closing
 the workbench ends the program, except while an unlock runs (see "Launcher").
 
@@ -1467,7 +1466,7 @@ file, and is not written back to the settings file.
 
 Started directly — `acui.exe`, or a shortcut that points at it — the console opens no black console
 window; started from a command line, `--help` and the reason for a failed start still go to that
-console. Started through the fixed entry `acforward.exe`, a console window still shows for now.
+console.
 
 The windows are resizable: the workbench 1200×780 by default, 1000×640 minimum; the ledger window 1400×900
 by default, 1100×700 minimum, its middle column stretching with the window and the two side columns
@@ -1958,7 +1957,7 @@ through or was stopped.
   paused is unknown, and a failed status read shows one red line in place of the pause lines; only a read
   that was made says the pause lines are current. Three kinds of pause get no button, only why: one whose
   reason `resume_elsewhere_reasons` lists ("this pause is to be lifted by whoever set it"); a
-  deployment's — `acsetup_update`, `install_restart` and any reason starting with `deploy-` — which the
+  deployment's — any reason starting with `deploy-` — which the
   installer lifts (the console does not run `release-hold`); and one the Lab's rescue module set (Runtime
   0.12.48 on), its reason exactly `lab-<operation>-<unix ms>` with the operation one of `config`,
   `deploy`, `down`, `instance` (the instance add, 0.12.52 on), `place`, `restore` and `rollback`, which
@@ -2504,9 +2503,7 @@ the version line the Runtime locks), `getrandom` (the configuration's `secret_fi
 `Win32_System_RestartManager`, `Win32_UI_Shell`: the Start menu and desktop folders through
 `SHGetKnownFolderPath`, shortcuts through `IShellLinkW` + `IPersistFile`, the folder picker through
 `IFileOpenDialog`; the version Slint already locks, so the lock gains no crate). The exe carries the
-console's icon, compiled in by `winresource`. The 0.11 wizard `crates/acui-setup` is out of the workspace,
-its code left as it is; its A/B slots, online download, upgrades and resource-only updates are not part of
-the new wizard.
+console's icon, compiled in by `winresource`.
 
 The console's Win7 Aero frame adds this repository's `acui-glass` crate and no other crate to the lock. It
 turns on Slint's `raw-window-handle-06` feature to reach the native window, and `acui-glass` uses
@@ -2534,16 +2531,10 @@ and Codex. `actingctl mcp-config` prints the registration for a client and write
   run it once.
 - **Codex**: it prints a `[mcp_servers.actingcommand]` section (the command, its arguments, two timeouts
   and a commented `enabled_tools` example) to put into Codex's `config.toml`.
-- On an A/B installation it prints the fixed entry `<install root>\runtime\actingctl.exe`, never a slot
-  path, so the registration keeps working after an upgrade or a rollback (Runtime v0.11.2 and later).
-  Started through that entry, the server takes the installation's state root from its selection; a
-  `--root` or `--state-root` that differs from it is refused.
 - **Tiers** (0.11 series): `observer` (reading; always on, and the default), `operator` (devices and
   scheduling), `author` (Lab recording). A tool of a tier that is not enabled answers
   `tier_not_enabled`. `actingctl mcp-serve --list-tools [--format json|markdown]` lists all 22 tools.
 - Approvals, edits of the actingd configuration and Runtime restarts stay with the person.
-- A running server keeps the installation generation it started with (see "A/B installation and
-  upgrade"); restart it in the client after an upgrade.
 
 What each tool takes and answers: `actingctl mcp-serve --list-tools --format markdown`. The manual for
 agents is `skills/actingcommand/` in the
@@ -2615,10 +2606,8 @@ Three more crates sit outside these four layers. `acui-glass` is the native half
 used by `acui-app` through a safe face that knows nothing of Slint: all the console's Win32 and WinRT window
 code and its unsafe code for them are there, and off Windows it only says it cannot. `acui-wizard` (binary
 `acsetup`) is the 0.12 setup wizard: a back-end library with the window and the command line that share
-it; it depends on none of the four layers (its dependencies are under "Setup wizard acsetup"). The 0.11
-wizard `acui-setup` is out of the workspace.
-`acui-installation` provides the shared installation-selection consumer for the console,
-and the binary `acforward`, the fixed entry.
+it; it depends on none of the four layers (its dependencies are under "Setup wizard acsetup").
+`acui-installation` provides the shared installation-selection consumer for the console.
 
 ## Icon
 
@@ -2682,7 +2671,7 @@ to the Runtime source at the pinned rev.
 `GPL-3.0-only`. The repository includes the full LICENSE text; the workspace `license` field and the SPDX
 header of every `.rs` / `.slint` file agree with it. The interface is rendered by
 [Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended on
-(contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) are `AGPL-3.0-only`, and the
+(contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config) are `AGPL-3.0-only`, and the
 two combine under GPLv3 section 13.
 
 No source code of another automation project is in this repository. The upstream license matrix of the

@@ -79,7 +79,7 @@ pub const CHECK_CONFIG_SCHEMA: &str = "actingcommand.actingd.check-config.v2";
 /// The first start's pause reason: a name the Runtime takes (`[a-z0-9_.-]{1,64}`,
 /// `crates/actingcommand-contract/src/runtime.rs` `validate_scheduling_pause_reason`) that the
 /// console lifts with "put all on duty" (two presses, as for any other tool's pause): it is no
-/// deployment's (`acsetup_update`, `install_restart`, `deploy-…`), no Lab rescue operation's
+/// deployment's (`deploy-…`), no Lab rescue operation's
 /// (`lab-<word>-<ms>`) and in no default `resume_elsewhere_reasons` (`[]`)
 /// (`crates/acui-app/src/ledger/resume.rs` `lifter`).
 pub const FIRST_START_REASON: &str = "first-start";

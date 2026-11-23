@@ -767,9 +767,7 @@ fn verify_program(
                 file.path, file.size_bytes, file.sha256
             )));
         }
-        if program.lays(&file.path) {
-            bytes += file.size_bytes;
-        }
+        bytes += file.size_bytes;
     }
     report(Event::Line(
         Said::new(
