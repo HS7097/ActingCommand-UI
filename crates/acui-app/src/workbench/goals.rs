@@ -629,7 +629,8 @@ pub fn set_pressed(ui: &Ui, key: &str) {
     pressed(ui, key, GoalAct::Amount(text));
 }
 
-/// The option at `index` picked on the `choice` line `key`.
+/// The option at `index` picked on the `choice` line `key`, or on the `switch` line `key` drawn as
+/// its two segments while each rule's own value decides (on, off).
 pub fn picked(ui: &Ui, key: &str, index: i32) {
     match usize::try_from(index) {
         Ok(index) => pressed(ui, key, GoalAct::Pick(index)),

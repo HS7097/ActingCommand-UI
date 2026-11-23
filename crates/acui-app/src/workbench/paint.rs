@@ -3266,9 +3266,19 @@ fn goal_controls(
                         .map_or(-1, index);
                     row.options = options(old.map(|old| &old.options), words);
                 }
-                ValueControl::Switch { on } => {
+                ValueControl::Switch { on: Some(on) } => {
                     row.control = GoalControl::Switch;
-                    row.switch_on = on.unwrap_or(false);
+                    row.switch_on = *on;
+                }
+                // No value the next run reads (each rule's own decides, Runtime 0.12.81): not drawn
+                // as off, but as its two segments, on then off, neither picked; either sets
+                // (`acui_source::workbench::goals::press`).
+                ValueControl::Switch { on: None } => {
+                    let words =
+                        vec![SharedString::from(labels.goals_on), SharedString::from(labels.goals_off)];
+                    row.control = GoalControl::Segments;
+                    row.chosen = -1;
+                    row.options = options(old.map(|old| &old.options), words);
                 }
                 ValueControl::Number { rule, now } => {
                     let typed = writes.amounts.get(&key).cloned().unwrap_or_default();
@@ -4036,7 +4046,13 @@ fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
         kind: GoalRowKind::Entry,
         title: line.title.clone().unwrap_or_else(|| labels.goals_untitled.to_owned()).into(),
         greyed: matches!(line.state, VariableState::NotOffered),
-        value: line.value.as_ref().map(|value| shown_text(labels, value)).unwrap_or_default().into(),
+        // Each rule's own value decides (Runtime 0.12.81): said so, never a default or "off".
+        value: match (&line.value, line.ruled) {
+            (Some(value), _) => shown_text(labels, value),
+            (None, true) => labels.goals_ruled.to_owned(),
+            (None, false) => String::new(),
+        }
+        .into(),
         value_met: false,
         warning: warnings.join("\n").into(),
         note: notes.join("\n").into(),
@@ -4882,6 +4898,8 @@ fn reason_words(ui: &Ui, labels: &Labels, class: ReasonClass, why: &str) -> Stri
         ReasonClass::EntryRetryWait => labels.card_why_entry_retry_wait,
         ReasonClass::EntrySetAside => labels.card_why_entry_set_aside,
         ReasonClass::Waking => labels.card_why_waking,
+        ReasonClass::OtherValueSet => labels.card_why_other_value_set,
+        ReasonClass::RuleValueRefused => labels.card_why_rule_value_refused,
         ReasonClass::ReasonMissing => {
             let line = format!("the Runtime gave a decision no reason: {why}");
             if ui.model.borrow_mut().first_told(&line) {

@@ -178,12 +178,19 @@ pub enum ReasonClass {
     /// 314-332 and policy `codes.rs` 369 at 3285143f): a run on the instance failed at its entry
     /// and the instance waits for its recovery; this task failed at its entry and waits before it
     /// is tried again; this task kept failing at its entry while others got in, and is set aside
-    /// until its activity window ends, which a person is told of; the instance's emulator stands
-    /// stopped by its idle action, and it is being woken for this task.
+    /// until its activity window ends, which a person is told of; the instance is asleep, put to
+    /// sleep by its idle action (Runtime 8923a701 `contracts/scheduling/README.md` 3200-3209), and
+    /// is being woken for this task, so the words name the instance, not its emulator.
     EntryBlocked,
     EntryRetryWait,
     EntrySetAside,
     Waking,
+    /// Runtime 0.12.81 on (#500 SV-2; runtime-host `codes.rs` 3663 and 3671 at 8923a701): this
+    /// task's rule carries another value of a variable than the one set on the goal page, so it is
+    /// held back; the package no longer takes the value its rule carries, so it is held back too,
+    /// which a person is to mend.
+    OtherValueSet,
+    RuleValueRefused,
     /// The Runtime gave a decision no reason: its fault, which the log hears of.
     ReasonMissing,
     /// No sentence of its own: a general one says it is not scheduled now, and the log
@@ -277,6 +284,8 @@ impl ReasonClass {
             "instance_entry_task_waiting" => Self::EntryRetryWait,
             "instance_entry_task_set_aside" => Self::EntrySetAside,
             "instance_asleep_wake_due" => Self::Waking,
+            "goal_value_excludes_rule" => Self::OtherValueSet,
+            "goal_value_rule_refused" => Self::RuleValueRefused,
             "decision_reason_missing" => Self::ReasonMissing,
             other if other.starts_with("perf_") => Self::Paced,
             _ => Self::Unlisted,
@@ -314,6 +323,7 @@ impl ReasonClass {
             | Self::LinesInvalid
             | Self::LinesUnspendable
             | Self::EntrySetAside
+            | Self::RuleValueRefused
             | Self::ReasonMissing => Band::Attention,
             _ => Band::Ok,
         }

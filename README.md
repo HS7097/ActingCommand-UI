@@ -29,15 +29,16 @@ pack declares and guesses nothing.
   `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now Runtime v0.12.77 (`3285143f`), a release.
+  of Runtime v0.12.47; the pin is now Runtime v0.12.81 (`8923a701`), a release.
 - **Works with the 0.12 Runtime from v0.12.73 on**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
-  `runtime-client` [12, 14] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73, v0.12.74, v0.12.75,
-  v0.12.76 and v0.12.77: each declares a `ledger` maximum within [3, 9] and an `actingd-config` and a
-  `runtime-client` range that meet the console's (`runtime-client` [3, 12], [3, 12], [12, 13], [12, 14]
-  and [12, 14]; `actingd-config` [5, 33], [5, 34], [5, 34], [5, 35] and [5, 35]; see "Data source"). Its
+  `runtime-client` [12, 14] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73 to v0.12.81: each
+  declares a `ledger` maximum within [3, 9] and an `actingd-config` and a `runtime-client` range that meet
+  the console's (`runtime-client` [3, 12] for v0.12.73 and v0.12.74, [12, 13] for v0.12.75 and [12, 14]
+  from v0.12.76; `actingd-config` [5, 33] for v0.12.73, [5, 34] for v0.12.74 and v0.12.75 and [5, 35]
+  from v0.12.76; see "Data source"). Its
   `runtime-client` starts at 12 because every pause it sends carries the request member `pause_mode` of
   revision 12, and ends at 14 because the contract crate it is built on reads revision 14: the status
-  member `unavailable`, which Runtime v0.12.76 and v0.12.77 answer for no instance. Revision 13 before it is the
+  member `unavailable`, which Runtime v0.12.76 to v0.12.81 answer for no instance. Revision 13 before it is the
   capture backend `acib_screen_capture` of an iOS handset's read-only observation, and the frame reduced
   to the base of a display within a pixel of the base's shape. It does
   not fit v0.12.72 or earlier, which declare `runtime-client` at most 11: such a Runtime cannot decode a
@@ -49,7 +50,7 @@ pack declares and guesses nothing.
   v0.12.25, v0.12.26) keeps working with v0.12.75, all but an iOS handset's observation and the
   projection of a display of such a size; before an iOS handset is configured, every console must be one
   of revision 13 or later, as this one is. A console pinned to v0.12.75 needs no new pin for v0.12.76,
-  nor one pinned to v0.12.76 for v0.12.77, which moves no range.
+  nor one pinned to v0.12.76 for v0.12.77 to v0.12.81, which move no range of the console's.
   The release whose Runtime first answers `unavailable` raises the `min` of `runtime-client` to 14:
   before it, every console must speak 14, as this one does. From v0.12.68 a game root carries
   `pack-catalog.json` in place of `ui.json` (see "Data source"): the setup wizard lays `pack-catalog.json` and
@@ -263,8 +264,28 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.77 (`3285143f`), a
-release, published as a pre-release. Against v0.12.76 (`f6e2cd26`), the pin before, v0.12.77 moves no
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`): Runtime v0.12.81 (`8923a701`), a
+release, published as a pre-release. Against v0.12.77 (`3285143f`), the pin before, v0.12.78 to v0.12.81
+move one range, the Runtime's `package`, from [3, 21] to [3, 25] (a version 2 `pack-catalog.json`, a
+tap step with a press count), which is the packs' and the installer's; `runtime-client` [12, 14],
+`actingd-config` [5, 35], `ledger` [3, 9], `install-control` [0, 0] and `runtime-outcomes` [1, 1] stay,
+and so do the console's ranges. The Runtime's own manifests lost only the A/B entry program, which the
+console does not link, so both locks change only in the rev. Of the Runtime crates the console links,
+the contract crate drops the A/B selection v2 and slot document (the v1 selection the console reads
+stays), adds the version 2 catalog reader and a resource effect type, and reworks the variable and goal
+readers; the `GoalView` shape changes only in a comment; runtime-config and the rest have the same
+source. The policy crate, which runtime-client depends on and the console does not call, lets a rule of
+`schedule.json` carry variable values (Workflow #500 SV-2). Those touch nothing the console builds,
+matches or implements but one reading: from v0.12.81 a variable the rules of the bound tasks carry
+values for, while no value set on the application applies, is named on the goal page without
+`effective_json`, `source` and `display`, as the rule of the task that runs decides; the goal page says
+"Each rule decides" for it (see "Goals"). In the outcome-code catalog it embeds, v0.12.78 to v0.12.81
+add two codes, both reasons a candidate is not dispatched, which an instance card and the daily task list
+now say in words of their own: `goal_value_excludes_rule` (the value set on the goal page is not the one
+this task's rule carries, so it is held back) and `goal_value_rule_refused` (the package no longer takes
+the value its rule carries, in amber); they retire five A/B install codes the console never named, and no
+new name is `console_` or `setup_`. A card's words for `instance_asleep_wake_due` now name the instance,
+not its emulator. The pin before, v0.12.77 (`3285143f`), against v0.12.76 (`f6e2cd26`): v0.12.77 moves no
 range: `runtime-client` [12, 14], `actingd-config` [5, 35], `package` [3, 21], `ledger` [3, 9],
 `install-control` [0, 0] and `runtime-outcomes` [1, 1] stay, and so do the console's ranges. No Cargo.toml
 or Cargo.lock of the Runtime changed, so both locks change only in the rev. Of the Runtime crates the
@@ -676,7 +697,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 14, ledger revision 9):
 
 ```
-rev = "3285143f7a87d4c3846d2b83902792fbc68c84c0"
+rev = "8923a70191337bb656df6dc707a138ff3c0b0009"
 ```
 
 The six crates (contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config) share this one rev.
@@ -1014,7 +1035,7 @@ v0.12.74 on, `device.system: "ios"`) names no backend, so it has no such group; 
 come from `<root>\tools\acib.exe`, which is no setting either. Apply switches that instance at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.77, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.81, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1157,7 +1178,13 @@ yet", and a value stored under its name, "Value stored: … (not used in this ve
 in the declaration's own words: an option's title, a number with its unit's text, On or Off, the chosen
 items' titles in order ("None chosen"); a time unit's milliseconds are shown in the largest unit at most
 the declared one in which they are a whole number, down to seconds, else in milliseconds, never as a
-fraction (90 minutes declared in hours is "90 min"). In grey under it: the pack's default while a value
+fraction (90 minutes declared in hours is "90 min"). From Runtime v0.12.81 a rule of the game's
+`schedule.json` may carry values for a variable (Workflow #500 SV-2): while no value set on the
+application applies, the rule of the task that runs decides, and the page names no value for it, nor
+where it comes from. Such a variable says "Each rule decides (set a value here and the rules carrying
+another value are held back)" in place of its value, with no default under it; its switch is not drawn
+off but as two segments, On and Off, neither picked, and either sets the value. A value set here that
+applies decides again, and the line is as before. In grey under it: the pack's default while a value
 set is in effect, and who set it, "Set by this console", "the command line", "MCP", "the Lab", or the
 Lab's entry ("the Lab's command line", "the Lab's MCP", "the Lab's pack
 authoring", "a Lab rescue", "the Lab's watchdog"), with the date and time. A value set that the next run
@@ -1975,7 +2002,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.77
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.81
   has both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). The pinned Runtime also sets it on such an entry that start found held by a
   pause of another reason, when that pause is released while the Runtime runs (a person's resume from

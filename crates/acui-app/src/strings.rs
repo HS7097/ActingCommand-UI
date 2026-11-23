@@ -1209,11 +1209,16 @@ pub struct Labels {
     pub card_why_budget: &'static str,
     /// Runtime 0.12.77 on: a run could not get into its task, waiting for the recovery; this task
     /// could not get in, tried again later; this task keeps failing to get in, set aside for this
-    /// period; the emulator is being woken for it.
+    /// period; the instance its idle action put to sleep is being woken for it.
     pub card_why_entry_blocked: &'static str,
     pub card_why_entry_retry_wait: &'static str,
     pub card_why_entry_set_aside: &'static str,
     pub card_why_waking: &'static str,
+    /// Runtime 0.12.81 on: the value set on the goal page is not the one this task's rule carries,
+    /// so it is held back; the package no longer takes the value its rule carries, so it is held
+    /// back too.
+    pub card_why_other_value_set: &'static str,
+    pub card_why_rule_value_refused: &'static str,
     pub card_why_reason_missing: &'static str,
     pub card_why_unlisted: &'static str,
     /// The right column's second tab, the account's daily task list (UI-3f1), and what it says
@@ -1384,6 +1389,10 @@ pub struct Labels {
     /// A value: on, off, an empty list, the separator of a list's items, a time in each unit
     /// (amount). A value no longer offered (value), in amber.
     pub goals_default: &'static str,
+    /// A variable whose next value each rule of the catalog's tasks decides itself, as no value set
+    /// here applies (Runtime 0.12.81, Workflow #500 SV-2): in place of its value. A value set here
+    /// holds back the rules that carry another value (`goal_value_excludes_rule`).
+    pub goals_ruled: &'static str,
     pub goals_set_by: &'static str,
     pub goals_setter_console: &'static str,
     pub goals_setter_cli: &'static str,
@@ -2867,7 +2876,9 @@ pub const ZH: Labels = Labels {
     card_why_entry_blocked: "有任务进不了入口，等它恢复",
     card_why_entry_retry_wait: "这个任务没进去入口，过一会儿再试",
     card_why_entry_set_aside: "这个任务老进不了入口，本时段先放下",
-    card_why_waking: "正在叫醒模拟器来跑它",
+    card_why_waking: "正在叫醒这个实例来跑它",
+    card_why_other_value_set: "目标页上设的值不是这条规则带的，先不跑",
+    card_why_rule_value_refused: "规则带的值，任务包已经不收了，先不跑",
     card_why_reason_missing: "原因没写明（程序的问题，已记入日志）",
     card_why_unlisted: "现在不安排",
     tasks_tab: "日常任务",
@@ -2980,6 +2991,7 @@ pub const ZH: Labels = Labels {
     goals_tier_default: "默认那一档：{}",
     goals_tier_not_built: "这一版 Runtime 还不用档位",
     goals_default: "包的默认值：{}",
+    goals_ruled: "由各条规则决定（在这里设了值，带别的值的规则就先不跑）",
     goals_set_by: "设定来源：{}（{}）",
     goals_setter_console: "本监控台",
     goals_setter_cli: "命令行",
@@ -4260,7 +4272,9 @@ pub const EN: Labels = Labels {
     card_why_entry_blocked: "A task could not get in; waiting for the recovery",
     card_why_entry_retry_wait: "This task could not get in; it tries again in a while",
     card_why_entry_set_aside: "This task keeps failing to get in; set aside for this period",
-    card_why_waking: "Waking the emulator to run it",
+    card_why_waking: "Waking the instance to run it",
+    card_why_other_value_set: "The value set on the goal page is not the one this rule carries; held back",
+    card_why_rule_value_refused: "The package no longer takes the value its rule carries; held back",
     card_why_reason_missing: "No reason was given (a program problem; written to the log)",
     card_why_unlisted: "Not scheduled right now",
     tasks_tab: "Daily Tasks",
@@ -4373,6 +4387,7 @@ pub const EN: Labels = Labels {
     goals_tier_default: "Default: {}",
     goals_tier_not_built: "This version of the Runtime does not use tiers yet",
     goals_default: "The pack's default: {}",
+    goals_ruled: "Each rule decides (set a value here and the rules carrying another value are held back)",
     goals_set_by: "Set by {} ({})",
     goals_setter_console: "this console",
     goals_setter_cli: "the command line",
