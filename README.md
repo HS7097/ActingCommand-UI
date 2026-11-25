@@ -4,9 +4,11 @@
 
 **⚠️ Pre-release, debug phase: interfaces, configuration and file formats still change, and only the newest version is supported. See "Development status".**
 
-This is ActingCommand's **human console**, a read-only native program. On one Runtime state root it opens
+This is ActingCommand's **human console**, a native program. On one Runtime state root it opens
 the ledger's **official read face**, and renders the view pages the ledger itself hands out into a
-three-column interface: instance card, timeline, detail pane.
+three-column interface: instance card, timeline, detail pane; it reads the ledger and never writes it.
+Through the Runtime's `ui` channel it also pauses and resumes scheduling, sets goals on its goals tab, and
+starts the Runtime or asks it to close.
 
 It is not part of the Runtime; it is the Runtime's **external, detachable client**.
 
@@ -21,6 +23,8 @@ pack declares and guesses nothing.
 
 ## Current release
 
+- **Today**: the newest release is UI v0.12.33 (released 2026-11-23), built against Runtime v0.12.81; it fits
+  Runtime v0.12.73 to v0.12.83.
 - **The 0.12 series (UI v0.12.0 and later)**, pre-releases like every release so far:
   `acui-windows-<sha>.zip` with `SHA256SUMS` on this repository's
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases). Every release is a pre-release, so
@@ -31,14 +35,14 @@ pack declares and guesses nothing.
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
   of Runtime v0.12.47; the pin is now Runtime v0.12.81 (`8923a701`), a release.
 - **Works with the 0.12 Runtime from v0.12.73 on**: it declares `actingd-config` [5, 32], `ledger` [3, 9],
-  `runtime-client` [12, 14] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73 to v0.12.81: each
+  `runtime-client` [12, 14] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.73 to v0.12.83: each
   declares a `ledger` maximum within [3, 9] and an `actingd-config` and a `runtime-client` range that meet
   the console's (`runtime-client` [3, 12] for v0.12.73 and v0.12.74, [12, 13] for v0.12.75 and [12, 14]
   from v0.12.76; `actingd-config` [5, 33] for v0.12.73, [5, 34] for v0.12.74 and v0.12.75 and [5, 35]
   from v0.12.76; see "Data source"). Its
   `runtime-client` starts at 12 because every pause it sends carries the request member `pause_mode` of
   revision 12, and ends at 14 because the contract crate it is built on reads revision 14: the status
-  member `unavailable`, which Runtime v0.12.76 to v0.12.81 answer for no instance. Revision 13 before it is the
+  member `unavailable`, which Runtime v0.12.76 to v0.12.83 answer for no instance. Revision 13 before it is the
   capture backend `acib_screen_capture` of an iOS handset's read-only observation, and the frame reduced
   to the base of a display within a pixel of the base's shape. It does
   not fit v0.12.72 or earlier, which declare `runtime-client` at most 11: such a Runtime cannot decode a
@@ -50,7 +54,7 @@ pack declares and guesses nothing.
   v0.12.25, v0.12.26) keeps working with v0.12.75, all but an iOS handset's observation and the
   projection of a display of such a size; before an iOS handset is configured, every console must be one
   of revision 13 or later, as this one is. A console pinned to v0.12.75 needs no new pin for v0.12.76,
-  nor one pinned to v0.12.76 for v0.12.77 to v0.12.81, which move no range of the console's.
+  nor one pinned to v0.12.76 for v0.12.77 to v0.12.83, which move no range of the console's.
   The release whose Runtime first answers `unavailable` raises the `min` of `runtime-client` to 14:
   before it, every console must speak 14, as this one does. From v0.12.68 a game root carries
   `pack-catalog.json` in place of `ui.json` (see "Data source"): the setup wizard lays `pack-catalog.json` and
