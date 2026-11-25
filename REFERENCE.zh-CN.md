@@ -1,0 +1,1776 @@
+<p align="right">🌐 <a href="./REFERENCE.md">English</a> · <b>简体中文</b></p>
+
+# ActingCommand 监控台 详细参考
+
+> 这份文件是 2026-11-25 从 README 移出来的详细内容：各版本怎样搭配、数据来源、变了什么、帧素材、运行、界面语言字号与主题（设置文件）、启动器、实例配置、安装向导 acsetup、智能体用的 MCP、四层四 crate、图标、读面挡住的事。它写到 UI v0.12.33 为止，其中不少段落写于更早的版本，之后不随每次发布更新。现状看 [README](./README.zh-CN.md)；这里和 README 不一致的地方，以 README 为准。
+
+**⚠️ 预发布，调试阶段：接口、配置与文件格式还会变，只支持最新版。见「开发状态」。**
+
+这是 ActingCommand 的**人类监控台**（即控制台 `acui`），一个原生程序。它在一个 Runtime 状态根上打开
+账本的**正式读面**，把账本自己给出的视图页渲染成三栏界面：实例卡、时间线、详情；账本它只读不写。经 Runtime 的
+`ui` 通道，它还能暂停与恢复调度、在「目标」页设定目标，并启动 Runtime 或请求它关闭。
+
+它不是 Runtime 的一部分，是 Runtime 的**外部可拆客户端**。
+
+> `acsetup.exe` 是 0.12 的安装向导（UI-W2）：从一份安装集把 Runtime、工具和监控台装进一个新文件夹，见
+> 「安装向导 acsetup」一节。UI v0.12.17 起随发布件一起发；更早的版本没有它，用 `actingctl install` 安装。
+
+本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）。与 Runtime 一样，这些程序不认识任何游戏：
+不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的资源包接入（每个游戏一个标准包）；向导只读包里声明的内容，
+什么也不猜。
+
+## 当前发布
+
+- **现在**：最新的是 UI v0.12.33（2026-11-23 发布），基于 Runtime v0.12.81 构建，可与 Runtime v0.12.73 到 v0.12.83 搭配。
+- **0.12 系列（UI v0.12.0 起）**，与此前每一版一样是预发布：本仓
+  [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 上的 `acui-windows-<sha>.zip` 与
+  `SHA256SUMS`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。zip 里有
+  `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`LICENSE`、
+  `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
+  里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 Runtime v0.12.81
+  （`8923a701`），是发布版本。
+- **可与 v0.12.73 起的 0.12 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 9]、`runtime-client`
+  [12, 14] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.73 到 v0.12.83：这几版的 `ledger` 上限都在
+  [3, 9] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集（`runtime-client` 在 v0.12.73、v0.12.74 是 [3, 12]，
+  v0.12.75 是 [12, 13]，v0.12.76 起是 [12, 14]；`actingd-config` 在 v0.12.73 是 [5, 33]，v0.12.74、v0.12.75 是 [5, 34]，
+  v0.12.76 起是 [5, 35]，见「数据来源」一节）。`runtime-client` 从 12 起，是因为它发出的
+  每一次暂停都带修订 12 的请求成员 `pause_mode`；到 14 止，是因为它所基于的契约库读得了修订 14，也就是状态成员 `unavailable`，
+  Runtime v0.12.76 到 v0.12.83 对哪个实例都不答它。在它之前的修订 13 是 iOS 手机只读观察里的取帧后端
+  `acib_screen_capture`，以及比例和基准差不到一个像素的显示缩到基准的帧。它不适配 v0.12.72 及更早：这些版本的
+  `runtime-client` 最多到 11，解不开带 `pause_mode` 的暂停，会直接断开连接、不给回答，也不设任何暂停（见「数据来源」一节）。
+  所以要先把 Runtime 升到 v0.12.73 或更新，再换这个监控台。Runtime v0.12.75 对每个实例暂停都答 `pause_mode`，所以
+  `runtime-client` 低于 12 的监控台（只到 11 或更低，即钉在 v0.12.71 或更早）一读到带实例暂停的状态就失败、锁住连接：Runtime 升到 v0.12.75
+  之前，要先把这种监控台换成读得了 12 的。钉在 v0.12.73、v0.12.74 的监控台（UI v0.12.25、v0.12.26）配 v0.12.75 照常能用，
+  读不了的只有 iOS 手机的观察和那种尺寸显示的投影；配 iOS 手机之前，每个监控台都要是修订 13 或更新的，这个就是。
+  钉在 v0.12.75 的监控台配 v0.12.76 不用换钉，钉在 v0.12.76 的配 v0.12.77 到 v0.12.83 也不用（这几版没动监控台涉及的区间）。第一次答 `unavailable` 的那一版 Runtime 会把 `runtime-client` 的下限升到 14：
+  在它之前，每个监控台都要讲 14，这个就讲。游戏根从 v0.12.68 起用 `pack-catalog.json`
+  取代 `ui.json`（见「数据来源」一节）：安装向导铺 `pack-catalog.json`，拒收带 `ui.json` 的旧包。例外是以前的安装向导
+  或 v0.12.68 以前的 Runtime 铺好、根里还留着 `ui.json` 的游戏根：`actingctl packs` 见到它就发警告，
+  于是日常任务退回到包编号和任务编号，也没有「不可撤回」「有风险」徽章，「目标」页的包变量也全部并进「其他设置」。
+  v0.12.55 起的账本（修订 8）是单向的：
+  v0.12.55 或更新的 Runtime 在一个状态根上跑过之后，v0.12.55 之前的 Runtime 就打不开它，`ledger` 只到 7 的监控台也可能读不了，
+  所以要先换监控台，再上 Runtime。v0.12.63 的账本仍是修订 8，但它的决策记忆记录可能带 `break_in`，
+  建在 v0.12.62 或更早版本上的监控台离线读不了（见「数据来源」一节），所以这里也要先换监控台。账本修订 9 也是单向的
+  （Runtime 发布版本从 v0.12.71 起声明它）：v0.12.71 或更新的 Runtime 在一个状态根上跑过之后，就不能退回只声明到 8 的 Runtime
+  （v0.12.70 及更早），`ledger` 只到 8 或更低的监控台（UI v0.12.21 及更早）离线读不了带修订 9 记录的账本，在线读不受影响（见「数据来源」一节），
+  所以上 v0.12.71 也要先换监控台。除了这类说明，别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（各个钉点的接口见「数据来源」一节，
+  安装集怎样核对接口见「安装向导 acsetup」一节）。
+- **0.11 系列**：UI v0.11.4 及更早的版本只说 0.11 协议，连不上 0.12 的 Runtime。0.11 系列不再维护。
+- **变了什么**：每一版 Releases 页上的说明写着这一版改了什么。
+- **伞仓**：伞仓最新发布 v0.11.4 仍是 0.11 系列（Runtime v0.11.4、UI v0.11.3）及其安装器；还没有伞仓发布
+  带 0.12 系列。
+
+## 开发状态
+
+- **调试阶段**：主循环是「发现问题 → 修复 → 对照预期检查 → 再改」；部署与可用性是次要的。
+- **全部是预发布**：接口、配置与文件格式还会变。**只支持最新版**，旧系列不出修复（不维护 0.11 系列）。
+- **Runtime 0.12**：Runtime 的 0.12 系列换了新账本（0.11 的状态根不带过去）、新的命令行输出与退出码和新的包格式。
+  监控台从 UI v0.12.0 起跟上它（见「当前发布」）。
+- **实机现状**：自 10 月上旬起，在真实 MuMu 实例上按目录、用可用的标准包每天跑例行批次。标准包的内容覆盖还不
+  完整，多日无人值守长跑仍在验证。
+- **版本号规则**：X 重大或不兼容、Y 新特性或新覆盖面、Z 修复（含为修复服务的特性）。Runtime、UI 与各标准包
+  各自发版、只在自身有变化时发；能否搭配看各自声明的接口，不看版本号是否一致。
+
+## 数据来源：读面，不是文件
+
+程序只认一个参数：状态根。**读账本数据的文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
+不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不为读数据拉起任何 CLI。它拉起的
+进程只有两种，都在「启动器」一节里写明：actingd 本身（「启动」）与经两次确认的
+`actingd unlock-owner`（解锁）。
+
+读面有两张，同一套查询、页、游标语义，只是答案从哪来不同：
+
+**离线**（原路径）：
+
+- `GlobalLedger::open_metadata` 打开状态根，由账本自己判定介质（segment / sqlite）、
+  打开钉在一点上的有界快照（sqlite：只做写者打开时的检查、认证最新一段记录、读驱逐证明；每页读到
+  哪条认证哪条，一页至多 256 条或 768 KiB，游标续读），给出 `latest_sequence` 与完整性观察。整个会话
+  固定在这一个快照位置上读。
+- `actingcommand_ledger_forensics::query_view_page` 出正式页 `RuntimeEventQueryPage`：
+  事件、每条事件自带的视图归属、读取范围、页游标、运行恢复分组、产物淘汰事实。
+- `actingcommand_ledger_forensics::read_material_complete` 整份读素材：由读面解析引用、拿到
+  共享读保护、二次核对引用与保留状态，并在整份 sha256 校验通过后才交出字节；从不交出前缀。
+
+**在线**（经 `actingcommand-runtime-client`，客户端唯一的类型化 IPC 路径）：
+
+- `RuntimeClient::connect(RuntimeClientConfig::new(state_root, Ui, Ui))`：`runtime-info.json`
+  由客户端自己读、回环地址由它取、owner epoch 由它在连接时核对。读面只是客户端：
+  不杀、不等 Runtime，不碰 `owner.lock`，不往状态根里写任何东西；拉起与请求关闭归
+  工作台的启动器（见「启动器」一节），关闭也只经这同一个类型化客户端。
+- 这一会话读的位置即钉点，是 Runtime 在内存里说出的账本头：状态读取的 `ledger_committed_head`；
+  状态读取失败或没给出来源时，取事实快照的 `ledger_position`（两次读都在开台时做，见下）。不为求它
+  问任何一页，两次读也都不追加账本记录。人按「跳到最新」时照样重读这两次来移动它；开启跟随时和跟随中
+  每次轮询，把它移到 Runtime 事实快照说出的位置（见下）。离线从不移动。每页都是
+  `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`，
+  同一个限定到一窗的 `EventQuery`、同一个页上限、同一个 `next_cursor`。在线时，监控台不发出缺
+  `from_sequence` 或 `to_sequence`、上下界不在 1 到钉点之内、跨度超过 4096 个位置（帧查找为它那条事件
+  前后各 65,536 个位置；查一次运行的显示换算时不限跨度，从 1 到钉点：这时由这次运行自己的关联
+  索引带动 Runtime 的语句，读的只是这次运行的记录。只有恰好是这种查询的页才放开：带运行编号，`event_types` 恰好只有
+  `task.geometry_observed`、不带 `event_type`，不带别的每次运行的关联，也没有时间条件；别的带运行编号的页，比如按 `run_`
+  筛选时读的时间线窗口，和其他页一样不超过 4096）、或带时间条件的页——带了时间条件，Runtime 可能改走时间索引，序号上下界就框不住
+  扫描。某次读取要发这样的页就是监控台的缺陷：它以 `console_online_page_unbounded` 失败，什么也不发。
+- 素材走自己那条连接上的 `RuntimeClient::read_material_complete`：这条连接在钉住时与页连接一起建好、
+  连到同一个 owner epoch，读素材（最长 30 秒）时跟随轮询和状态读取不用排在它后面；一次读取把它锁死后
+  下次重建。客户端自己分段读（每段
+  192 KiB，遇到拒收大段的 Runtime 退到 64 KiB），每段由 Runtime 对整份校验，拼完后客户端再核
+  一次总长与 sha256——结果形状与离线整份读相同。监控台不再自己拼段。
+- 介质、损坏尾部、写入进程记录与修复条数是离线读面对文件的观察，Runtime 不在页上说这些；
+  在线时实例卡的「存储格式」写「由 Runtime 判定」，修复条数写 Runtime 不提供，事件条数就是钉住
+  的位置（契约规定序号从 1 起无缺口，所以某位置上的条数就是该位置），「写入进程」写的是所连的
+  Runtime 本身（PID、owner epoch、启动时间，均出自它自己的 `runtime-info.json`）。「账本是否完整」在
+  当前钉点下还没有读回任何一页时写「未读」——钉点每移动一次都重新从未读算起——之后写当前钉点下读回的
+  页是否都完整；离线时是打开时自己的观察。
+- 开台时，在同一条连接上先读一次 `status()`、再读一次 `runtime_fact_snapshot()`，给出钉点（见上）与
+  实例卡「运行时实例」几行。状态只在人按「跳到最新」时重读，另外人发出一次恢复之后也另开一条连接重读一次（不移动钉点，见下文「有条件恢复」）；跟随时每一次轮询都只重读任务事实，与钉点是否移动无关。
+  头两行写两次读各自所在的序号；事实快照可能晚于取自状态的钉点，跟随中钉点往前走、状态却停在读到它的
+  位置，所以这是最近一次读到的状态，不是钉点上的状态。按契约，状态读取只读 Runtime 的内存，不追加账本记录（AO-4q）；它所在的位置是取样时
+  账本的已提交位置。随后对状态里登记的每个
+  实例写：别名（灰字是实例编号）、端口、租约（占用中 / 接管冷却中 / 空闲，有排队请求时加上排队
+  数），以及实例事实 `task.game`、`task.server`、`task.page`（最近一次识别匹配到的页面标签）原样，
+  没有就写「未记录」。快照里有事实、状态却没登记的编号，单独一行写明未登记。任一次读失败，就分行
+  写 Runtime 拒绝码、客户端错误与宿主失败；只要另一次读给出了账本头，会话照常打开，两次都没给出时
+  不打开（见下）。离线时由读面的 `runtime_facts_at` 在钉住的
+  位置本身重放事实库，就是每一页读的那个位置：几行写出这个位置、离线没有租约，以及每个实例的编号
+  （缩写，灰字是完整编号）与三项事实。账本里还没有事件时直说；读面拒绝重放时写它给的原因，重放
+  失败就分行写 code、operation、IO 类别（io 错误时）与 detail。重放在会话打开时（窗口出现之后，在
+  窗口的读线程上）跑一次，期限 30 秒。
+
+`--source <auto|offline|online>`，默认 `auto`：客户端能连上状态根所指的 Runtime 就在线，
+否则**不打开账本**：`auto` 从不自己打开离线读面，那样会在没人要的时候打开本机账本（生产机上就是
+状态根下那份大账本）。这时窗口不读账本的任何东西——不发页查询、不读素材、不读端口映射、不重放事实。
+实例卡第一行「读面」写明原因（`runtime-info.json` 不存在，或连接失败的客户端错误码与 operation）；
+列表写没有读取任何事件（连接失败时标红），会查账本的控件都停用，和读面未打开时一样（见下）；顶栏给出「重新打开」（再试在线读），
+和一个按钮「离线打开（只读，给副本、测试根用）」，按钮旁写明它要打开的是哪个状态根里的账本。只有按了它
+才打开离线读面：在同一个窗口里，以 `offline` 开一个新会话；实例卡「读面」那一行随后写明是按这个按钮打开的。
+`--source offline` 照旧是显式选择，直接打开离线读面。`online` 连不上就**带着客户端的错误码报错**，不会悄悄改走离线。
+两张读面里，连上了却说不出账本头（状态读取和事实快照都没给出）的 Runtime 在任何模式下都是错误，带上两次读
+各自的原因，不回退。这两种错误都不让监控台
+退出：窗口照开，列表与实例卡标红写出读面打不开的原文，并给出「重新打开」。
+
+离线读面打不开时——`offline`，或按了「离线打开」——监控台不退出，窗口的读面显示为**未打开**；
+离线读面看刚装好的状态根就是这样，账本要等 Runtime 第一次启动才建。这时实例卡只有第一行「读面」：写明账本
+未能打开，并原样写出读面自己的 `code`、`operation` 与 `detail`；io 错误另写 IO 类别
+（`LedgerIoKind`：`not_found`、`permission_denied` 等）。分辨「还没有账本」和「账本在但读不了」靠的
+是这个类别，从不解析本地化的 `detail`：只有 `ledger_io` 且 IO 类别为 `not_found` 时，才补一句状态根里
+还没有账本、多半是 Runtime 从未在这里启动过，并指向启动器的「启动」。不显示任何账本事实，连 0 也
+不写：列表写账本未打开，不留一片空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
+任何查询，不读任何素材。启动器照常可用；Runtime 启动、建出账本之后，按「重新打开」即可重新打开读面。
+默认来源（`auto`）的窗口因为当时没有 Runtime 而什么都没读，或者按了「离线打开」后按离线读（含离线读面
+未打开）时，只要启动器探测到 Runtime 在运行，就给出「重新打开」并写明可以改为在线读取，这时重新打开就是在线读；
+没探测到 Runtime 时，「重新打开」照原来的读面再开一次（按过「离线打开」的就是离线读面）。
+`--source offline` 要的窗口照旧按离线读。两种都不会在会话中途自己换读面。
+
+**读线程**：窗口先出现，读面随后在窗口自己的读线程（`acui-ledger-<窗口编号>`）上打开；开台、页读取、
+读更早、跟随、跳到最新、时间游标的定位点读和帧事件补读都在这条线程上一条接一条地做，窗口的事件循环从不
+等读取，读面也从不离开这条线程。打开期间列表写「正在打开账本」，各控件停用。读取进行中，顶栏多一行
+「正在…… 已等待 N 秒（这类读取最长约 M 秒）」，跟着游标逐页读的写「每页最长约 M 秒」；一次请求读了
+一秒以上才出现，免得快的读取让下面的行上下跳；之后每秒走一次，只在有读取在途时走。改页签或过滤、时间滑块停住、跳到最新、开关跟随、重新打开，都让在途的
+读取作废：它的结果不再写进窗口，跟着游标读的在下一页之前停下；跟随的轮询只在上一次做完后才发下一次。
+窗口状态只在套用结果和绘制的那几毫秒里上锁，读取本身不持锁。读线程意外终止（恐慌）或起不来时，窗口
+标红写明原因并记入技术日志，同样给出「重新打开」。「重新打开」开一个新会话：旧读线程读完手上这一页
+就退出，新会话沿用框里现在的页签与过滤（不带时间游标）重新打开读面。连上的 Runtime 换了进程（读到
+`console_runtime_owner_changed`）时，顶栏同样提示按「重新打开」改读现在运行的 Runtime。
+
+已提交的时间跨度——账本第一条事件与钉点上那条事件的时间，时间滑块就在这段上走——在第一次填充之后读，
+不在它之前，每个钉点读一次。第一条事件的时间是对位置 1 的一次单点读取，整个会话沿用；钉点上那条的时间，
+刚读的窗里有它就直接取，否则对钉点做一次单点读取。每次都是限定在这一个位置上、limit 1、不带运行恢复的
+一页。只有位置 1 上没有事件时，才再问一页位置 1 到 4096（钉点更低时到钉点），仍是 limit 1。跨度读取不跟
+游标，也不读得更宽：读回的页里没有应有的那条事件——被 Runtime 的读预算截短，或整个范围里都没有——就停下
+并报 `console_time_span_page_limit`；跨度保持原样，跟随也不会自己再问。钉点为 0 的账本没有跨度，也不为它
+问任何一页。定位时间游标也从跨度的两端起步：位置 1 和第一条的时间，最近一次读跨度时的钉点和那条的时间（见下面
+「时间游标」）；还没读到跨度时，滑块一直是「全部」。
+
+**Runtime 拒答的页**——读预算用完（`ledger_read_budget_exceeded`；Runtime 刚启动、还在后台整理 Lab 关系时，
+很多页会这样被拒，Lab 页签最常见），或写线程没有按时回应（`writer_response_timeout`）——写明它的码与原因，
+窗口不会自己重发。还有什么跟着停，看是哪一页：时间线上的页（填充读的窗，或跟随读到顶上的窗）失败，填充就停在
+那里、跟随停下，之后也不再问跨度的页；为定位时间游标读的页失败也一样停，而且一窗都还没读；跨度的页或帧查找失败，
+别的都不停，开着的跟随照常走，只是不再问这一页。
+这一行写明人怎样再读，
+按出错的地方不同：时间线或时间跨度上，按「读更早」、换页签或筛选、按「跳到最新」，或关掉窗口再打开；
+跟随中，再勾上「跟随最新」、按「跳到最新」、换页签或筛选，或关掉窗口再打开；帧查找，按「跳到最新」、
+换页签或筛选，或关掉窗口再打开，然后再选上这一行；定位时间游标时，一窗都没读，没有「读更早」，要再拖一次
+「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
+这样就不用游标往下读。
+
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.81（`8923a701`），是发布版本，以预发布发出。
+相对上一个钉点 v0.12.77（`3285143f`），v0.12.78 到 v0.12.81 只动了一个区间：Runtime 的 `package` 从 [3, 21] 变成 [3, 25]
+（第 2 版 `pack-catalog.json`、带连按次数的点击步），这是包和安装器的事；`runtime-client` [12, 14]、`actingd-config` [5, 35]、
+`ledger` [3, 9]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都照旧，控制台的区间也照旧。Runtime 自己的清单只少了 A/B 的
+入口程序，控制台不链接它，所以两把锁都只换提交号。控制台链接的 Runtime crate 里：契约库去掉了 A/B 的选择 v2 和槽文件
+（控制台读的 v1 选择还在），加了第 2 版目录的读取器和资源效果类型，改写了变量和目标的读取器；`GoalView` 的形状只改了注释；
+runtime-config 等其余几个源码没变。runtime-client 依赖、控制台不调用的 policy crate，让 `schedule.json` 的规则可以自带变量值
+（Workflow #500 SV-2）。这些都碰不到控制台构造、匹配或实现的东西，只有一处读法：v0.12.81 起，绑定任务的规则自带了某个变量的值、
+应用上又没有生效的设定值时，目标页上这一项不带 `effective_json`、`source`、`display`，由实际跑的那条任务的规则决定；目标页对它写
+「由各条规则决定」（见「目标」）。契约库嵌入的结果码目录里，v0.12.78 到 v0.12.81 加了 2 个码，都是候选没被派出的原因，实例卡片和
+每日任务表现在用自己的话说：`goal_value_excludes_rule`（目标页上设的值不是这条规则带的，先不跑）、`goal_value_rule_refused`
+（规则带的值任务包已经不收了，琥珀色）；退役了 5 个 A/B 安装的码，控制台从没用过；新名字里没有 `console_`、`setup_`。卡片说
+`instance_asleep_wake_due` 的话改成说实例，不再说模拟器。上一个钉点 v0.12.77（`3285143f`）相对 v0.12.76（`f6e2cd26`），v0.12.77 一个区间都没动：`runtime-client` [12, 14]、`actingd-config` [5, 35]、
+`package` [3, 21]、`ledger` [3, 9]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都照旧，控制台的区间也照旧。Runtime 的
+Cargo.toml 和 Cargo.lock 一个都没改，所以两把锁都只换提交号。控制台链接的 Runtime crate 里只有两个改了：契约库加了两个结果键，
+`entry_recovery_end`（词表，公开投影留着）和 `trigger_rule`（名字，公开投影丢掉），另改了目标检查那段遍历的两处注释；runtime-config
+加了 `LadderConfig::classify_unexcluded`。runtime-client 依赖、控制台不调用的 policy crate，改成会判睡着的实例的候选，也不再给
+能做不可逆事的任务打标记。这些都碰不到控制台构造、匹配或实现的东西。契约库嵌入的结果码目录里，v0.12.77 加了 9 个码、
+2 个位置（`instance_entry_block`、`take_up_entry_recoveries`）和词表 `entry_recovery_end`（3 个词），退役 1 个码
+`resource_target_package_irreversible`（控制台从没用过它），新名字里没有 `console_`、`setup_`。9 个里有 4 个是候选没被派出的原因，
+实例卡片和每日任务表现在用自己的话说：`instance_entry_blocked`（这个实例上有一次运行进不了任务入口，实例在等它恢复）、
+`instance_entry_task_waiting`（这个任务没进去入口，过一会儿再试，带最早时间）、`instance_entry_task_set_aside`（别的任务能进去，
+它却老进不了入口，这个活动时段结束前先放下，琥珀色）、`instance_asleep_wake_due`（闲置动作停掉的模拟器正为这个任务被叫醒）。
+3 个是进不了入口的实例的 `runtime.failed` 警告，账本窗口现在会说（见「启动器」一节「进不了入口的实例」）。剩下两个照它们类别的通用说法：
+`instance_idle_stop_withheld`（`device_state_observed` 警告：一次唤醒开了模拟器、之后没有运行被放进来，所以空闲检查不再把它停掉）、
+`recovery_rung_skipped_emulator_restarted_in_stretch`（这一段里模拟器已经重启过，恢复阶梯跳过重启那一级的结果）。上一个钉点
+v0.12.76（`f6e2cd26`）相对 v0.12.75（`945727d4`），v0.12.76 动了三个区间，下限都没动：`runtime-client` 从 [12, 13] 变成 [12, 14]，
+`actingd-config` 从 [5, 34] 变成 [5, 35]，`package` 从 [3, 20] 变成 [3, 21]；`ledger` [3, 9]、`install-control` [0, 0]、
+`runtime-outcomes` [1, 1] 都不变。控制台的 `runtime-client` 改成 [12, 14]：它所基于的契约库解得了修订 14，也就是状态成员
+`unavailable`（`InstanceUnavailable`），控制台还不显示它；v0.12.76 对哪个实例都不答它，因为 14 以下的读者读到带它的状态会拒收，
+第一次答它的那一版会把下限升到 14。控制台的 `actingd-config` 照旧是 [5, 32]：修订 35 加的四个键 `scheduling.unavailable_probe.*`
+在 Runtime 给控制台分的档里是隐藏的（那张表里没有它们），所以控制台和安装向导都不显示、也不写它们，修订 35 那一行的条件只约束要编辑这些键的
+控制台和安装器。`package` 21（`shared_ocr` 的 `lines`）是包和安装器的事。两把锁都只换提交号。控制台链接的 Runtime crate 里，
+runtime-client、ledger、ledger-forensics、display-adapter 源码都没变，runtime-config 和 ledger-forensics 编进去的默认值文件只多了
+四个 `scheduling.unavailable_probe.*` 的默认值，ledger-forensics 不读它们；runtime-config 加了四行键表、`UnavailableProbeConfig` 和字段
+`SchedulingConfig.unavailable_probe`；契约库加了 `InstanceUnavailable` 以及状态里的这个成员和它的访问器，把 `MAX_FACT_RECORDS` 改成公开的，
+还加了 `NAME_BOX_LINES_MAX`、`NAME_BOX_LINE_HEIGHT_MIN` 和 `CandidateRect::holds_centre_of`。这些，连同执行内核的改动（加了
+`SelectionDryRun.name_reads`，它的视觉提供者把共享读取的名字框和行传下去），都碰不到控制台构造、匹配或实现的东西。契约库嵌入的结果码目录里，v0.12.76 加了 4 个码、
+2 个位置，没有退役的码，也没有 `console_`、`setup_` 名字（`instance_unavailable_probe_failed`、`instance_unavailable_probe_passed`、
+`instance_unavailable_awaiting_person`、`fact_store_capacity_share_reached`；`queue_unavailable_probes`、`run_unavailable_probe`），
+`text_read_blocks_truncated` 多了可选值 `requested`。新记录都是 `runtime.failed`。控制台要变的是账本窗口给这四条记录配的话（见「启动器」一节
+「实例不可用时的自动体检和实例的事实」）。上一个钉点 v0.12.75（`945727d4`）相对 v0.12.74（`1067dfaf`），v0.12.75 只动了一个区间：Runtime 的 `runtime-client` 从 [3, 12] 变成 [12, 13]；`ledger` [3, 9]、
+`package` [3, 20]、`actingd-config` [5, 34]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变。控制台的 `runtime-client`
+改成 [12, 13]，别的区间不变。下限是修订 12 的最后一段（#480 PG-2e）：Runtime 现在在状态里对每个实例暂停答 `pause_mode`，在
+`released` 之前答 `in_the_way`，所以 12 以下的读者读到带实例暂停的状态一律拒收，而 Runtime 在一条连接上分不出这样的读者。修订 13
+（#479 F-3b，F-3a 并在同一行）不加请求、不加成员，只有两样东西 13 以下的读者会拒：比例和基准差不到一个像素的显示（1334×750、
+1366×768 对 1280×720）缩到基准的帧，这样的库在页面观察和 Lab 操作的回执里判成无效（`runtime_receipt_invalid`，锁住连接）；
+iOS 手机只读观察的取帧后端 `acib_screen_capture`，这样的库解不开（`runtime_receipt_decode_failed`）。配 iOS 手机、或观察那种尺寸的
+显示之前，每个控制台和钉在它旁边的 Lab 都要讲 13。这个控制台不发页面观察、也不发 Lab 操作；画面「刷新」（`ObserveReadonly`）会读到
+iOS 手机的帧，而且它基于修订 13 的契约库构建，所以区间到 13 为止。两把锁里的 crate 都没改依赖（Runtime 自己的锁也没改），所以两把锁都
+只换提交号。控制台链接的 Runtime crate 里，runtime-client、runtime-config、ledger-forensics 源码没变，ledger 只多了一个只读查询
+`run_starts_between`；契约库加了 `CaptureExtent::has_shape_of`（页面观察的 `reduced_to` 现在调它）、`CaptureBackendName` 和
+`RuntimeCaptureBackend` 的值 `AcibScreenCapture`、`acib_path`，运行的几何记录在写入和读出时都拒 `acib_screen_capture`；PG-2e 在
+那里只改了注释。这些和执行内核的改动（帧被拒、iOS 取帧失败）都碰不到控制台构造、匹配或实现的东西。契约库嵌入的结果码目录里，v0.12.75
+加了 3 个码、0 个位置，没有退役的码，也没有 `console_`、`setup_` 名字（`capture_ios_failed`、`capture_frame_all_black`、
+`device_acib_missing`），加了 4 个键和它们的词表：`ios_capture_problem`（19 个词）、`acib_problem`（25 个）、`acib_stage`（5 个）、
+`idle_wake_cause`（4 个）；`instance_idle_action` 多了可选值 `idle_wake_cause` 和 `task_id`。控制台要变的是它怎么说实例暂停（都在
+「启动器」一节）：卡片对任何人的、还在收尾的暂停，照状态说它最近一次检查读到什么挡着；账本窗口按状态答的模式，给别的一方还在收尾的暂停
+恢复入口。v0.12.75 也就是给 iOS 手机取帧后端的那一片，只开了只读取帧，经 `<安装根>\tools\acib.exe`；Runtime 的发版仍不带 `acib`，
+这种手机上也不按、不跑、不调度。再往前的钉点 v0.12.74（`1067dfaf`）相对它的上一个钉点 v0.12.73（`a8d0aa43`），v0.12.74 把 `package` 升到 20、Runtime 的 `actingd-config` 升到 [5, 34]；`ledger` [3, 9]、
+`runtime-client` [3, 12]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变，控制台的区间也都不变。`actingd-config`
+修订 34（#479 F-2）给实例的 `device` 加了一个可选成员 `system`：`android`（不写就是它）或 `ios`，只能写在手机条目上；Runtime
+只给写了它的条目报清单行 `instance.<实例编号>.device_system`，它在 `ui_tier` 里是隐藏的，组装时才读，不能设置。控制台的
+`actingd-config` 仍是 [5, 32]，和修订 33 时一样（见下面 v0.12.63 那段）：控制台不改任何条目的 `device`，也不显示这一行；安装向导
+不写 `system`，所以它写的手机条目照旧是安卓；而修订 34 自己的门槛是：改条目 `device` 的控制台和安装器，写 `system` 之前要先到 34。
+等安装向导开始写 `system: "ios"` 的那一片，再在同一处改成 [5, 34]。不是这一片：向导里 iOS 的框还是灰的，v0.12.74 的 iOS 实例在
+给它取帧后端的那一片（v0.12.75，见上）之前什么都不做，Runtime 的发版也不带 `acib`。`package` 20（#463 SEL-2L）是 `repeated_anchor` 布局的
+`shared_ocr`，只归包和安装器。两把锁里的 crate 都没改依赖（Runtime 自己的锁只给 `acib` 加了 `sha2`，两把锁都不列它），所以两把锁都只换提交号。
+控制台链接的 Runtime crate 里，ledger-forensics 源码没变，ledger 只改了测试；runtime-client 给出了控制台现在要读的恢复回执：
+`resume_scheduling_expected_as`，在 `SchedulingResumed` 结果旁边交回回执的结果码（`SchedulingResumeAnswer`，和 `SchedulingPauseAnswer`
+同一个形状），请求、等待时间、连接中途断开后的读法都和只交回结果的 `resume_scheduling_expected` 一样。契约库的改动（`DeviceBinding::serial`
+改成返回 `Option`、`DeviceBindingProblem` 加了 `device_key_invalid` 和 `system_mismatch`、`DeviceSystem` 和绑定文件的 schema v2）、
+runtime-config 的清单行 `device_system` 和执行内核的 `HandsetEndpoint::Ios`，都碰不到控制台构造、匹配或实现的东西。契约库嵌入的结果码目录里，
+v0.12.74 加了 19 个码、1 个位置，没有退役的码，也没有 `console_`、`setup_` 名字，其中有 `scheduling_pause_settled`、
+`scheduling_pause_lifted_not_quiet`、`scheduling_resume_without_backend`。控制台要变的是单个实例的恢复和账本窗口（都在「启动器」一节）：
+恢复照回执的因说明没有连接设备的原因，一是人按的暂停还没收尾完就被恢复（`scheduling_resume_without_reconnect`，v0.12.73 的 Runtime
+就已经答它），二是 Runtime 没有它后端的 iOS 手机，恢复不连接任何东西，被隔离的隔离照留（`scheduling_resume_without_backend`）；
+账本窗口给暂停一生的六种记录（#480 PG-2d）配了控制台自己的话。再往前的钉点 v0.12.73 相对它的上一个钉点 v0.12.71（`f0c64ae8`），
+v0.12.72、v0.12.73 把 `runtime-client` 升到 12、`package` 升到 19；`ledger` [3, 9]，
+以及 Runtime 的 `actingd-config` [5, 33]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变。控制台的 `runtime-client`
+区间改成 [12, 12]，下限也一起抬到 12。修订 12（#480 PG-2c）给请求加了成员 `PauseScheduling.pause_mode`（`stand` 或
+`quiet_or_lift`，不写就是 `stand`），钉住的客户端每一次暂停都写它，全局暂停也一样；修订 11 及更低的 Runtime（v0.12.72 及更早）
+解不开这样的请求，直接断开连接、不给回执，所以这个控制台的暂停一个都到不了它：控制台收不到回答，接着看状态，最后说这次暂停没有立住。
+区间照实写出这一点，安装向导也会拒收把这个控制台和这样的 Runtime 配在一起的安装集；控制台自己的握手不带修订号，所以指向旧 Runtime
+时照样能连、能读，只是暂停不成。修订 12 还声明了状态成员 `InstancePauseState.pause_mode` 和 `in_the_way`，0.12.73、0.12.74 的 Runtime
+都不发（第一次发这两个成员的那一版会把 Runtime 自己的下限也抬到 12：那一版就是 v0.12.75，#480 PG-2e）。`package` 19（#463 INT-1）是 `then: end_run` 的中断条目可以不写
+handlers、`result` 新加词 `environment_reset`，只归包和安装器。两把锁里的 crate 都没改依赖，所以两把锁都只换提交号。控制台链接的 Runtime
+crate 里，ledger、ledger-forensics、runtime-config 源码没变；契约库和 runtime-client 给出了控制台现在要读的暂停回执：`pause_scheduling_as`
+加 `SchedulingPauseMode`，在结果旁边交回回执的结果码（`SchedulingPauseAnswer`），以及词表 `instance_pause_stage`、`pause_obstacle`，
+即这个结果码之因的值 `pause_stage`、`in_the_way`。其余改动（`PauseScheduling` 和 `InstancePauseState` 的新成员、中断结果
+`environment_reset`、`standard_pack_problem` 的词 `interrupt_limit_cause_invalid`）和执行内核 `ContainedTaskRuntime::shared_interrupt_shown`
+的新返回值，都碰不到控制台构造、匹配或实现的东西。契约库嵌入的结果码目录里，v0.12.72、v0.12.73 加了 12 个码（其中有暂停回执的三个提示性的因
+`scheduling_pause_standing`、`scheduling_pause_lifted_by_resume`、`scheduling_pause_kept_at_shutdown`，恢复回执的
+`scheduling_resume_without_reconnect`，以及账本里运行结束时可能带的 `contained_task_environment_reset`）、1 个位置、4 个键、4 个词表，
+`emulator_autostart_skip_reason` 加了词 `global_paused`，`standard_pack_problem` 加了 `interrupt_limit_cause_invalid`；没有退役或删掉的码，
+也没有 `console_`、`setup_` 名字；两个钉点之间没有码改类别（`scheduling_pause_kept_at_shutdown` 在 v0.12.72 是错误，v0.12.73 起是提示），
+Runtime 的码照旧取它类别的通用句。控制台要变的是单个实例的暂停和恢复（#480 PG-2c，见「启动器」一节）：人按的暂停一直立着，直到有人恢复它；
+在排空时限加 30 秒检查点宽限之内答复，答复时可能还在收尾，并说出挡着什么；Runtime 自己出错也不撤回它；任何阶段都能恢复，设备还没交还时恢复不重连（实例被隔离、或者交还已经开始关设备会话的，照样重连）。
+v0.12.72（#480 PG-1）还让 Runtime 在全局暂停期间不自己启动模拟器。#398 DB-3：actinglab 一启动就把自己的标准句柄设成不可继承，
+它起的 adb server 不会再占着安装向导的管道；为了更早的 Lab，安装向导照旧不等管道结束就取 Lab 的回答。再上一个钉点 v0.12.71 合入了
+Runtime PR #1800，再往前控制台钉的就是这个 PR 的头（`7b4705ff`，在 v0.12.69 之上 3 个提交）；它也是第一个声明 `ledger`
+修订 9 的发布版本（v0.12.70，`240cdb1a`，声明的仍是 [3, 8]）。相对那个头，v0.12.70 把 `package` 升到 18；`ledger` [3, 9]、
+`runtime-client` [3, 11]，以及 Runtime 的 `actingd-config` [5, 33]、`install-control` [0, 0]、`runtime-outcomes` [1, 1] 都不变，
+控制台认的区间也就不动（它的 `actingd-config` 仍是 [5, 32]，理由见下面 v0.12.63 那条）。`package` 18（#463 K-c）是挑选步的 `scan` 声明了 `early_stop` 时可以不写 `end`，只归包和安装器：
+安装向导拿 Runtime 压缩包声明的范围核标准包。Runtime 的 `Cargo.lock` 只给 actingd 多了一个测试用的依赖 `actingcommand-lab-ops`，
+actingd 不在这个仓库的两把锁里，所以两把锁都只换提交号。控制台链接的 Runtime crate 里只有契约库的源码变了：`NAME_MAX_BYTES`
+改成公开，旁边新加 `key_text_fits`；`standard_pack_problem` 多了词 `catalog_group_title_differs`；写 `pack-catalog.json` 的一方
+可以点名把条目重算到最新、用一份文件换掉条目的显示（#477 PC-2，`standard-pack catalog --refresh` 和 `--displays`）；控制台都不用。
+ledger、ledger-forensics、runtime-client、runtime-config 和控制台那把锁里的其他 Runtime crate 源码都没变。契约库嵌入的结果码目录里，
+v0.12.70、v0.12.71 加了 12 个码（`selection_scan_early_stop_unreached`、`standard_pack_catalog_refresh_refused`、
+`standard_pack_catalog_display_refused`、`adopt_cases_left`，以及 Lab 录制的 8 个 `record_…` 码）、4 个键、5 个词表，
+`select_problem`、`ready_missing`、`ready_check`、`standard_pack_problem`、`adopt_problem`、`drop_problem` 的新词，
+`optional_after_problem` 用 `no_effect` 换掉了 `no_click`；没有新位置，没有退役或删掉的码，也没有 `console_`、`setup_` 名字。
+#398 DB-1 让 `devices bind` 可以在候选配置就位以前对着它绑手机（`--config`），并把来源记成 `ui`（`--bound-via ui`），给安装程序用；
+安装向导安装时就用它绑每个手机实例，用的是 v0.12.72 的 Lab 在安装之前列手机时给出的设备键（#398 DB-2，见「安装向导 acsetup」一节第 7 步）。下一次启动把 `ui` 记成 `runtime.instance_bound` 的 `device.bound_via`，契约库原来就有这个词，
+所以控制台照旧读这种记录。其余几片（`recognize` 答出定位到的文字的框、`standard-pack adopt` 带上录制的回归用例、用例读取器读过场景说明）
+只归 Lab 和做包的工具。PR #1800 的头相对 v0.12.67：v0.12.68 把 `runtime-client` 升到 11、`package` 升到 16，v0.12.69 把 `package` 升到 17，
+这个 PR 把 `ledger` 升到 9；控制台认的区间当时跟到 `ledger` [3, 9]、`runtime-client` [3, 11]；Runtime 的 `actingd-config` [5, 33]、
+`install-control` [0, 0]、`runtime-outcomes` [1, 1] 不变；两把锁里的 crate 都没改依赖，`Cargo.lock` 只换提交号。
+账本修订 9（#463 CH-1）给运行的准入记录 `task.requested` 加了两个可选成员：`content_hash`，按路径准入这次运行的包时量出的内容哈希
+（64 位小写十六进制）；`variables`，从外面交给这次运行的值，1 到 16 项、按名字升序，值的 JSON 文本不超过 1024 字节时带原文，
+超过时只带这段文本的 SHA-256 和长度。每一次按路径准入的运行都写这种记录（交了值才有 `variables`），不带这两个成员的记录字节和修订 8 一样。
+公开投影两个都不带，所以控制台在线读的账本页（`Ui` 档）逐字节和以前一样；详情面板显示的就是这个投影，两个成员都不显示。
+修订 8 的读者只要整条读到这种记录就拒（`corrupt_ledger_record`）：`ledger` 只到 8 或更低的控制台（UI v0.12.21 及更早）离线读不了带这种记录的账本
+（这种记录在最新的那几条里时打开就失败，含它的账本页整页失败），在线读不受影响；这个控制台离线也读得了。修订 9 是单向的：
+v0.12.71 或更新的 Runtime 在一个状态根上跑过之后，就不能退回只声明到 8 的 Runtime（v0.12.70 及更早），所以要先换控制台，再上 Runtime。
+修订 11（#463 S3-8）给直接运行的请求加了可选的 `variables`，给包声明的变量传值；不带值的请求逐字节和修订 10 一样，这个控制台不发运行请求。
+`package` 16（#477 PC-1）让游戏根可以带 `pack-catalog.json`，取代 `ui.json`：v0.12.68 起 `actingctl packs` 从它生成一个游戏的 `ui`，
+形状不变，不再读 `ui.json`，根里还留着它时发警告 `standard_pack_ui_retired`。控制台的任务名称和日常任务的包表都取自这份回答，
+有任何警告就都不用：包行显示包编号，没有「不可撤回」「有风险」徽章，全部任务按任务编号列在「本实例：有些安排对不上任务包」下面。
+根里还留着 `ui.json` 就足以这样。安装向导铺包的规矩和 `package` 16 起 Runtime 自己的 `place` 一样：铺 `pack-catalog.json`，
+拒收带 `ui.json` 的包，并说明这是 Runtime 0.12.68 以前格式的包。向导只往新文件夹装，碰不到已装的 `ui.json`：还留着这份文件的，
+只有以前的安装向导或 v0.12.68 以前的 Runtime 铺的游戏根，直到 Runtime 的 `place` 再往那里铺包、把它挪开。
+`package` 17（#463 KP-1）是 `linear_steps` 里按返回键的一步，只归包和安装器。ledger crate 和 runtime-client
+只改了构造 `PackageAdmitted` 的地方（补两个 `None`）和测试，ledger-forensics、runtime-config 和控制台链接的其他 Runtime crate 源码都没变。
+契约库另外把读 `ui.json` 的 `standard_pack_ui` 换成了读 `pack-catalog.json` 的 `standard_pack_catalog`，控制台两个都不用。
+结果码目录里，v0.12.68、v0.12.69 加了 27 个码（其中有 `invalid_contained_task_variable_count`、`invalid_contained_task_variable_name`，
+宿主的 4 个 `run_variable_…` 码，7 个 `standard_pack_catalog_…` 码和 `standard_pack_ui_retired`）、1 个位置（`check_run_variables`）、
+4 个键、16 个词表，`install_caveat`、`ready_missing`、`select_problem` 的新词，`standard_pack_problem` 用 5 个 `catalog_…` 词换掉了
+4 个 `ui_…` 词，以及域 `enabling_`；退役了 `trial_variables_not_carried`，没有删掉的码，也没有 `console_`、`setup_` 名字；这个 PR 一个码都没改。
+v0.12.67 相对 v0.12.63（中间的 v0.12.64、v0.12.65、v0.12.66 接口一个没动），接口把 `runtime-client` 升到 10，控制台认的 `runtime-client`
+当时跟到 [3, 10]；
+`actingd-config` [5, 33]、`install-control` [0, 0]、`ledger` [3, 8]、`package` [3, 15]、`runtime-outcomes` [1, 1] 不变；
+两把锁里的 crate 都没改依赖，`Cargo.lock` 只换提交号。修订 10（#437 G1）给状态里每个实例那一行加了可选的 `device_held`
+（`device_group_wait` 为 `close_unconfirmed`，`alias` 是设备为之挡着的那个成员），只在一台设备几个应用、设备为另一个成员结果不明的关会话挡着时才发；
+这一行不收不认识的成员，所以建在 v0.12.66 或更早版本上的控制台读到带它的状态会整份失败（`runtime_receipt_decode_failed`）。今天哪个安装都发不出它：
+Runtime 加载配置时一律拒绝一台设备放几个应用（`several_members_unsupported`），放开一台设备几个应用的那一片时，Runtime 的 `runtime-client` 最低值会升到 10，
+这个控制台已经读得了；它读状态，不显示 `device_held`。修订 10 也是投影放宽的那一版：在映射到包的基准尺寸的显示上（#392 DA-5ab），
+观察的投影是缩到基准的设备帧，建在 v0.12.66 或更早版本上的控制台判这种 `ObserveContainedPage`、`RunContainedLabOperation` 回执无效；这个控制台两种都不发。
+账本仍是修订 8，ledger crate 只改了写入端内部（#463 S1-10），ledger-forensics、runtime-client、runtime-config 的源码都没变。契约库另外加了事实键 `display.frame_extent`、
+标准包的基准尺寸 `STANDARD_PACK_BASE_SIZE`（1280×720）和 `trial_state_place`、`trial_record_problem`、`trial_collect_problem` 三个键，控制台都不读；
+契约库嵌入的结果码目录多了 18 个码（标准包试跑的 14 个 `trial_…` 码，以及 `device_held_for_member_close`、`lab_scene_size_unsupported`、
+`record_display_not_base`、`record_size_not_base`）、8 个位置、词表 `ready_check`、`ready_missing`、`ready_source`、`ready_warning`、
+`trial_collect_problem`、`trial_record_problem`、`trial_state_place`，`device_group_wait`（`close_unconfirmed`）和 `install_refusal` 的新词，以及域 `trial_`；
+没有退役或删掉的码，也没有 `console_`、`setup_` 名字。v0.12.63 相对 v0.12.62，
+接口把 `actingd-config` 升到 33、`install-control` 改成 [0, 0]，`ledger` [3, 8]、`runtime-client` [3, 9]、`package` [3, 15]、
+`runtime-outcomes` [1, 1] 不变；两把锁里的 crate 都没改依赖，`Cargo.lock` 只换提交号。修订 33 加 `scheduling.suspension.break_in_runs`
+和 `scheduling.suspension.break_in_ms`（#463 U1b，调度的 `linear_steps` 包的磨合期），两个在 `ui_tier` 里都是 `hidden`，设置页不多出行；
+控制台两个都不改，所以它认的 `actingd-config` 仍是 [5, 32]。#434 LAB-6S4a 删了 `install-control` 修订 1（安装切换、`actingctl install-transition`
+和 actingd 带 `--install-held` 的启动），连同请求种类 `DeclareGovernanceIdentity`、`RecordApprovalDecision`、`InstallTransition`、
+`UpgradeState`、`UpgradeStateStatus`，以及它们的结果和其中三种有的客户端方法，`runtime-client` 不升；这个控制台这几种都不发，起 actingd 只带 `--config`，
+acsetup 关 Runtime 用的 `actingctl request-shutdown --wait` 照旧在。账本仍是修订 8，决策记忆记录 `policy.control_state_recorded`
+多了可选的 `break_in`（`content_hash`、`runs`、`first_settled_at_unix_ms`），从第一次量到内容、并以成功或失败结算的调度 `linear_steps` 运行起写下；
+建在 v0.12.62 或更早版本上的控制台离线读不了它（含这种记录的账本页整页失败），在线读不受影响（在线账本页的公开投影不带这种记录的内容）；
+建在 v0.12.63 或更新版本上的控制台（这个就是）离线也读得了，所以要先换控制台，再上 Runtime。契约库的运行摘要给运行的结局加了可选的 `outcome_key`（运行结束时所在的业务结局，#463 S3-3），这个控制台不读它；
+契约库嵌入的结果码目录多了 3 个码（其中有 `policy_break_in_unread`），退役的是 LAB-6S4a 的 60 个码，没有删掉的码，也没有 `console_`、`setup_` 名字。
+v0.12.62 相对 v0.12.61，接口一个没动，各 crate 的依赖也没变，`Cargo.lock` 只换提交号；契约库的运行摘要给运行的结局加了可选的 `failure_values`（结局在只留码模式下
+留得住的值，#469 F1），这个控制台还不读它；结果码目录登记了 #469 V0 的原因词。v0.12.61 相对 v0.12.60，
+接口把 `runtime-client` 升到 9、`package` 升到 15，`actingd-config` [5, 32]、`ledger` [3, 8] 不变，控制台认的 `runtime-client`
+跟到 [3, 9]。修订 9 加两种请求：`GoalView`（读一个应用的目标页）和 `EditGoal`（按名字设或清其中一个值，写不进去时回
+`goal_value_invalid`，带一个 `goal_problem` 词），都在 `ui` 通道的清单里（#463 V3），这个控制台在「目标」页签上用 `GoalView`
+读目标页，每按一次用一个 `EditGoal` 设或清其中一个值。`package` 13 到 15
+依次带来 `linear_steps` 任务的挑选步（#463 K1）、包的 `variables` 和 `goals.json` 第 2 版（#463 V1）、`linear_steps` 任务的结局页
+（#463 K2）；安装向导拿 Runtime 压缩包声明的范围核标准包，标准包可带的根文件没变。两把锁里的 crate 都没改依赖，`Cargo.lock`
+只换提交号。下面各条注明了从哪一版起（v0.12.60 起：`actingd-config` 32、`package` 12；修订 30 加 `scheduling.device_group.switch_failure_cooldown_ms`（#437 MAPP-2b）；修订 31 给 `instances[]` 条目加可选的
+`start_paused`（#453 S2：第一次见到这种条目的启动，用 `instance.added` 暂停这个实例，Lab 的 `instance add` 原来就用这个理由；
+装配时读，不能在线设）；修订 32 加 `scheduling.device_group.max_queue_wait_ms`（#437 ORD-1c）。三者在 `ui_tier` 里都是
+`hidden`，设置页不多出行；这个仓库里没有哪处改写已有配置文件时会丢掉条目里不认识的成员。`package` 12 带来游戏根的
+`goals.json`（#455 G-R1），安装向导照 Runtime 自己的放置方式放它。默认的 `ledger_observer.tag.workbench_patterns` 从 14 条
+变成 16 条（`host.state_root_installation`，#453 S11；`host.start_pause_applied`，#453 S2），账本修订不变，控制台两项事实都不读。
+`ui` 通道可用的请求多了 `ApplyResourceTargets`（#455 T1-R），这个控制台不发它；v0.12.59 起：`package` 11，ledger-forensics 多依赖一个只依赖 contract 的 crate
+`actingcommand-display-adapter`；#434 LAB-6S1a，v0.12.58 起：`runtime-client` 修订 8 给 `BindChannel`、它的回答 `ChannelBound` 和声明了发起方的连接的每个回执
+加了可选的 `initiator`，只在 `lab` 通道上收，`ui` 上从不写；这个控制台绑 `ui`、不声明发起方，发的和读的每条消息都和修订 7
+逐字节一样，和声明 [3, 7] 的 Runtime 照旧配得上。#434 LAB-6S3，v0.12.58 起：绑在 `ui` 上的连接，Runtime 只收它的 UI 清单里的
+请求种类，`ConfigureSettings` 只收控制台层级是 `daily` 或 `advanced`、并且可设的键，别的都拒成 `channel_request_refused`；
+这个控制台发的请求种类都在清单里，改的键也都在这两层。#434 LAB-6S1b，v0.12.58 起：contract crate 除了客户端来源的集合，
+不再按请求信封的来源判请求，去掉的那些关卡的十个 `invalid_…_origin` 码随之退役。v0.12.56 的配置修订 29 加了
+`scheduling.task_held`（`enabled`、`after_ms`），
+也可按实例设（#438 HELD-1），以及 `instances[]` 条目的 `device_group`（#437 MAPP-1，组装时读，不可设），新键在 `ui_tier`
+里都是 `hidden`，设置页不多出行。账本修订 8 不动（没有记录带发起方）；ledger crate 的运行恢复不再只凭严重度把结果码属于
+梯子类 `planned_stop`（按要求停下、暂停）的记录算成这一组的失败（#429 RG-STOP，v0.12.58 起）。嵌入的结果码目录多了 12 个码（其中有 `task_held`、
+`task_held_ended` 和四个 `device_group_…` 码）、7 个键、1 个位置，词表 `device_group_problem`、`device_group_wait`、
+`held_end`、`held_state`，以及 `argument_problem`、`install_caveat`、`install_refusal`、`standard_pack_problem` 的新词，
+退役的是那十个来源码，没有删掉的码，也没有 `console_`、`setup_` 名字；`package` 修订 10（#444 NOTICES-2，包里的 `notices/`）
+只归 acsetup。runtime-client 链接的 policy 多了设备组（MAPP-1）；ledger-forensics、artifact-store、runtime-database、
+selection-policy 的源码没改，runtime-config 和 ledger-forensics 编进去的默认值文件只多了 `task_held` 的默认值和梯子档
+`without_emulator_restart`，ledger-forensics 不读它们；Runtime 的 `Cargo.lock` 只多了它自己的两个新程序 `actinglab-mcp`、
+`mcp-entry-g2`，外部包一个没动。
+v0.12.55 起 #428 S168-LB1a：`fact.published` 记录的 `record_list` 最多可有 1024 行（`MAX_FACT_RECORD_LIST_ROWS`，原来是 256），
+这是账本修订 8 加的，单向（声明它的 Runtime 在一个状态根上跑过之后，更早的 Runtime 就打不开它）；`runtime-client` 修订 7 让
+`InstanceFactSnapshot` 的回答可以带这样的列表，请求可以带可选的 `key_prefix`，回答可以带可选的 `records_total`。控制台不发
+`InstanceFactSnapshot`，在线账本页里 `fact.published` 的公开投影不带行，所以在线时长列表到不了它，离线时钉住的 crate 读得了长列表。
+#429 R-6b（R-6b1、R-6b2）并进这两个修订，不再升号：`policy.execution_recorded` 多了第三种结果 `stopped`（`outcome`、`runtime_ms`），
+是 `StopInstanceRun` 停下的调度运行的结算，旁边的终局照旧是带 `contained_task_cancelled` 的 `task.failed`；建在 v0.12.53 上的控制台
+解不了它（离线时含它的页整页失败，在线时 `runtime_receipt_decode_failed`），这一版解得了。v0.12.55 起 Runtime 也停调度器派的运行，
+由 actinglab `task stop` 或 Lab 的工具发；MCP `ac_stop_run` 和 actinglab `run stop` 照旧拒绝所有调度运行；这个控制台对
+调度运行的按钮是「关闭这个任务」：先关掉这个任务，再停下这一次（#429 UI-3e3、UI-3e2b，见「启动器」一节的救援条）。v0.12.54 的配置修订 28 加了 `idle.action` 的值 `auto` 和键 `idle.return_home_min_gap_ms`、
+`idle.stop_emulator_min_gap_ms`，每个也可按实例设（#386 IDLE-2），以及 `instance.<实例编号>.scheduling.pool_lines`（#428 SCHED-C1e），
+新键在 `ui_tier` 里都是 `hidden`，设置页不多出行；设置页把 `auto` 写成「按空闲时长自动选」，实例的规则面板写
+「现在是『按空闲时长自动选』，这里不提供」，也不提供这一选项。请求 `PackScheduleView`、`EditPackSchedule` 有了成功码 `request_pack_schedule_view_completed`、
+`request_edit_pack_schedule_completed`（#429 R-8），控制台读一个实例的 `PackScheduleView`、写本实例范围的 `EditPackSchedule`（「日常任务」的开关，见下；救援条的「关闭这个任务」也写同一行）。`contained_task_state_invalid` 用可选的值写明是什么无效：
+`state_problem`（词表 `state_problem`：`held_state_unusable`、`no_move_from_page`、`runtime_invariant`、`transition_refused`）、
+`phase_id`、`package_id`、`page_id`、`pack_operation_id`（#428 DIAG-SI），`runtime-outcomes` 仍是 1。嵌入的结果码目录多了 5 个码
+（这两个成功码，以及 `consumption_fact_unusable`、`policy_fact_rows_exceeded`、`selection_decided_on_lower_bound`）、9 个键、
+词表 `consumption_source`、`lines_source`、`list_max_bound`、`state_problem`，和 `reading_problem` 的新词 `list_bytes_exceeded`，
+没有退役、删掉或改类别的码，也没有 `console_`、`setup_` 名字；ledger crate 把停下的运行的记录和它的 `task.failed` 终局配对，
+并按 `stopped` 恢复这种运行（R-6b）；runtime-client 链接的 policy、selection-policy 多了按实例的池水位线（SCHED-C1e）、
+从事实读的一次运行消耗（#428 SCHED-C1f1）、只为自己的起因挡住的无进展守卫（#428 SS-4b）和列表最大值的下界（#428 S168-LB1b）；
+runtime-client 多了按键前缀读，并读得了停下的运行的摘要；
+ledger-forensics、artifact-store、runtime-database 的源码没改，runtime-config 和 ledger-forensics 编进去的默认值文件只多了两个空闲默认值
+（600000 和 7200000 毫秒），ledger-forensics 不读它们；Runtime 的 `Cargo.lock` 没变，外部包一个没动。
+v0.12.53 起 #429 R-6：contract crate 给请求 `StopInstanceRun` 定了成功码 `request_stop_instance_run_completed`，建在它上面的
+控制台核得了 v0.12.53 的 Runtime 停完一次运行的回执；建在 v0.12.47 上的控制台那里这个种类没有成功码，会核错。停调度器或 Runtime
+自己发起的运行被拒成 `scheduled_contained_task_not_client_cancellable`，用键 `run_origin`（词表 `run_origin`：`policy`、`host`）
+写明是谁发起的；控制台从这一版起能在救援条上用「停下这次运行」停别的工具直接发起的运行（见「暂停这个实例的调度」那段之后）。
+v0.12.47 以来控制台对上的接口都没动（`actingd-config` [5, 27]、
+`ledger` [3, 7]、`runtime-client` [3, 6]，`StopInstanceRun` 是修订 3 的种类；v0.12.50 起的 `package` [3, 8] 只归 acsetup）；
+contract crate 别的只多了程序事实 `config.catalog_provenance`（#428 SCHED-C1b）、`inventory.list.` 下的列表读数（#428 S168-4）、
+`schedule.json` 规则的固定值（#428 SCHED-C1a）和原地替换在 `tables/` 里留下的名字（#428 TB-R1），控制台都不读；嵌入的结果码目录
+多了 10 个码（其中有 `request_stop_instance_run_completed` 和 ISO-START-1 的 `policy_settlement_facts_skipped`）、7 个键、9 个位置、
+词表 `run_origin`，以及 `install_caveat`、`install_operation_kind`、`install_refusal`、`install_step_kind`、`reading_problem` 的新词，
+没有退役或删掉的码，也没有 `console_`、`setup_` 名字；ledger crate 不再让时间界驱动一页的语句（#422 QP-1，行和次序不变），
+没有终局、唯一一次放租是自己放的运行，写过效果或输入记录也结成中断（#428 UNSET-2），默认的 `ledger_observer.tag.workbench_patterns`
+多了 `host.capped_episodes`（#428 SCHED-C1d），账本仍是修订 7；runtime-config 的源码只改了测试，它编进去的默认值文件也只多了这同一个模式，键表的键和 `ui_tier` 都是 v0.12.47 的，
+设置页不多出行；runtime-client 链接的 policy、selection-policy 多了封顶消耗顺序的触发线和活过重启的回合（SCHED-C1c、SCHED-C1d）、
+固定值（SCHED-C1a）和列表上的表最大值（#428 S168-5a）；runtime-client、artifact-store、runtime-database 的源码没改，
+ledger-forensics 的源码也没改，它编进去的默认值文件只多了这同一个模式，而这一项它不读。
+v0.12.44 起 #407 GPU-1：配置修订 27 让 `vision` 段可以写 DirectML（`vision.execution_provider` 取 `directml`、
+`vision.directml_device`、`vision.gpu_fallback`）；这一段在 Runtime 下次启动时生效，不是键表里的键，控制台不写也不解释它，
+所以设置页不多出行，写了它们的文件也在控制台声明的 `actingd-config` [5, 27] 之内。
+v0.12.43 以来 contract crate 别的只多了值键、程序事实 `config.catalog_warnings`（#428 CW-1）和 OCR 节点分布报告 v2，
+控制台都不读；嵌入的结果码目录多了警告 `vision_gpu_unavailable`，调度码 `pool_line_held`、`pool_lines_invalid`、
+`pool_lines_unvalued`、`capped_spend`（SS-2h），Lab 码 `lab_operation_check_failed`、`lab_operation_completed`，
+词表 `gpu_unavailable_reason`、`gpu_fallback`、`pool_line_hold` 和执行提供者 `directml`，`watchdog_launcher_spawn_failed`、
+`resource_check_release_retired` 退役；`runtime-client` 认 DirectML 上的官方 OCR 证据，Lab 操作核验失败时带上 Runtime 的答复，
+这两样控制台都不发；policy 多了业务档跨实例的轮换（SS-2f）和池的水位线、封顶次序（SS-2h）；ledger、ledger-forensics、
+runtime-config 和控制台链接的其他 Runtime crate 都没改。
+v0.12.43 起 #404 FS-3：账本修订 7 给 `task.selection_evaluated` 记录加了两种确认 `tracked`、`track_lost`，只有声明了
+`confirm: "track"` 的包的 select 步才写；建在修订 6 上的控制台读不了，含这种记录的账本页整页失败。
+v0.12.40 以来 contract crate 别的只多了性能状态的可选成员 `memory`、`vision`（#407 PERF-READ，`runtime-client`
+修订 6，控制台不发这个请求），嵌入的结果码目录多了警告 `perf_memory_unavailable`、值键 `confirm`、`shift_px` 和新词表 `selection_confirm`；
+artifact-store 的帧库为这个状态记下自己占的内存；控制台链接的其他 Runtime crate 都没改。
+v0.12.40 起 #402 HS-5：切到 MuMu 原生触控不再要求游戏在跑；这台自己的后端没打开而起的围栏不再挡切换，设置页的
+「恢复为文件值」切回文件里的后端、自检通过就解除它。
+v0.12.39 起账本修订 6，#402 HS-2b：Runtime 运行中切换实例的触控、截图后端时写的生命周期记录
+`device.backend_switched`，控制台读得了，建在修订 5 上的控制台读不了；设置页每台设备的「设备后端」组在
+Runtime 运行中切换它的这两个后端，#402 HS-1 到 HS-4，等切换回执的时长按契约的 `BACKEND_SWITCH_WAIT_MS` 加客户端的
+IO 余量；
+v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1；含 Workflow #432 AGT-1b 给 Status 加的可选成员
+`agent_wake`，控制台读得上、不显示；建在 #429 R-0b、R-4、R-11、R-7a、114-A 之上；v0.12.32 的有界离线打开
+照旧），说 0.12 协议（`runtime-client` 修订 14、账本修订 9）：
+
+```
+rev = "8923a70191337bb656df6dc707a138ff3c0b0009"
+```
+
+六个 crate（contract / display-adapter / ledger / ledger-forensics / runtime-client / runtime-config）共用这一个 rev。
+内嵌 typed client 读取在线 lifecycle-failure 页中的可选 `resource_dispositions` 分组；离线 ledger
+reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
+严格校验和显式读取错误保持。
+UI 仍使用 `ProjectionProfile::Ui`：已提供的 failure 分组按原隐私规则显示，observed 阶段的分组
+由完整事件/Forensic 读取，UI 投影不含该分组。
+内嵌 ledger reader 同时使用共享恢复生命周期契约：准备触发关联其准备事件，任务触发保留真实 task/run
+关联；`environment_ready` 与资源包 `recovered` 分别表示各自结果。这些细节属于完整生命周期记录，
+公开 UI 投影及页内 `run_recovery` 分组保持既有形状。发布时 producer、Tools 与 UI 须配套使用这一契约。
+`Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
+`cargo build --locked --release --workspace`；闭包里含 `rusqlite`（bundled），两边都要 C 编译器。
+CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译。发版只按需：Actions → release → Run workflow
+（或 `gh workflow run release.yml -f bump=patch|minor|major [-f version=X.Y.Z] [-f source_sha=<sha>] [-f prerelease=true] [-f dry_run=true]`）
+编译选定的 `main` 提交，把 `acui-windows-<sha>.zip` 连同 `SHA256SUMS` 发布为本仓 Release `vX.Y.Z`，tag 建在该提交上；
+勾选 `prerelease`（`-rc.N` 版本总是如此）时发为预发布，不标为 Latest；版本号只存在于 tag。
+
+## 变了什么
+
+- **归类由契约说了算**：六个页签就是契约的六个 `LedgerView`。一行属于哪个页签，看页里
+  那条事件自带的 `views`。页签上的数字**只出现在当前页签上**，是这一视图**已载入的行数**；
+  读面没有给出每个视图的总数，所以别的视图的页签上不摆数字。
+- **过滤是账本查询**：视图、严重度上下界、来源模块、`correlation_`/`request_`/`run_`/`task_`/
+  `instance_` id 组装成一个 `EventQuery`——两种读面都从不带时间条件：时间游标只决定从哪里往下读，不是过滤
+  （见下）——在**同一个快照位置**上重新查一次账本；不在
+  本地已有的行上筛选然后自称是账本查询（唯一写明的例外是下面的性能监视）。id 必须是完整的规范 id，否则会说明要填完整标识。
+  「来源模块」的选项**每次载入都按已载入的行重建**，选中项按**模块名**解析——列表会变，下标
+  不是一个能存住的说法。
+- **实例按端口筛选（只在离线读面）**：ADB 端口就是一个模拟器实例的身份。开台时按同一快照位置
+  经 `actingcommand_ledger_forensics::instance_bindings` 把 `runtime.instance_bound` 事实读**一次**，
+  得到每个端口下**曾经绑定过的全部** `instance_id`（按首次绑定顺序）。「端口」下拉框选一个端口，
+  就把这一整组编号作为 `EventQuery.instance_ids` 在同一快照上重新查一次账本——整组一起查，
+  从不拆开、从不只查一部分；选「全部实例」清掉；下拉框的项按端口升序，写端口号与最新一次绑定
+  的实例编号缩写，同一端口不止一个编号时追加 ` +n`。端口与 `instance_` 编号只能选一：两个都给了，
+  过滤错误行直接说明，不做默认优先。账本里没有绑定事实时框里只有「无绑定记录」一项且不可用；
+  有绑定事实但没有一条给出端口（串口配置等）时框里只有「全部实例」且不可用——两种情形编号框都
+  仍可直接填 `instance_` 编号；读绑定失败时框里只有读面的错误码，实例卡也写这个码；
+  在线读面下同一个框改为选实例（见下一条）。选中端口时实例卡多写实例别名、端口、来源
+  （`physical_device` / `fixture_simulation` 原样在下层）、绑定编号数与最新绑定序号；级别计数与
+  条数仍来自重查后的行。行多一列「端口」：事件没有实例关联的写「宿主」；有关联且该编号最新
+  一次绑定给了 HOST:PORT 的写端口号；有关联但端口表里没有的（夹具、串口配置、未见绑定）写缩写
+  的实例编号——不编造端口。
+- **在线按实例筛选**：在线没有绑定读取，同一个框列出 Runtime 状态读取当下报的实例：第一项「全部实例」，
+  是默认；之后按状态里的顺序（按别名）每个实例一项——写别名，状态给了这个实例的 ADB 端口时再写
+  「 · 端口 N」；串口配置或没有 ADB 目标的实例只写别名，不编造端口。只列这次状态报的编号；一个端口
+  以前绑过的编号归离线读面。选一个实例，就把它这一个编号作为 `EventQuery.instance_ids` 重新查账本，
+  每页的界限与在线的每一页相同（`from_sequence` 与 `to_sequence`、limit 256、在钉点上），时间线、
+  「读更早」和跟随都一样；选「全部实例」清掉。每读一次状态，列表就重做一次：开台时、按「跳到最新」时、
+  人发出恢复之后；跟随不读状态，列表不动。这次读到的状态里已经没有所选的实例，或者读状态或事实快照
+  失败、没法确认它还在时，所选改回「全部实例」，过滤错误行写明是哪个实例，按所选读到的行也一并去掉：
+  视图从钉点重新读（「跳到最新」没能移动钉点时视图留空，旁边是那次跳转的错误，等人再读）。重新打开窗口
+  时带过来的所选实例也照此核对。状态里没有实例时框里写明没有，读状态或事实快照失败时写实例没读全（状态
+  或事实快照）、见实例卡；两种情形框都不可用，编号框仍可直接填 `instance_` 编号。所选实例与 `instance_`
+  编号只能用一个，与离线相同。
+- **从最新一端读起**：账本查询没有降序，所以时间线从钉住的位置往回一窗一窗读，一窗先从 256 个位置
+  开始。这么宽的一窗里事件不多于一页的条数上限，一次查询就能读完，各项过滤都由账本做。一窗读回的
+  事件少于 64 条时，下一窗宽度加倍，最宽 4096 个位置；读回 128 条以上就回到 256。更宽的窗，以及
+  回复被字节上限拆页或被 Runtime 读预算截短的窗，都跟着游标整窗读完——所以一次填充可能多于目标行数——
+  每窗最多 64 页；读满还没完的一窗停下并报 `console_window_page_limit`，不当作已读显示。在线时每次页查询
+  ——这一窗的 `from_sequence` 与 `to_sequence`、limit 256、在钉点上——都由 Runtime 账本的读者池回答，不占写线程（#422 QR-1；v0.12.38 起读帧的素材查找也是，RA-1），
+  但每页仍要 Runtime 读一次、校验一次，所以一次填充至少读一窗，多出 256 行、读到位置 1、读满 16 窗或已过 1 秒之后，就不再开始新的一窗。行按**最新在上**排列；底部
+  的「读更早」接着往下读。顶栏常驻已读窗口覆盖
+  的位置（「已读序号 A–B」），有窗口的页说读取不完整时追加「源不完整」——只因 Runtime 的读预算停下的
+  页不算（#411 A51）：它的游标接着往下读，窗口会跟着读完。钉点为 0 时账本里没有记录：不问任何一页，
+  顶栏写账本为空。实例卡有两行就已载入的窗计数：「已读页」是读了几窗几页，后面的「定位 N 页」是这次视图
+  起读前定位时间游标读了几页，每次点读一页（0 到 8；在这个钉点上定位过，或没有设游标，就是 0）；「截断页」是被读预算
+  截短的页（`read_budget`；剩下的由它的游标读完）和说明某次运行的恢复上下文被预算截断的页
+  （`context_limit`）——只计数，不丢弃。读时间跨度的点读不记在实例卡上。
+- **跳到最新、跟随最新（只在在线读面）**：「跳到最新」重读状态与事实——两次读都不追加账本记录，也不问
+  任何一页——把钉点移到它们说出的账本头（见上），清掉时间游标，从新钉点重新读起；两次都没给出账本头时
+  钉点不动，视图的错误写出两次的原因。「跟随最新」先用一次事实快照轮询对齐、不读状态，之后每 5 秒读一次 Runtime 的事实快照——它在内存里的事实库，位置就是账本的最新
+  位置，不读账本也不写账本。只有这个位置动了，钉点才移过去，并用页查询把新旧钉点之间的窗口读到视图
+  顶部；已载入的行、选中项和正在读的帧都保留，任务事实直接取自同一张快照。时间跨度的终点跟着钉点走：
+  新窗里有钉点上那条事件就直接取它的时间，否则再对钉点做一次单点读取；读失败的跨度，跟随不会自己再问。
+  某次跟随失败时，在视图自己的错误旁写「跟随最新：…」。轮询失败的，等后面某次跟随越过它才消失；页读取
+  失败的，还会停止跟随——不对一个拒绝查询的 Runtime 每 5 秒再问一次——直到重新开启跟随；填充中有页读取
+  失败时也一样。离线没有
+  在跑的 Runtime 写新事件，两个控件都不可用。
+- **性能监视的例行事件默认隐藏**：它们会淹没别的事件。除非勾选「显示性能监视」、在模块框里选了
+  性能监视、或打开的是由这些事件组成的「健康」页签，查询请账本直接不返回在所有写入方那里都恒为
+  `Info` 的两种类型——`perf.pressure_ended`、`perf.monitor_recovered`（`exclude_event_types`）——监控台再在
+  读每一窗时丢掉性能监视其余**低于警告级别**的事件，`perf.summary` 也在其中。`perf.summary` 留给监控台
+  处理，因为容量监视在磁盘有压力时会把它写成警告或错误。顶栏写明丢了多少条；账本不返回的那两种不计数。
+  有丢弃时性能监视留在模块列表里，仍可选中。它的警告和错误（磁盘压力、高压力、卡顿、监视降级、有压力
+  时的小结）始终显示。实例卡上的条数与级别计数只算已载入的行。`51ba5565` 之前的
+  Runtime 不认识 `exclude_event_types`，隐藏时会拒绝查询；勾选「显示性能监视」即可读。
+- **恢复分组来自账本**：页里带的 `run_recovery` 在各自运行最新的一行上方插一条分组行，显示
+  账本给的状态（已恢复 / 未解决 / 未知）、依据（第 N 条失败，第 M 条已恢复）与缺口；被账本
+  判为已恢复的失败行折叠在分组行下，带「已恢复」标记。这是读时分组，不是改写失败事件。
+  跨页时按**运行编号合并**：后一页只往里加证据，先前页给出的位置一律保留，已经折叠起来的
+  「已恢复」行不会被后一页重新展开。
+- **时间游标（两种读面都能用）**：「只看到」选的是从账本哪个**位置**往下读，不是时间条件；窗口发的页，
+  在线离线都不带时间条件。滑块的起始位置就是它代表的状态——最右端即「全部」，从钉点往下读——第一次拖动是
+  收窄。手柄在已提交时间跨度的两端（见上）之间选一个时间；标签马上跟着写「约 这个时间」，跟随随即停下。
+  手柄停住 0.4 秒后（其间切页签或点「读更早」会先做这一步），窗口把这个时间定位成一个位置：最多 8 次点读，
+  每次一页、limit 1、只限一个位置（`from_sequence` = `to_sequence`），位置在 1 到最近一次读跨度时的钉点
+  之间，在钉点上读，不带运行恢复，每一页都在上面说的在线界限之内。每次读的位置，按两侧已知的、离这个时间
+  最近的两个时间之间事件在时间上均匀来插值；这两个时间相等或前后颠倒时就取中间。读到的时间里离所选时间
+  最近的那个位置胜出，正好相等就提前停。视图随后从这个位置照常一窗一窗往下读，标签改写那条事件自己的
+  时间「≤ 时间」。同一个钉点上同一个时间不再定位：换页签或筛选，直接从同一个位置读，不再点读。定位时忙碌行
+  写「正在定位「只看到」：第 n/8 页」，实例卡「已读页」一行的「定位 N 页」记下次数；忙碌行和报错都用控件上的
+  字「只看到」称呼它。**位置是近似的**：账本里记录的时间不一定随序号
+  递增（#411 A24：一次运行的诊断素材记录在运行结束时才追加，带的却是运行开始的时间），点读落在这种记录上，
+  定位就会偏；标签上的时间就是那里实际读到的。离线和以前的时间上界（每次查询都带时间条件）也不一样了：
+  这个位置以下、时间比所选时间晚的事件不再被藏起来。点读读回的页里没有这个位置上应有的事件——被 Runtime 的
+  读预算截短，或那里根本没有——定位就停下并明确报 `console_time_locate_failed`：不从猜的位置往下读，视图
+  留空并写明这个码，等人再读；点读被 Runtime 拒答（见上）也一样停下。这时一窗都没读，不给「读更早」：那一行
+  写明再拖一次手柄或换页签、筛选会重新定位，把手柄拉回最右端、在线时按「跳到最新」或重新打开，就不用游标往下读。
+  手柄拉回最右端、跳到最新、打开跟随、重新打开，都会清掉游标。
+- **行类型不再镜像**：`acui-rows` 直接再导出契约类型，只额外提供本地时间、id 缩写、
+  wire 码与显示名字典这些显示用函数。
+
+## 帧素材：读了，但只读已校验的
+
+监控台**会**载入帧字节，但只走素材读面，且只在下面这条规则内：
+
+- 只读**选中事件所基于的那一帧**的 `capture.frame` 产物（见下文「每一行都落到帧上」），按需读，
+  一次一份。
+- 离线一次 `read_material_complete` 调用读整份，整份长度与 sha256 校验通过后才交出任何字节，
+  期限 30 秒。在线由 `RuntimeClient::read_material_complete` 在 Runtime 校验过的分段上做同样的
+  事，期限相同（在段与段之间检查）；任何一段不是 `verified` 就停下，没拼完的部分丢弃。
+- 整份上限两张读面都是 8 MiB，即这次读的 `max_material_bytes`（监控台还自己拼 64 KiB 分段时
+  定下的上限，128 段）；超出的产物直接拒读并说明。
+- iOS 手机的帧（Runtime v0.12.75 起，#479 F-3a）：`<安装根>\tools\acib.exe` 在的时候，画面「刷新」（`ObserveReadonly`）
+  能取到一帧，回答里的取帧后端是 `acib_screen_capture`，这个监控台的库（修订 13 起）读得了；这一帧和别的帧一样读，8 MiB 上限也照样。
+  Runtime 给的是 8 位 sRGB 的帧，方向照手机给的，不转向；全黑的图不算一帧（`capture_frame_all_black`），别的失败是
+  `capture_backend_operation_failed`，因是 `capture_ios_failed`。Runtime 的发版不带 `acib`。
+- 产物已被淘汰时，只显示淘汰事实（处置、意图/结果位置、观察至哪个位置），不去碰文件。
+- 读取失败时显示读面给的状态与安全错误码。
+- 读取在后台线程里做，每次请求带代号；慢读回来时若选中项已变就丢弃。**任何时候都不会
+  显示过期的或未校验的图。**
+- 读取由一条后台工作线程做，**同时只有一条**。离线的整份读中途停不下来：被顶掉的那次读完为止
+  （受 8 MiB 上限与 30 秒期限约束），结果直接丢弃。在线时客户端每读完一段都问一次还要不要，被顶掉
+  的那次在下一段就停。还在排队等工作线程时就被顶掉的，根本不开始。
+- 解码只用 `image`（只开 `png` feature，版本钉在工作区的 `[workspace.dependencies]`）。程序
+  解码的图只有两类：这样读回来的帧，和自带的应用图标。
+
+几何叠加与帧共用同一个坐标系，尺寸按这个顺序取：账本正式给出的画面范围（`task.effect_intent`
+的 `frame_extent`、`task.geometry_observed` 的画面范围），其次 payload 里的
+`frame_width`/`frame_height`，再次这一帧的识别或操作意图给出的尺寸（见下文），再次校验过的帧
+解码出的像素尺寸，最后才是叠加本身的范围。解码尺寸
+归属于读出它的那次帧请求：重新选中同一事件或读更早都沿用；换事件、清空或读取失败都把它作废。
+
+### 每一行都落到帧上
+
+一个步骤的事件都在 `links.frame_id` 里写明所在的帧：截图、这一帧的 `artifact.created` /
+`artifact.verified`、识别、操作意图。选中其中任何一条，帧区都显示这一帧；步骤里的其他事件经
+共享 `action_id` 的操作意图找到它。物理输入（`input.*`）在 `Ui` 投影下不带帧——它的
+`before_frame_id` 被裁掉了——所以取同一运行中它之前最后一条操作意图的帧，帧下的说明写明帧取自
+哪条事件。先在已载入的行里找；只有它们里没有这一帧的截图时，才由读线程按帧编号查一次这一帧自己的
+事件（查的时候帧下写「正在读取这一帧的事件」），帧区停在这一帧上时一直沿用。在线时这次查询还带上点出
+这一帧的那条事件所关联的实例（有关联时），并且只读那条事件前后各 65,536 个位置、钉点以内——截图的诊断
+记录在运行结束时才追加，可能落在它之后很远；这一窗里没有截图时，帧下写在哪些序号里找过（「在序号 A–B
+内没找到这一帧的截图产物」），而不说账本里没有。离线仍只按帧编号查，与以前相同。读取失败或读取不完整写在
+帧下的状态行里，不会自己再查：下次重读（「读更早」不算）把它清掉，再选上这一行就重新查。素材读取器由读线程交给帧窗格；一次读帧把素材连接锁死后，读线程随即
+重建一个，下一次读帧就用新的。
+
+帧上，除了事件自己的几何叠加：
+
+- **页标签**，在帧上方标题旁：这一帧上识别匹配到的页面，或写明没有匹配。画在帧上会盖住页面自己的
+  页头目标。
+- **点击标记**：以操作意图的每个点（`action.x, y`；滑动、拖动每个点各一个）为圆心、带白圈的
+  圆点。它取代事件自己的 `action` 几何，免得同一次输入画两遍；操作意图的 `action` 任何时候都不照原样画（帧区
+  没有帧时也只画这条操作意图自己换算后的点），详情里的原始 JSON 照旧，基准像素在那里看得到。操作意图里的点是包基准的
+  像素，帧、它的 `frame_extent` 和识别目标框却是设备的（Runtime `contracts/display-adapter.md` 第 10 节「Records」），
+  所以点照这次运行的显示换算画到设备帧上：比例取这次运行在这条操作意图之前最后一条 `task.geometry_observed` 记录的
+  `display_map`，读法和 `actingledger task-evidence` 一样；换算用的是产品自己的函数（显示适配器的
+  `DisplayMap::admit_input` 和 `device_input`，按显示坐标），监控台不另写一份换算。那条记录没写 `display_map`（纯恒等，
+  更早的记录不算）、这次运行在它之前没有这种记录、或操作意图没给 `frame_extent` 时照原样画，基准即设备。监控台读的
+  `Ui` 投影不带采样框，所以换算不带框；在 Runtime 发得出去的比例下（`admit_input` 放行的：比例的两倍是整数），合法的点
+  不会因为框被拒，点和带框时一样（第 10 节「Points」）。产品会拒的输入不画点，写「这一步的输入没有换算」，例如比例和基准
+  差不到一个像素的显示（1280×720 基准下的 1334×750、1366×768：Runtime v0.12.75 起按纯缩放映射，按压照旧被拒，
+  `input_scale_unsupported`）。和 `actingledger task-evidence` 一样，监控台重建换算时不用游戏声明的布局，主机建这次运行的
+  换算却用它。游戏声明了布局时，有些和基准形状差不到一个像素的显示上两边会不一样：按布局建的是纯缩放、那一个比例主机发得出去，
+  不用布局时另一个轴自己的比例却发不出去。比如 1280×720 基准按宽缩放、显示 2560×1439：主机按 2/1 一个比例发出输入，不用
+  布局的换算竖向却是 1439/720，所以这一步写「这一步的输入没有换算」，和 `actingledger task-evidence` 报的
+  （`source_mismatch`）一致。1334×750、1366×768 上这种游戏的按压主机也拒，两边一致。缩放下的竖刹拖拽照产品发出的
+  带停顿和刹车的拖拽画三个点；路径拖拽照产品发出的画它经过的每个点（恒等时照原样）。识别目标框本来就是设备帧的像素
+  （第 8 节「Evidence」），不换算。
+- **一句说明**，在帧下面，每个在这一帧上的输入一句，点是画出来的设备像素点：「步骤 0 notice_close：识别到
+  `<game>/news`，点击 (1142, 102)」。没有换算的写「点击，这一步的输入没有换算」，换算还不知道的同样在名字后面写下面读的那句。
+- **识别目标框**：这一帧上最近一次识别评估过的目标（`task.recognition_completed.targets`，取匹配页的；
+  没有匹配时取第一个候选页的），各画在自己的 `region` 上：通过的画绿色实线，没通过的画琥珀色虚线，
+  标上 `target_id` 和角色。纯关键字目标没有区域，不画；帧下那句说明把它们都算上（「……（目标 3/4
+  通过）」）。
+
+点击标记的换算要读的：每次运行多一次按运行编号筛 `task.geometry_observed` 的查询，往回只到这次运行的开头。账本窗口里，
+选中的事件所在帧上有操作意图（或选中的就是一条操作意图）、而它那次运行的显示换算还不知道时，读线程读一次，不带运行恢复，
+跟着游标读完：在线带操作意图关联的实例、运行编号、这一种类型和从 1 到钉点的位置，离线只带运行编号和类型（离线的帧查找也
+只按帧编号）。同一次运行在同一个窗口会话里只读一次，钉点上移后、有操作意图落在上次读到的位置之后时才再读一次。读的时候
+帧下在输入名字后面写「正在读这次运行的显示换算…」（忙碌行也这样写）；读不全写「这次运行的显示换算没读全；这一步的点没画」，
+读失败写「这次运行的显示换算读不到，这一步的点没画：…」，读取自己的话放在最后，都不会自己再读，下次重读（「读更早」不算）把它
+清掉。实时画面那边，一次运行头一回有输入要画时读一次，到轮询接着往后读的那个位置为止，每页 64 行、最多 4 页；之后靠轮询带上
+这次运行后来的记录（轮询多问这一种类型，不多发查询），只有轮询不整页后这些运行才算落后，需要时再读一次。读回来但没读全时，
+帧下写「这次运行的显示换算没读全（详情见技术日志），这一步的点没画」，技术日志记一条写明是哪次运行，窗口随之显示日志在哪；
+没有换算的写「这一步的输入没有换算」，帧上不写字。读失败时帧下不写这句：和轮询失败一样，这一轮停下，画面写「画面跟随暂时中断，
+正在重试」，之后的一轮再读这次运行。技术日志末尾的读取统计里它叫 `run maps`。
+
+## 运行
+
+```
+acui [--root <install_folder>] [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <instance_name>] [--lang <zh|en>]
+acui --help
+```
+
+主窗口是**工作台**：顶栏是状态灯与 Runtime 的人话状态、「启动」和「排障与账本」按钮，最右是「设置」，
+下面是上一次请求的人话结果。再下面是两页之一。主页分两栏：左栏放实例，以及置灰的「添加实例」
+（见「实例配置」一节）；右栏是设置文件的问题、主题的降级说明，技术日志只在写不进去时才说。按「设置」换到设置页，
+同一个按钮这时写「返回工作台」：设置页先是同样那几行，外加技术日志的位置，然后是 Runtime 的设置，再是「Runtime」（「请求关闭」、
+「自动拉起 Runtime」）和「外观」（字号、语言、主题）。Runtime 的设置取自运行中的 Runtime（进设置页时重读一次），分「日常」「高级」
+两组，哪些键显示、归哪组都按 Runtime 自己的分级，档位那四项只在顶栏；每项写值、来源、怎么改（暂时只能看、
+在主页那个实例的「自动规则」里改、要改配置文件并重启 Runtime，或由安装程序设定）和什么时候生效；文件里没写、也没有默认值的项写「未设置」，
+不会漏掉。「日常」组最前面是所有实例共用的免打扰（`scheduling.blackout.host`）：一段一行，可删、可加、可全部删除（问一次）、
+可回到文件设定，表单和主页「自动规则」里每个实例自己的一样；每次把整张表在线发一次；开始和结束相同不发，要一整天就勾「整天」
+（0:00 到次日 0:00）。别的行里只有「未确认的证据帧保留天数」能在这里改：框里填整数按「保存」，清空再保存就回到配置文件的值
+（或默认值）；范围只由 Runtime 判断，拒了照它说的写；结果在顶栏下面单独一行，带这一项的名字；保存只发一次，
+结果不明时先重读现状再说，绝不自动重发。这些行之后，Runtime 驱动的每个实例（模拟器或真机条目，夹具不算）各有一组
+「设备后端」：触控后端和截图后端各一个下拉框，只列这种设备有的后端（触控：ADB 输入、MaaTouch、minitouch，模拟器还有
+MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
+或在线设置及其时间、入口）和这个实例最近一次自检的结果。iOS 手机条目（Runtime v0.12.74 起，`device.system: "ios"`）
+不写后端，所以没有这一组；v0.12.75 起它的帧来自 `<安装根>\tools\acib.exe`，这也不是设置项。按「应用」后，这个实例空闲时立刻切换（最多等 3 秒，即契约的
+`CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
+钉住的 v0.12.81 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
+文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带实例；拒绝照原因写人话：这个实例正忙（忙什么）、
+你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这个实例没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
+没能恢复。绝不自动重发：结果不明时先等满这段等待、并等 Runtime 显示这个实例不再切换，再照现状说，并附这个实例的自检。0.12.39 之前的
+Runtime 没有这两项，就不显示这一组。Runtime 每次启动后读一次它的启动报告：有在线设置因更新或回退被重置时，
+顶栏下面和设置页都写出是哪几项，顶栏下面那条按「知道了」收起（只管这一次启动）；保留了、但覆盖的默认值已变的
+在线设置只在设置页用小字写；报告读不到时同一次启动最多试 3 次，之后设置页写红字。Runtime 不在线时不显示旧值。
+「自动拉起 Runtime」只能看：每次进设置页时在后台跑一次 `actingctl watchdog status`（只读；从不跑 `install`、
+`uninstall`、`run-once`），照它说的看门狗计划任务写「已开启」「未开启」「可能不起作用」或「读不到」，后两种的原因进技术日志；
+Runtime 重启过就等下次进设置页再读。安装向导第 9 页的「开机后自动运行」装的就是这个看门狗（见「安装向导 acsetup」一节）。两页都一直在，只是一次显示一页，所以切过去再切回来，框里的选择不变。账本窗口「高级排障与历史账本」只在
+需要时打开：在工作台按「排障与账本」，或开台时带了 `--tab` 或 `--source`；每种来源（默认 `auto` /
+`online` / `offline`）最多开一个，再按入口只是把已开的那个还原出来（Slint 1.17 没有把窗口提到最前的
+接口）。只给 `--state-root` 不会打开账本窗口。关掉账本窗口时，它的读线程读完手上
+这一页就退出；再打开是一个新窗口、新会话。关掉工作台就退出整个程序（解锁进行中除外，见「启动器」）。
+
+主页右栏有三个页签「实时画面」「日常任务」「目标」（见下），后面是左栏选中的实例名；选哪个页签在这次运行内保留，换实例、换页都不变，
+默认是「实时画面」。「日常任务」是这个实例的任务包清单，Runtime 的开关视图列出的包行首有一个开关（见下一段）：一个包一行，
+写名称（游戏的 `pack-catalog.json` 没给时显示包编号；Runtime 0.12.68 之前是 `ui.json`，见「数据来源」一节）、徽章「不可撤回」
+（Runtime 判定它不可撤回时）和「有风险」（它在这份文件里的条目写了风险词时，词本身不显示）、一句它现在为什么跑或不跑，
+再用灰字写这份文件里的说明（没有时写「未提供说明」）。
+这句话：状态读数说这个实例正在跑这个包时写「正在跑」（直接运行的写「不是调度安排的」）；给这个实例选中的任务属于这个包时，
+只写派发到了哪一步；否则取这个包在 Runtime 答复顺序里的第一条候选行，按它的原因码出句（`benefit_unknown` 再看
+`benefit_gap`，`pool_line_held` 再看 `pool_line_hold`），这条行有唤醒时间时末尾加「（最早 hh:mm）」，同包其他任务不同的
+句子在下面列一次。实例卡说原因也用同一套句子；原因是这个任务自己的、不是整个实例或整个 Runtime 把所有任务一起挡住的
+（实例暂停、设备、免打扰、电脑资源不够、进不了入口这类）时，句子前面加上任务名，例如「邮件：这个任务已关闭」，任务名照这里给它所跑的包起的名字，没有就写任务 ID。原因码、次数和调度的数字都不上屏：监控台没有句子的码写「现在不安排」，
+同时记进技术日志一次。有这份文件时按它的分组和顺序排，其余放在「其他」；没有时按名称排。任务归哪个包，取自给出名称的
+同一次 `actingctl packs` 里的 `task_ids`：哪一行都没列的任务，以及那次运行失败或带警告时的全部任务，按任务编号列在
+「本实例：有些安排对不上任务包」下面，点开才显示。行上方写这个实例的暂停或围栏（用实例卡的说法，其他工具挂的暂停不写它的理由）、这些行是哪一轮评估的
+（「按 hh:mm 那一轮评估」），以及名称读不到、任务没列全的提示。清单只读这一个实例带候选行的一次 `ScheduleExplanation`，
+从内存答、不读账本，而且只在主页、窗口没最小化、选中这个页签、Runtime 在线时读：15 秒一次，失败后 30 秒，换页签、换实例、
+换 owner epoch 时马上读一次；这期间实时画面一律不读。Runtime 不在线、读失败、超过 60 秒没读到新的、这一轮评估里没有
+这个实例或还没评估过时，不画任何行，只写为什么。
+
+开关（#429 R-8，Runtime 0.12.55 起）只照这个实例的 `PackScheduleView` 画：勾上就是 Runtime 现在会安排它。名称下面用灰字写
+它的状态从哪来：「本实例设置：已关闭（自 hh:mm 起）」、「本实例设置：打开」、「继承自区服：关闭」、「继承自游戏：打开」、
+「标准包默认：…」（R-9 之前不会出现），有结束时加「，到 hh:mm 为止」；没有任何一行管着现在的包不写来源（行上方说
+「没设置过的按标准包的规则安排」），以后有一行要生效时写「hh:mm 起改变」。控制台只写本实例这一层：关掉是写一条从现在起、
+没有结束的「不安排」；打开是回到正常：本实例的行起决定、下一层会安排它时撤掉本实例这个包的行，否则写一条从现在起的「安排」。
+两种都替换本实例这个包的全部行（以后才生效的也算），不碰别的包，正在跑的那一次照常跑完。每次写都带视图里本实例范围的版本；
+别处（其他工具、Lab、智能体）在这之间改过，Runtime 拒成版本冲突，什么都不改，这一行写琥珀色「这个实例的任务开关已被其他地方
+改动，已刷新，请确认后再点一次」，不自动重发；`fact_observation_not_newer`（同一毫秒里先落了别的表）在同一条连接上马上
+重发一次。一个实例一次只出去一个写：在途时，以及答复可能改了开关或说别处改过（改成了、版本冲突、同一毫秒两次、结果未确认）
+之后、到落地后才开始的那次视图读到之前，这个实例的开关都灰着，显示的仍是之前读到的状态；别的拒绝、没发出去的，开关马上回来。
+救援条的「关闭这个任务」（见「启动器」一节）写的是和「关」同一行，也算这个实例的一个写：它在途时这个实例的开关都灰着，
+它可能写上了（写上了、结果未确认）时也等落地后的视图；开关的写在途时，救援条上调度运行的「关闭这个任务」和别的工具直接发起的运行的
+「停下这次运行」都灰着，写「正在改这个实例的任务开关，稍等」。
+每次按下的结果写在那一行下面，带落地时刻（「正在改…」、版本冲突、线程起不来、Runtime 重启这几种不带），直到这一行再被按、
+清单换实例或 Runtime 重启；清单藏起来再出现（换页签、换页、最小化、Runtime 一时没响应）结果照旧留着；成功不另写。
+视图里有、这一轮评估对不上的包也照样一行（「这一轮的评估里对不上它」）；清单里有、视图里没有的包不给开关，
+写「这个任务包这里不能单独开关」，技术日志记一次。
+视图和清单同条件读（主页、窗口没最小化、选中这个页签、Runtime 在线、只读这个实例），60 秒一次，失败后 60 秒，开页签、
+换实例、换 owner epoch、写入落地、冲突之后马上读一次；超过 180 秒没读到新的就当读不到，行上方写琥珀色「任务开关暂时读不到」，
+开关都不画，清单的行照画。Runtime 0.12.55 之前（视图答 `not_implemented`，0.12.30 之前不认这个请求）行上方写「这一版
+Runtime 还不支持单独开关任务」，这次启动里不再按时读；但这个判定可能来自回执之前断开、又在同一个 owner epoch 里重连的
+连接，所以判定 60 秒以后清单重新出现时（打开这个页签、换实例、窗口从最小化恢复、回到主页、Runtime 一时没响应后又答了）再读一次视图：还说不支持就照旧不读，
+读到了开关就撤销判定、照常读；这次读还没落地清单就又藏起来了，就当没读，判定照旧，等清单下次出现再探。每次读 Runtime 都要先在事实写闸下让事实库追上账本，所以读得少；技术日志
+末尾的读取统计里它叫 `pack schedule`。读数维护任务（`_fact_refresh`）不受关闭行管；只被关闭行点了名、这个实例已经没有任务
+用的包，视图不列，这里看不到也撤不掉。被关的包走到推迟那一步时，卡片和清单的原因写「这个任务已关闭」。
+
+「目标」（#455 的目标页）是这个实例的目标页，只照这个实例的 `GoalView` 画（#463 V3，Runtime 0.12.61），和 Lab 的
+`goals` 答的是同一个读，其中一部分能在这里改（见下）。页面上有可设的项（条目、已经不提供的值或其他资源目标）时，顶上一行写明
+哪些能在这里改（资源目标的数量，变量的选项、开关、数值和顺序，以及它们的恢复默认或清掉；不再提供的值和其他资源目标的清掉）；
+别的页面不写这一行。各行照 Runtime
+给的次序：先是这个游戏 `goals.json` 的条目，再是没有条目放置的包变量，按它第一个包的显示名分组（就是任务名取自的那个
+`pack-catalog.json` 标题，Runtime 0.12.68 之前是 `ui.json` 的；取不到显示名的包，它的变量全部并进最后一组「其他设置」）。
+不显示条目名、已声明资源的资源池编号和包编号；一条什么文字都没有的条目写「（没有标题）」。多语言的文字照任务名的回落：中文依次找 `zh-Hans`、`zh`、`zh-CN`，再找
+`en`；英文找 `en`；都没有就取第一个写的。
+
+条目有五种。**组标题**（heading）用粗体；**说明**（note）是灰字，带上它的帮助。**资源**写目标：「没有设目标」「目标：至少
+5000，还差 3800」「目标：至少 5000，已达到」（差为 0，强调色）或「目标：至少 5000；还没有读数，还不知道差多少」；下面灰字写现有
+数量（「现有 1200（hh:mm 读到）」，或为什么没有可用的读数：「还没有读数」「读数已过期」「读数不够可靠」「读数不是有效的数量」）、
+池要目标自带步长或重要度时写「标准包没给这个资源定步长，这里不能给它设目标」（`scale_required` 或 `importance_required`，也就是
+Runtime 拒成 `pool_unvalued` 的条件），以及谁设的；池现在不能设目标时整行灰色并写原因。目标在等读数时，「还没有读数」
+只在目标那句里说一次，下面不再重复。**档位**（tier）只读，写默认那一档的
+标题，另写「这一版 Runtime 还不用档位」；档位名下存着值时写「存着的值：…（这一版不用）」和谁设的。**变量**（`choice`、`integer`、`switch`、`ordered`）写标题和下一次运行要用的值，用
+声明自己的说法：选项的标题、数加单位文字、开或关、选中各项的标题按顺序（「一项也没选」）；时间单位的毫秒值换成不超过声明单位、
+又能是整数的最大单位，最小到秒，秒都不整就写毫秒，永远不写小数（按小时声明的 90 分钟写「90 分钟」）。Runtime v0.12.81 起，
+游戏 `schedule.json` 的规则可以自带某个变量的值（Workflow #500 SV-2）：应用上没有生效的设定值时，由实际跑的那条任务的规则决定，
+页面上不写它的值，也不写值从哪来。这种变量在值的位置写「由各条规则决定（在这里设了值，带别的值的规则就先不跑）」，下面不写默认值；
+开关不画成关，而是画成「开」「关」两个分段，两个都不选中，点哪个就把值设成哪个。在这里设的值生效以后，这一行照旧。下面灰字：设了值并且用上
+时写包的默认值，以及谁设的，「设定来源：本监控台」「命令行」「MCP」「Lab」，或 Lab 的入口（「Lab
+命令行」「Lab MCP」「Lab 制包」「Lab 救急」「Lab 看门狗」），带日期和时刻。设的值下一次运行不用时，琥珀字写「设的值 … 没有用上：…，
+现在用的是默认值」（存着的值按声明的说法写，例如「设的值 120 点没有用上」），`variable_problem` 每个词一句（这个控制台不认识的词照码写，技术日志记一次）；变量在这个游戏里不起作用时写
+「这一项在这个游戏里不起作用：…」，现在没有根检查判它的（`root_unchecked`）写「现在不知道这一项在这个游戏里起不起作用：…」；放置了、但这个实例没有包提供的，整行灰色，写「这个实例的包没有提供这一项」；`ordered`
+的值只用上一部分时，灰字列出跳过的几项；存着、但没有用上的 `ordered` 值，紧接在没用上的原因下面用灰字列出其中已不再提供的几项，
+照存的原样写（这些项已经没有标题）：「存着的值里这几项已不再提供：…」（Runtime 只对正在用的值给出这几项，所以由控制台按声明里的选项
+比对出来）。包的补救参数由 `remedy set` 写，不在这一页上：页面不读 `GoalView` 里的补救参数。
+
+最后三组。**已经不提供**：存着值、但名字已经没有任何条目提供的，琥珀字，写设的值和谁设的。**其他资源目标**：存着的、不在任何
+已声明资源的池上的目标，用它的资源池编号做名字，写存着的数量和差多少；读不成（不是带资源和整数数量的 `at_least` 目标）的用
+它的目标编号做名字，琥珀字写读不了，技术日志记一次。**不能设目标的资源**：整行灰色，写原因：「没有任务产出它」（`unmapped_task`）、「没有东西读它
+的数量」（`resource_not_observable`），别的原因写原因代码；上面某一行已经说到的池，原因写在那一行，不再另列（那一行也会写
+「它不在这个实例的范围里」，`resource_out_of_scope`）。不在这个实例范围里的池，这一组从来不列：Runtime 会拿生效任务目录里的
+每个池（包括别的游戏的）按这个实例判一遍，这些池这个实例的目标都设不了。别的游戏里没有东西读数量的池，Runtime 判成
+`resource_not_observable`，它不说池属于哪个游戏，所以这种池照列。页面上没有别的可设的项时，整组都不出现，本游戏自己的池也不列。
+
+各行上面：这个游戏的 `goals.json` 被拒或读不了时，琥珀字写「标准包的目标声明没有被采用」（各个包的变量照列）；这个 Runtime
+不读游戏的目标声明时（没有组合的标准包）写灰字。Runtime 不列任何条目的页面只写原因：灰字「Runtime 还没检查这个游戏的标准包，稍后
+会自动再读」，或者 Runtime 现在没有生效的任务目录时（这不会自己过去）写这一句；琥珀字写这个游戏的标准包读不了、要先修好
+（带出问题的文件）；灰字写它没有排程文件、这里没有可设的项。没有条目、
+没有已经不提供的值、也没有其他资源目标的页面写「这个实例现在没有可设的项」；如果这个游戏还没有 `goals.json`，也没有哪个资源能给
+这个实例设目标，就改用正文字号（不用小号灰字）写「这个游戏的标准包还没有提供可以在这里设的目标」。各行下面：v2 记录写「这些资源目标有效到
+yyyy-mm-dd hh:mm」（本地时间；Runtime 的目标文档最长管一年），过了就写琥珀色「这些资源目标已在 … 过期，不再起作用」；v3 记录
+（按名字设的目标就存在这里）没有整体的有效期：每个目标自己的有效期写在它那一行（「这个目标有效到 …」，过了就用琥珀字），全部
+过期了下面那一行才说；没有记录、页面上又有资源时写「这个实例没有设资源目标」。过期的目标从不用强调色。智能体用旧格式
+（`actingcommand.resource-targets.v1`）写的另写「这些资源目标是智能体用旧格式写的，这里只读」，这时整页的控件都灰着（对这种
+记录，Runtime 把每次写入都拒成 `record_unreadable`）；比 `v3` 新的格式，琥珀色写需要
+更新版的监控台，其他资源目标的数量不显示，技术日志记一次。
+
+页面和开关同条件读（主页、窗口没最小化、选中这个页签、Runtime 在线、只读这个实例）：60 秒一次，失败后 60 秒，换页签、换实例、
+换 owner epoch、写入落地时马上读一次；这期间实时画面和任务清单都不读。读失败时不画之前读到的行，用红字写「目标暂时读不到」和
+它的代码（宿主的、Runtime 的、客户端的），Runtime 不认这个实例（`instance_unknown`）、没有给它配策略输入
+（`resource_target_view_instance_unconfigured`）、存着的记录读不了（`resource_target_view_policy_unreadable`、
+`resource_target_view_policy_inconsistent`）时也这样写；客户端解不开答复时（`runtime_receipt_decode_failed`：页面在回执里就按
+严格类型解，比这一版客户端新的形状在这里就解不开），红字改写「读不懂 Runtime 的答复：多半是这份目标记录或 Runtime 比这一版
+监控台新，需要更新版的监控台」，照样带码；超过 180 秒没读到新的就写琥珀色「目标有一阵没读到新的了」。Runtime 没有这个页面
+（0.12.61 以前的不认这个请求，或者答 `not_implemented`）时写出来并带代码，页签重新出现或换 owner epoch 之前不再读。每次读
+Runtime 都要短暂拿调度的锁和事实写闸，所以读得少；技术日志末尾的读取统计里它叫 `goal view`。
+
+能在这里改的（#455 G2）：每按一次发一个 `EditGoal`，只改一个名字，带按下时那一页的版本（`GoalView.version`）做
+`expected_version`。**资源**的池能在这里设目标时（池没给步长、或者现在不能设目标的除外），有一个「至少要攒到」的数字框和
+「设定」，写成 `{"at_least": n}`；本地只挡「至少 1 的整数」（「请填整数」「至少要填 1」），池的容量由 Runtime 判，它回
+`out_of_range` 时带上限，这一行的结果句就把上限写出来（写在这一行下面、带落地时刻，不挪到数字框旁）。有目标的资源有「清掉」。
+**choice** 变量的选项不超过 4 个时并排单选，超过 4 个用下拉；**switch** 变量是一个勾选框；改了就马上写选项的值（JSON 字符串）
+或 `true`/`false`。下拉框点一下就打开，有焦点时按回车或空格也能打开，滚轮从来不改它的值；打开的列表里，上下键只挪高亮，按回车或点一项才选，选了别的项只写一次，按 Esc 关掉列表。用鼠标点选一项以后，大约半秒内的点击和滚轮都不起作用，双击的第二下不会点到列表下面的东西。选完以后，键盘焦点停在下拉框旁边，在那里按回车、空格都不做任何事。存着值的变量有「恢复默认」，发 `clear`（名字和页上另一项相同的除外，见下）；`integer` 和 `ordered`
+变量也有控件（#455 G3，见下）。控制台不能照 Runtime 的读法读出声明的变量（不认识的类型，或者 Runtime 会拒的 `integer`、`ordered`
+声明）只显示标题和值，灰字写「这一版监控台在这里改不了」：照合同的回退规则只读、从不写，既没有控件也没有「恢复默认」；不认识的
+块按这个类型的基本控件画。放置了但这个实例的包没有提供、又存着值的条目，以及每个
+「已经不提供」的值，有「清掉」。**其他资源目标**的编号合条目名的写法（`[a-z0-9][a-z0-9_]*`，不超过 64 字节，`EditGoal` 只收
+这种名字）时有「清掉」，不合的写「请用 Lab 修改」。写入只带名字，Runtime 按名字下存着的东西、按它自己的次序解析（清掉时先找
+资源条目所在池上的目标，再找同名的存值，最后找同编号的目标），所以名字和页上另一项相同的「已经不提供」的值、其他资源目标或变量的值
+（另一项可以是任何一种条目、另一个不再提供的值或另一个其他资源目标；游戏的目标声明里一个资源条目和一个包变量同名时，Runtime 判
+`goal_name_conflict`，两行都列，各按各的种类认）不给「清掉」或「恢复默认」，灰字写「和页上另一项同名，这里清不准；请用 Lab
+修改」；资源条目自己的「清掉」照旧（Runtime 先找它池上的目标）。档位只读；补救参数不在这一页上。页面不列条目（`not_checked_yet`、
+`root_failing`、`no_schedule`）、存着的是旧格式（v1）记录、这个实例有写入在路上、写入落地后还没重读到时，所有控件都灰着。
+
+**数值和顺序**（#455 G3）。`integer` 变量有一个「新的值」数字框，旁边写它的输入单位，再加「设定」；下面灰字写能设的范围，例如
+「可设 30 秒 到 3630 秒，间隔 30 秒」（间隔正好是一个输入单位时不写间隔）。时间单位（`second`、`minute`、`hour`、`day`，值都是毫秒）
+的数按一个输入单位填：从声明的单位往下，取第一个（最大的）既是步长整数倍、又能整除最小值、而且最小值加上一个这样的单位不超过
+最大值的单位，这样框里填的每个整数都落在步长上，也不会只剩最小值能填（不写步长、按小时声明、范围又够一小时的，就填小时）；
+一个都找不到时（例如步长 7 毫秒，或者按分钟声明、范围只有 200 毫秒），改取第一个同时整除最小值和步长的单位（毫秒一定整除）。
+现在用的值不是输入单位的整数倍时（别处设的或默认值，例如按小时声明的 90 分钟），行上照样显示，灰字另写「现在的值不是整…；这里
+只能改成整…，要设成别的值请用 Lab」。框里填的字照 Runtime 的判法先在本地挡：「请填整数」（只认 ASCII 数字，前面最多一个正负号；
+全角数字、小数点、中间的空格、千分位都不算）、「要在 … 到 … 之间」（上限是最大值以内最后一个在步长上的值，最大值本身不一定在步长
+上）、「只能从 … 起，每次加 …」、「现在用的就是这个值」（存着的值没用上时，现在用的就是默认值，打默认值什么都不发：要换掉存着的
+值，只能换成别的数，或者按「恢复默认」）。只有按「设定」才发，在框里按回车不发，也没有 −/+ 按钮；时间单位写成毫秒。
+
+`ordered` 变量在值下面有一个排序编辑器：已选的项按顺序编号列出（一项也没选时，上面灰字写「一项也没选」）；「上移」「下移」「移除」
+作用在标记的那一项上；选项多于 8 个时有搜索框，按各语言的标题搜、不分大小写，从不按选项编号搜（界面不露编号）；搜到的选项照
+声明的顺序列出，最多 100 项，再写「还有 N 项没列出：多输入几个字可以缩小范围」或「没有找到这样的选项」。点一个选项，或者在它上面
+按回车，就加到末尾；已选的项留在原位、标「已选」，点了没反应（双击的第二下也就什么都不加）；放不下的项变灰，标「放不下」。下面
+灰字写已选几项、可选几项（「已选 3 项，可选 1 到 32 项」「已选 2 项，要选 2 项」：不超过选项数，Runtime 不拒比选项数大的
+`max_count`），然后是「已选满：要加别的，先移除一项」，或者没满、却没有一项还放得下时写「再加哪一项都存不下了：一个值最多 1024
+字节」：一个值的文本（各项编号组成的紧凑 JSON 数组）最多 1024 字节，所以 64 字节的编号放得下 15 个，第 16 个就放不下。每次编辑都
+只改草稿，什么都不写：草稿从下一次运行要读的值开始（没用上的值从默认值开始；只用上一部分的，从存着的值去掉已不再提供的项开始），
+按「保存顺序」整份发出；发之前先按这个次序在本地挡：同一项两次、有已不再提供的项（「有 N 项已不再提供，要先移除」）、太少、太多、
+太长（「这些项合起来太长，存不下：N 字节，最多 1024 字节」）。「放弃改动」回到在用的值。开始编辑以后这一项的值在别处改过了，就写
+「这一项的值在别处改过了，草稿是照旧值改的：先放弃改动再改」，不能保存，只能放弃。草稿和搜索框里的字在页面重读时都留着，保存
+写成、换实例或 Runtime 重启时才清掉。保存和在用的一样的顺序，什么都不发。
+
+键盘：每个列表只占一个 Tab 位，上下键移标记；在可选列表里按回车加入标记的那一项（按住不放也只加一次），空格什么都不做；在搜索框
+按下键进入可选列表。按「设定」「清掉」「恢复默认」「确认」「取消」「保存顺序」「放弃改动」以后，键盘焦点停在这一行的停靠点（行
+的左下角），在那里按回车、空格都不做任何事，再按 Tab 进本行第一个能拿焦点的控件，而不是绕到顶栏那些对所有实例起作用的按钮。写入
+还在路上时整页控件都灰着，这时按 Tab 会越过这一行；清掉以后整行会从页上消失的（已经不提供的值、其他资源目标），页面重读后焦点
+可能跟着这一行一起没了，再按 Tab 就从窗口顶上重新开始（都是已知的缺口）。
+
+Runtime 按变量的规则拒掉数值或顺序时（超出范围、不在步长上、不是可选的选项、个数不在范围内、同一项两次、类型不对；本地已经照同样
+的规则挡过，只有页面上的规则比 Runtime 的旧才会这样），结果句后面再接「这个包的规则可能刚改过，页面会重读」，页面马上重读；数值的
+范围按这一行的单位写（照值的显示方式），排序值出问题的那一项写它的标题（「出问题的是「…」」）。补救参数照旧不在这一页上。
+
+二次确认只问控制台自己设不回去的，问的那一句写明会丢什么：清掉没有运行会读的值（已经不提供的、放置了但没有包提供的），
+「存着的值（…）在这里设不回去」；存着的值下一次运行不用的变量（选项已不再提供、值的类型变了、数不在范围或步长上、原因是这个
+控制台不认识的词，或者游戏根判定这一项不起作用、这里再也设不了值），按「恢复默认」、改选项、拨开关、设数值或保存顺序都先问，同样
+写明存着的值：这个值在这里设不回去；值正在用、但存着的项里有已不再提供、运行时跳过的 `ordered` 变量，保存别的顺序或按「恢复默认」
+都先问，写明这几项：「保存以后，存着的值里已不再提供的几项（…）会丢掉，它们在这里设不回去。确定保存吗？」「恢复默认会清掉存着的
+值，连同已不再提供的几项（…），它们在这里设不回去。确定恢复吗？」；清掉其他资源目标，带它的资源池和数量；给资源设数量、而有个其他资源目标或另一个资源的目标的编号正是这个
+资源的名字时，Runtime 会一并删掉那个目标：是其他资源目标的，问句带上它的资源池和数量；是另一个资源条目的目标的，问句写那一项的
+标题（不写资源池编号）、它的数量和它带的任务、步长、重要度、有效期（照下面别处设的目标那样看）；池现在不能在这里设目标（池没给
+步长、现在不能设目标、或者没列出）时，它上面的目标不管谁设的，清掉以后在这里都设不回去，所以先问，写明它的数量（别处设的还写
+它带的东西）；清掉或换掉别处设的（没有设定来源，或者通道不是本控制台）已声明
+资源的目标、而它带着按名字设的目标不带的东西（它自己的任务、步长、重要度、有效期）：设资源值会整条换掉这个池上原有的目标，不管
+它的编号，这些都会丢。带了哪些，从存着的记录里同编号的那条目标看，只列带了的；看不出来就四样都写。这样的目标那一行另有琥珀字「这个目标是
+别处设的，在这里改会换掉它原来的设置」（池能不能在这里设目标都写）。池能在这里设目标、别处设的目标又四样都没带（例如别处按名字设的），换掉或清掉什么都不丢，所以不问，只有
+那一行琥珀字提醒。值正在用上的变量的「恢复默认」和改选项、拨开关、设数值、保存顺序（都除了上面说的有已不再提供项的排序值），编辑排序的草稿，以及池能在这里设目标时本监控台设的目标，都不问。只有「确认」才发出去：按「确认」时
+按最新读到的那一页把这一行重算一遍，要写的或要问的和问的时候不一样了（例如这一页刚重读过，或者现在读不到），或者排序草稿开始以后这一项的值在别处改过，就撤掉这一问、不发，
+这一行写琥珀字「确认时这一页已经和问的时候不一样了（重新读过，或者现在读不到），没有发出去；请看过再按一次」；一样就带最新那一页的
+版本发出去。问句挂着的时候，这一行的数字框和「设定」灰着，排序编辑器也灰着，确认发的就是问的那个数或那个顺序。「取消」、
+按别的、换实例或 Runtime 重启都会撤掉这一问。
+
+写入走一条新的人工连接（`ui` 通道，带完整回执），读写超时用慢线的 20 秒，在单独的线程上只发一次。回答：写成了，不出字，马上
+重读；这一页在读到之后被别处改过（`fact_observation_version_conflict`），琥珀字「这一页刚被别处改过，已重新读，请再按一次」，
+重读，不自动重发；同一毫秒里有别的写入（`fact_observation_not_newer`），在同一连接上马上再发一次；值被拒（`goal_value_invalid`），
+这一行写 `goal_problem` 每个词一句，带上它给的值（「1 到 9999」这样的范围（数不在允许的步长上时不带范围，免得读成步长的范围）、带单位的上限（一个值最多存的「1024 字节」、
+一份记录最多存的项数）、变量为什么不起作用；不认识的词照码写，
+技术日志记一次），不重读，但变量的值被它的规则拒掉时马上重读（见上：只有页面上的规则比 Runtime 的旧才会这样）；发出后不确定，先重读，重读到了才能再按（带了版本，第一次已经写进去的话，再发只会撞版本冲突，不会写两次）；
+Runtime 没有这个写入（`runtime_operation_unsupported`、`not_implemented`），这个 owner epoch 里整页只读，在各行上面写明一次；
+别的拒绝（`instance_unknown`、`channel_binding_missing` 等）这一行写红字带码。结果句带落地时刻，留到这一行再被按、换实例或
+Runtime 重启为止；每个回答都记进技术日志，线程名 `acui-act-goal`。
+
+`--state-root` 只对这一次运行有效，覆盖设置文件里的 `state_root`；两处都没有，工作台照开，顶部红条用人话
+写明没有可用的状态根、该怎么办（用法和键名只进技术日志），「启动」「请求关闭」「排障与账本」停用，不猜
+默认值。经 A/B 安装的固定入口
+`<安装根>\ui\acui.exe` 启动时，状态根、配置与 Runtime 程序改取自安装的选择，`--state-root` 与之不同就拒绝
+（同样写在红条里）。
+
+**安装文件夹（根模式）**：直接从单一位置安装文件夹里的 `<安装文件夹>\ui\acui.exe` 启动时（文件夹里有
+`runtime\BUILD-MANIFEST.json`、没有 `install\active.json`，与 Runtime 自己认根的规则相同；`ui` 不分大小写），
+三条路径都取自这个文件夹，与 Runtime 自己的工具找到的一样：配置是 `<安装文件夹>\actingd.config.json`（最多读
+1 MiB），状态根是其中 `state_root` 写的绝对路径（照写的用，不假定就是 `<安装文件夹>\state`；目录还不存在不算错，
+只记进技术日志），Runtime 程序是 `<安装文件夹>\runtime\actingcommand-actingd.exe`。设置文件里的三个路径键这时一律
+不用，`--state-root` 与配置写的不同就拒绝。不在安装文件夹里的监控台可以用 `--root <安装文件夹>` 指定一个（绝对
+路径，同样要有 `runtime\BUILD-MANIFEST.json`，而且它和上一层都不能有 `install\active.json`：有的是 A/B 安装或它的槽）；
+本身就在安装文件夹里的监控台，`--root` 只能重复这个文件夹，A/B
+安装下 `--root` 也只能重复安装的根，否则红条写明。这个文件夹缺东西——缺 Runtime 程序、缺配置、配置读不出或不是
+JSON、没写 `state_root` 或不是绝对路径，或者只有 `actingd.config.json` / `runtime\` 而没有 manifest 的半成品——
+红条逐项写明缺什么、请重新运行安装向导修复，**不会**退回去用别处的设置文件、悄悄连到别的安装；技术日志里每一项
+带路径与系统报错原文。四档的先后：A/B 安装的选择 → `--root` → 程序所在的安装文件夹 → `--state-root` 与设置
+文件。不在任何安装文件夹里的监控台（例如装在 `%LOCALAPPDATA%\Programs` 下的那种）照旧走最后一档，读写与以前一样。
+安装文件夹不能直接叫 `A` 或 `B`：读安装选择的规则会把它当成 A/B 的槽而报错，这时红条多一句说明。安装选择读不出时
+（文件夹叫 `A`/`B`，或者继承了别处留下的 `ACTINGCOMMAND_INSTALL_ROOT` / `ACTINGCOMMAND_INSTALL_SELECTION`），这次
+没有路径可用，但设置照旧用这个安装文件夹自己的（见「设置文件」），不退回全局设置文件；A/B 安装的槽（上一层有
+`install\active.json`）不算安装文件夹，照旧用全局设置文件。工作台设置页
+「外观」下面一行写这个监控台用的安装文件夹和设置保存在哪个文件里。
+
+只认 `<安装文件夹>\ui\acui.exe` 这一个位置：监控台放在安装文件夹里别的地方（例如直接放在根下，或放进 `tools\`），
+就不认这个根，照旧走最后一档。判定按程序自己的真实路径：`ui` 是联接（junction）或链接时，按它指向的那个文件夹认根，
+也就是指向的文件夹也得叫 `ui`，它的上一层才是安装文件夹。
+
+**状态根上的是不是本安装文件夹的 Runtime**：根模式下状态根照配置写的用，配置要是抄了别的安装的状态根，监控台就会连到
+那个安装的 Runtime（在这台机器上可能就是平时在用的那一个）。所以根模式下，监控台连状态根上的 Runtime 之前先核对，读的
+（工作台的状态、日程、设置和画面，账本窗口，启动器的探测）和人发的请求（「请求关闭」、记录「启动」、「全部暂停」「全部
+开始执勤」、实例的暂停与恢复、账本窗口里的恢复、改设置、操作设备、刷新画面、开关或关闭任务、停下运行）一样：只读状态根的
+`runtime-info.json` 这个文件取进程号，向系统要这个进程的程序文件，规范化后（解开联接、去掉 `\\?\`），它必须在
+`<安装文件夹>\runtime\` 下，或在保留的构建 `<安装文件夹>\install\builds\<提交>\runtime\` 下。不在，或者核对不了（程序文件
+取不到或解析不了），监控台就一条连接也不建：不握手、不读、不发任何请求。工作台状态灯变红，写「在运行的 Runtime 不是这个
+安装文件夹的」；上方红字写明进程号、程序文件（或核对不了的原因）和安装文件夹；账本窗口的 Runtime 状态也写这一句；在线读到的
+东西一概不显示；「启动」什么也不拉、什么也不记；设置页的 `actingctl watchdog status` 会向它找到的 Runtime 问健康，这时也不跑
+（设置页写读不到 Runtime 会不会被自动拉起，技术日志写明原因）。这时按的按钮，下面写「没有发出去：在运行的 Runtime
+不是这个安装文件夹的，见上方红字」，不带码；码 `console_runtime_not_this_root` 只在技术日志里，每按一次记一行。核对结果按进程号和 owner epoch 记住，
+Runtime 换了才重查，每个新结果在技术日志里记一次。`runtime-info.json` 写的进程已经不在了（Runtime 退出时没删掉它）的，
+那里没有在运行的 Runtime：同样一条连接也不建，状态灯写 Runtime 没有运行，可以按「启动」。不在根模式（A/B 安装、设置文件的路径）
+不做这项核对。
+
+有两种情况这项核对管不到。`unlock-owner` 跑的是本安装文件夹自己的 actingd、用本安装文件夹自己的配置，不连 Runtime，没有
+可核对的。配置写的状态根抄自别的安装、而那一台当时没在运行时，「启动」会照本安装文件夹的配置、用那份状态根拉起本安装文件夹的
+actingd：没有在运行的 Runtime 可核对，这种情况认不出来。
+
+日志目前还不分安装文件夹：技术日志和 actingd 启动日志都在全局的 `%LOCALAPPDATA%\ActingCommand\logs\` 下（见「启动失败时」
+与「启动器」），几个安装文件夹的监控台写在同一个目录里，只靠文件名里的启动时刻区分；技术日志每次开台那行 `place` 写明这次
+用的是哪个安装文件夹。
+
+`--source` 选账本窗口的读面（见上）。`--tab` 指定账本窗口的启动页签（截图与复核用），
+取值就是视图自己的 wire 名。`--page` 同类：只决定开窗时工作台显示哪一页，`main` 是主页（默认），`settings`
+是设置页（截图用）。`--account` 也同类：开窗时选中哪张实例卡，取值是实例的名字（不给时选第一张；列出的实例里没有叫这个名字的时也选第一张，并写进技术日志）。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
+
+直接启动 `acui.exe`（或直接指向它的快捷方式）不再带黑色控制台窗口；从命令行启动时，`--help` 与启动
+失败的原因照旧印在那个控制台上。
+
+窗口可缩放：工作台默认 1200×780，最小 1000×640；账本窗口默认 1400×900，最小 1100×700，中栏随窗口伸缩，
+两侧栏保持定宽。窗口跟随系统 DPI；程序自己不设缩放。
+
+离线验收材料：`tools/fixture-state-root` 是个小生成器（独立包，不在 workspace 与构建里），在两台假设备上起钉住的
+Runtime 宿主，留下一个小的 v0.12 状态根（带端口的实例绑定、两帧带材料的截图、几百条事件，离线不止一页）。
+手动工作流 `fixture`（`.github/workflows/fixture.yml`，Windows）构建并运行它，把整个根打成 zip 作为产物
+`fixture-state-root-<提交号>` 上传；解压到可写目录后用 `acui --state-root <根> --source offline` 打开。它是材料，不是测试。
+
+### 启动失败时
+
+启动走不下去时——命令行看不懂、工作台窗口建不出来——监控台
+另开一个窗口写明原因，同时写到启动它的那个控制台（如果有），并追加进技术日志。命令行看不懂时退出码为 2，
+其余为 1。连这个窗口也建不出来时，用系统消息框说。`--help` 把用法印在那个控制台上，没有控制台就用同一个
+窗口显示，退出码 0。读不出本安装的选择、`--state-root` 与安装的选择或安装文件夹的配置不一致、`state_root` 不是绝对路径、
+安装文件夹不完整、`--root` 不是安装文件夹或不是本监控台所在的那个、没有状态根，都不算启动失败：工作台照开，顶部红条先写一句人话、再附原文，并记入技术日志；没有状态根时红条
+只写人话，用法连同键名只进技术日志。
+
+技术日志是 `%LOCALAPPDATA%\ActingCommand\logs\acui-<启动时的 unix 毫秒>.log`（其他平台在
+`$XDG_STATE_HOME`，没有就在 `$HOME/.local/state` 下），与 actingd 的启动日志同一目录。有第一条要写时
+才创建，记的是失败：启动失败或没有可用的状态根、设置文件的问题、后台线程交不回窗口的结果、账本窗口建不
+出来或显示不出来、账本读线程起不来或意外终止。此外每次开台记一行 `place`：路径取自哪一档（`selection`、
+`root mode (exe|--root)`、`legacy`）、各是什么、用的是哪个设置文件，根模式下全局设置文件在却没用、或因为它指向这个
+安装文件夹而用了它，再记一行；这几行不算失败，单凭它们窗口顶部不写日志位置。账本读面打不开不算启动失败：账本窗口照开，在账本区写明
+原因（见「数据来源」）。文件建出来以后，设置页和每个账本窗口的顶部写明它在哪，工作台主页不写，免得占工作区一行；
+写不进去时，每个窗口都改写原因，主页也写。
+
+## 界面语言、字号与主题
+
+工作台设置页的「外观」与每个账本窗口顶栏右侧都有这三个下拉框；在哪个窗口选，都当场作用到所有打开的窗口，选完就写进
+设置文件，新开的账本窗口沿用当前的语言、字号与主题：
+
+- **字号**：标准 / 大 / 特大 = 1.0 / 1.25 / 1.5。**当场生效**。界面里所有字号与行高都是一个
+  给正常 DPI 下的人看的基准尺寸（列表行 14px、详情 13px、小标题 16px、行高 26px）乘这一个
+  系数，界面里只有 `Scale.factor`（在 `crates/acui-app/ui/kit/tokens.slint`）这一个旋钮；带文字的控件
+  （下拉框、编号框、游标滑块、各提示行）的最小宽度和放文字区域的最小高度也乘它，窗口的最小尺寸和三栏的
+  保底宽度不乘。
+- **语言**：中文 / English。**当场生效**：选完就重填每个窗口的 `Strings` 全局，并把每个窗口里每一行重画一遍——
+  启动器的人话行与技术行、帧窗格的提示、端口下拉、读取错误的说明句都在内；后台线程从不拿语言表，只交回
+  「画的时候再拼」的短语，所以正在进行的启动、读帧也按新语言回报。两张语言表在
+  `crates/acui-app/src/strings.rs`（`ZH` 与 `EN`）；没有 gettext。读面自己返回的错误原文照原样显示，
+  不翻译。
+- **主题**：现代扁平 / Win7 Aero（设置文件里写 `flat` / `aero`）。**当场生效**，不用重开：选完就设好每个
+  窗口自己的 `Look` 全局的外观，界面里的页面、卡片、文字和控件都按它画（`crates/acui-app/ui/kit/`）。
+  现代扁平跟随系统的浅色或深色设置；Win7 Aero 的窗口里面固定浅色，不随系统变。启动失败窗固定用现代扁平，
+它出现在主题生效之前。Windows 以外的系统上，第二项叫「Win7 Aero（实心）」。
+
+  Windows 上，Win7 Aero 自己画窗口外框：标题带和 8px 边框是透明玻璃，配 Win7 的标题按钮，开窗 250 毫秒淡入、
+  关窗 180 毫秒淡出。移动、贴边、八向缩放、双击最大化和系统菜单仍由系统提供。玻璃是紧贴在主窗下面的第二个窗口，
+  不接收输入，由 Windows.UI.Composition 把背后的内容经高斯模糊画在上面，模糊强度是 `AeroConst.sigma`；现在为 0，
+  背后清楚透出，要改模糊只改这一个值。画不出来的部分降一级，在该窗口标红并写进技术日志，下次选主题时再试：
+  没有玻璃就保留外框、画实心玻璃，没有外框就把 Aero 页面放进系统标题栏的窗口。窗口不会自己改回现代扁平。技术日志
+  （类别 `acui-glass`）每建一个玻璃窗写一行 `垫底窗已建立`，每销毁一个写一行 `垫底窗已销毁`，都带主窗和玻璃窗的
+  矩形以及两者的累计数；运行结束时两个累计数相等，就是没有遗留。
+
+两层标签：上层是给人看的名字，下层灰色的是程序里的原样写法——原始 `event_type`、模块名、
+各种 id、`payload_schema`、sha256 一律不翻译。字典在 `crates/acui-rows/src/display.rs`，覆盖
+契约里全部 121 个 `event_type` 与 20 个 `origin.module`；**表里没有的一律照原样显示，不猜**。
+
+### 设置文件
+
+语言、字号与主题存在设置文件 `acui.toml` 里。用哪一个，开台时定一次，之后整次运行只读写这一个：
+
+- **不在任何安装文件夹里的监控台**，以及 A/B 安装：按用户区分的配置目录下的那个（下称全局设置文件），与以前一样：
+
+  ```
+  Windows:  %APPDATA%\ActingCommand\acui.toml
+  Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/…）
+  ```
+
+- **根模式**（见「运行」）：这个安装文件夹自己的 `<安装文件夹>\acui.toml`，与 `actingd.config.json` 放在一起
+  （不放进 `ui\`：那是程序目录，更新时会整个换掉）。按顺序：
+  1. `<安装文件夹>\acui.toml` 在，就用它（看不清在不在也算在，好把读不出的原因写出来）。
+  2. 不在，但全局设置文件在，而且它的 `actingd_config` 指的正是这个安装文件夹的 `actingd.config.json`（同一个
+     文件），就继续用全局设置文件：这是原本靠全局设置文件配置、后来才把监控台放进 `ui\` 的安装，它的设置（包括
+     `resume_elsewhere_reasons`）不会因此突然失效。技术日志记一行。
+  3. 其余情况都用 `<安装文件夹>\acui.toml`：还没有时按默认值运行，第一次在下拉框里改设置时才建出来。根模式下
+     除了第 2 条，全局设置文件一概不用（它在却没用时，技术日志记一行）。
+
+  安装文件夹自己的设置文件不认三个路径键：根模式下路径一律取自安装文件夹，这里写了也不起作用，每一行都用黄字
+  写明、原样保留，绝不悄悄生效。安装向导要预设语言时，就按行写这个文件（例如只有一行 `lang = "en"`），从不写
+  全局设置文件。
+
+工作台设置页「外观」下面一行写这次用的安装文件夹（如果有）和设置保存在哪个文件。
+
+```toml
+# zh | en
+lang = "zh"
+# standard | large | extra-large
+text_size = "standard"
+# flat | aero；由「主题」下拉框设定，工作台和账本窗口按它绘制
+theme = "flat"
+# 可选，绝对路径；只有全局设置文件认，根模式下不用
+state_root = '<install root>\state'
+actingd_config = '<install root>\actingd.config.json'
+actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
+# 可选，整数秒 2–60（缺省、越界、写错都用 5）：实时画面跟任务时，最快多久读一张帧。
+# 读帧由 Runtime 的读者池回答，不占账本写线程（v0.12.38）；默认 5；C7 联验实测前别调快。
+preview_frame_gap_seconds = 5
+# 可选，只写一行，默认一个都没有，例如 ["a-reason", "b.reason"]：监控台不给恢复的暂停理由，
+# 这类暂停只由设下它的一方解除
+resume_elsewhere_reasons = []
+```
+
+开台时读一次；下拉框一改，就只写这一个键：先重读文件，换掉这个键的最后一行（没有就追加一行），其余
+各行——注释、路径键、监控台不认识的键（例如 `install_root`）、解析不了的行——逐字节保留；结果先写进
+旁边的 `acui.toml.tmp`，再替换原文件。**选中的这个文件是监控台唯一自己读写的文件**（启动器创建、早退后读回的
+actingd 启动日志，以及监控台自己的技术日志除外，见各自那一节）：它不在任何状态根里，状态根依旧全归
+读面。文件不存在就是首次运行：按默认值（中文、标准、flat）来，不提示。其余情况都在每个窗口顶部写明文件与
+行号：取值不认识、某行不是 `key = value`，黄字，按默认值处理、原行保留；文件在却读不出（权限、不是
+UTF-8），红字，按默认值运行，**本次一概不保存**，绝不覆盖原文件；找不到配置目录、保存失败，红字，后者
+一直显示到下次保存成功。这些同时写进技术日志。解析器是手写的：一行一个 `key = value`，`#` 开头的行是
+注释，去掉一对成对的引号，不处理转义，值后面不能再跟注释——Windows 路径写在单引号里（TOML 字面量
+字符串），不要写成双引号里加双反斜杠的形式。
+
+`resume_elsewhere_reasons` 列出监控台留给设下者自己解除的暂停。Runtime 不记暂停是谁加的，只记理由，
+所以不许在这里解除的暂停按理由来列：理由在列的暂停，顶栏不给「全部开始执勤」，实例卡片不给「恢复这个实例的调度」，
+账本窗口不给「恢复自动调度…」，顶栏、实例卡片和账本窗口都只写「此暂停要由设下它的一方解除」。没有哪个框写这个键；保存别的键
+时，这一行和其他行一样逐字节保留；0.12 安装向导从不写全局的这个文件（它只在新装的根里写
+`<根>\acui.toml`，只有 `lang` 一行，见「安装向导 acsetup」一节），所以这一行不会被它冲掉。写法是一行，键名加不加引号都行，值是 TOML 字符串数组，双引号、单引号都行，末尾可以多一个逗号；
+`[]` 或干脆不写这一行就是默认：一个都没有。每一项都得是 Runtime 自己认的暂停理由（用 Runtime 自己的
+`SchedulingPauseReason` 校验：1–64 个字符，只能有 `a-z`、`0-9`、`_`、`.`、`-`），所以不涉及转义。这个键
+的某一行监控台用不了——不是这样的数组（整个数组套在引号里就成了字符串）、某项没加引号或不是这样的
+理由、值后面跟了注释、这一行没有 `=`、键名的引号不成对——就在每个窗口顶部用红字写明文件与行号，
+并且**失败即关闭**：改好之前，不管这个键的别的行怎么写，除了监控台自己加的两种暂停——「全部暂停」加的
+全局暂停（理由 `console_pause_all`）和「暂停这个实例的调度」加的实例暂停（理由 `console_pause_account`，见「启动器」
+一节）——整个监控台都不给任何暂停恢复；这两个理由出现在另一种范围上的暂停也一样不给。设置文件在却读不出、找不到配置目录，也
+一样按失败即关闭处理。部署暂停无论如何都归安装器，Lab 救急模块挂的暂停无论如何都归挂它的那次操作
+（见「启动器」一节的「有条件恢复」）。理由本身是操作方自己的数据：监控台从不改写，账本窗口技术行下方
+的暂停行仍照原样显示理由。
+
+## 启动器
+
+在工作台上：顶栏是状态灯和最新一次状态读取得出的 Runtime 状态（人话），然后是「启动」按钮，只在
+Runtime 未启动、也没有启动在进行时可用；灯写「正在停止或暂时没有回答」或「连接 Runtime 出错」时不可用，因为
+Runtime 可能还在。状态读取本身失败时也可用，因为启动会先探测。「请求关闭」在设置页的「Runtime」里。顶栏下面一行是上一次按下的结果，只有人话（不带
+键名、码、PID 和路径；有结果码时只带它的短说明；只有技术原文才写出的失败，后面补一句「详情见『排障与账本』」）。
+拉起了进程却没等到 Runtime 的启动，还在这里显示那个进程的日志路径（可选中复制）。每个账本窗口顶栏的启动器一行是技术行：上一次探测的状态带
+PID 与 owner epoch（或客户端错误码），下面是上一次请求的技术原文；解锁入口也在这里（见下）。失败时整行
+变红，长了就换行，不截断；只有顶栏放不下时，状态灯旁的字才省略。探测、整段启动（探测、拉起、就绪判定、记账）和请求关闭都在各自的后台
+线程里做，窗口从不等它们；同一种请求一次只走一个，上一次没完成时再按，只说「上一次请求还没完成」。
+同时发出的探测只认最新的一次。
+
+- **Runtime 状态**：开台时探测一次，之后每按一次「启动」或「请求关闭」再探测。探测就是一次
+  `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
+  `runtime-info.json`，经客户端的 owner epoch 核对）；连不上写「未运行」加客户端的错误码与
+  操作名，不猜原因。
+- **启动**：先探测，已在运行就什么也不拉，写「已在运行，未拉起」并记下这次按钮（见下）。
+  否则按 `actingd_exe` 分离拉起
+  `actingcommand-actingd --config <actingd_config>`——命令行就这一条；两个键缺一个或不是
+  绝对路径，都写明是哪个键，什么也不拉。stdout / stderr 都进监控台**自己**目录下的日志：
+  `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log`（Linux：`$XDG_STATE_HOME` 或
+  `$HOME/.local/state` 下同名路径），目录由监控台建，**永不在状态根里**。Windows 下用
+  `DETACHED_PROCESS` 拉起：守护进程不继承监控台的控制台，收不到它的 Ctrl+C。没有安装选择时（根模式，或设置
+  文件的路径），拉起 actingd 和跑 `unlock-owner`（见下）之前都先清掉 `ACTINGCOMMAND_INSTALL_ROOT` 与
+  `ACTINGCOMMAND_INSTALL_SELECTION` 两个环境变量，照 Runtime 契约 install-cli 的启动规则；A/B 安装照旧把自己的
+  安装选择交给本槽的程序。
+- **就绪判定**：最多 60 次、每次 500 ms。每次先 `try_wait()`：子进程已退出就停下，写退出码、
+  该日志里 actingd 的终态结果——最后一行带 `actingcommand.outcome.v1` 信封且有码的 `OUTCOME actingd:`
+  行（runtime-outcomes 1），显示与它同次写入、紧挨在前的开发者行的**原文**，没有就显示这行结果行
+  本身（日志读不了就写读取错误，没有这样的行就照直说没有）——与日志路径；没退出就再 `connect` 一次，
+  连上即就绪，写 PID 与 owner epoch，随后记下这次按钮
+  （见下）；这时默认来源的账本窗口若因为没有 Runtime 而什么都没读，或按了「离线打开」后按离线读（含离线读面
+  未打开），就给出「重新打开」并写明可以改为在线
+  读取——**不会在会话中途悄悄换读面**。60 次都没连上，写「仍未就绪」和最后一次客户端错误码。就绪**从不看
+  守护进程的输出**：只在早退之后读回日志、只取那一条终态结果，其中只认它的码是不是
+  `owner_resource_unconfirmed`（见下）。
+- **记下启动按钮**：Runtime 存在之后才记得下，所以顺序是探测 →（需要时）拉起 → 就绪判定 → 记账。
+  按按钮是人的动作，所以记账新开一条身份为 actor `user`、source `ui` 的连接（控制台自己发起的读用
+  `ui` / `ui`），`begin_interaction()` 开一个交互，用 `record_client_action_receipt` 记一条
+  `client_action`（surface `acui.launcher`，类别 `button`、不带值；这次按钮拉起了进程记 control
+  `launcher.start`，发现 Runtime 已在运行记 `launcher.start.skipped_running`），回执必须带 terminal；
+  在工作线程上做，不占窗口的事件循环。有没有拉起进程是账本自己记下的结果（`runtime.started`），
+  不是按钮的值。结果行追加动作落账的
+  序号；记账失败就把 Runtime 的拒绝码（若有）**原样**写出，外加客户端错误码与操作名，拒绝带出
+  宿主失败时再写宿主码与操作——Runtime
+  仍照写已就绪 / 运行中。就绪判定
+  失败时没有连接，**什么也不记**，失败只写在结果行上——这是启动器里可能生效却不落账的两种动作之一，
+  另一种是在 `unlock_owner_ledger` 阶段失败或被终止（超时或读取子进程状态失败）的解锁（见下）。
+- **解锁 owner**：只在上一次启动的终态结果码是 `owner_resource_unconfirmed` 时出现——actingd 拒绝了
+  这个状态根，因为它上一个 Runtime owner 退出时设备资源仍在用或未确认。此时工作台写「需要解锁」并指向
+  「排障与账本」，每个账本窗口的技术行下面多一行「解锁 owner…」按钮。第一下什么也不运行，只亮出声明「上一个 Runtime 的设备资源已经释放」和「确认并解锁」
+  按钮；第二下才按 `actingd_exe`（同启动一样须是绝对路径）运行，命令行就这一条：
+  `unlock-owner --config <actingd_config> --actor acui --confirm-resources-released`；在工作线程上跑，
+  不开控制台窗口（Windows 用 `CREATE_NO_WINDOW`：输出要截获，所以不分离），截获 stdout 与 stderr，
+  最多 180 秒——远高于 Runtime 自己给账本阶段的 120 秒预算，不会截断本来能完成的解锁；
+  超时就终止并回收，结果行写结果未知。actor 是 `acui`，指这个监控台而不是某个人：不会把
+  操作系统用户名写进账本。stdout 去掉首尾空白后必须整体是一个 JSON 对象，`schema_version` 为
+  `actingcommand.actingd.unlock-owner.v2`，按 `outcome.code` 判断。`unlock_owner_completed` 且退出码
+  0：写被解锁的 owner epoch、解锁前处置（`in_use` / `unconfirmed`）与 `owner.lock` 修订号，收起解锁
+  入口，再按同一条路径自动启动一次。其他码都是失败：**原样**写这个码、结果里的 `stage` 值与
+  `journal_appended`（只有阶段 `unlock_owner_ledger` 才是 `true`：解锁已落盘，下次启动会接管那个
+  epoch，但账本里缺它那条事实）；在解锁本身之前就被拒的失败（用法、选项、安装环境检查）不带这两项，
+  就各写一个破折号。没有 JSON 时，**原样**写 stderr 里最后一行开发者行
+  （`<LEVEL> actingd: <code> <text>`），没有就写最后一行非空行。拉起失败、超时、输出无法解析或不合约定、
+  `unlock_owner_completed` 却退出码非 0，各有各的结果行，都不重试启动。除解锁成功外，
+  任何结果之后入口回到第一步；新的一次启动收起它。解锁进行中「启动」被拒，工作台也关不掉（写明等解锁结束再关）；上一次「启动」还没结束时再按，也直接拒回，写「上一次启动还没结束」，什么也不拉。监控台不为它记
+  `client_action`：没有运行中的 Runtime 可经手，`unlock-owner` 自己追加 `cli.command` 事实（action
+  `owner.unlock`）。它从不删除 `owner.lock`（Runtime `contracts/actingd-unlock-owner.md`）。
+- **请求关闭**：只走类型化客户端，从不杀进程。新开一条身份为 actor `user`、source `ui` 的连接
+  （Runtime 只接受控制台前的人或操作员 CLI 发起关闭请求：`75ed4b3f` 起如此，之前只接受 CLI，这个按钮
+  因此从未成功过），`begin_interaction()` 开一个
+  交互，先用 `record_client_action_receipt` 把这次按钮记成 `client_action`（surface
+  `acui.launcher`、control `request_shutdown`），拿到带 terminal 的回执后再发
+  `request_shutdown()`——动作先落账，再请求。被拒为 `runtime_busy`（别的请求——比如一次状态
+  查询——之后 Runtime 会短暂占着生命周期准入；有租约在用或有排队请求时也会被拒为忙碌，这几次重试等不过去）就隔一秒在同一个交互上再发，总共最多 5 次，其间
+  结果行写「忙碌重试 n/5」；按钮仍只记一次。受理了写回执状态、请求编号、动作落账的序号；以别的
+  理由被拒（owner / governance 等）或第 5 次仍忙，就把 Runtime 的拒绝码**原样**写出，外加客户端
+  错误码与操作名（拒绝带出宿主失败时再写宿主码与操作）；其他拒绝或错误立即停下。最终结果行也写发了几次。之后再探测一次状态——Runtime
+  按自己的节奏停，这一眼可能还写着运行中。
+- **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
+  job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
+
+工作台顶栏有「全部暂停」和「全部开始执勤」。「全部暂停」请 Runtime 全局暂停调度：不再安排新任务，正在进行的
+任务自己收尾；Runtime v0.12.72 起（#480 PG-1），这期间 Runtime 也不自己启动模拟器（自己启动时按配置的启动、模拟器看护的重启、
+空闲唤醒的启动都不做）。只有恢复才解除它，一直都是这样；全局暂停没有阶段，马上就答复，所以 #480 PG-2c（v0.12.73）的暂停模式对它不起作用。
+「全部开始执勤」解除这份全局暂停；别的工具加的全局暂停要人确认后才解除，理由列在设置文件
+`resume_elsewhere_reasons` 里的暂停（见「设置文件」一节）要由设下它的一方解除，在这里解除不了。账本窗口
+可以有条件地恢复别的工具加的暂停（见下）。安装向导第一次启动后加的全局暂停（理由 `first-start`）用专门的说法：
+「全部开始执勤」的确认、实例卡片和任务列表下方都说这是装好后先暂停着、看过没问题就恢复；谁能解、怎么解与别的工具加的
+全局暂停一样。这几句只看理由字符串是不是 `first-start`：别的工具用同一个理由加的全局暂停，也会这样显示。
+开机自启是安装向导的一个选项，见「安装向导 acsetup」一节。
+
+每张实例卡片上还有一个自己的按钮。这个实例没有自己的暂停时，按钮是「暂停这个实例的调度」：只暂停这一个实例的调度，理由是
+监控台自己的 `console_pause_account`，排空等待时间和「全部暂停」一样（Runtime 收的最小值，1 秒）；在后台
+线程用一条新的「人」连接（actor `user`）发一次 `PauseScheduling`，之后不会自己重发。暂停后不再给这个实例安排
+新任务。它是人按的暂停（`stand`，Runtime v0.12.73 起，#480 PG-2c）：只有人恢复才解除，挡着的东西、Runtime 关闭、
+Runtime 自己出错都不会撤回它。和全局暂停不同，实例暂停要排空：过了这 1 秒这个实例还在跑的任务，会被叫停在下一个检查点，
+之后等没有东西再用设备就交还设备。Runtime 做完这些就回话，最晚在排空时限加 30 秒检查点宽限到时回话，也就是按下后 31 秒，
+这期间卡片上写着。交还完之前的回话不算失败，剩下的 Runtime 自己接着做。Runtime 在状态里答实例暂停的模式和挡着什么时（v0.12.75 起，
+#480 PG-2e），按钮下那行从第一次读到这份暂停的状态起，只说这个实例的调度已暂停，阶段和挡着什么交给卡片主行说（见下）；回话的原样记在
+技术日志里。更早的 Runtime 上，那一行写出回话时挡着什么（任务还在跑、调度派的任务还没结算完、设备被别的一方占用、Runtime 自己在启动
+模拟器或做卡死恢复、还有别的请求在排队、客户端还要复位设备、关闭设备会话这次没被放行或收尾检查出了错，后面这些都会再试）；当时没有东西
+挡着，就说还在等进行中的任务收尾，或者还在交还设备；一直写到读到设备已交还。
+
+任何还在收尾的实例暂停，监控台自己的也好、别的一方的也好，卡片主行都写它走到哪一步：排空时是「收尾中：<任务>」，交还设备时是
+「交还设备中」。v0.12.75 起状态还说这份暂停最近一次检查读到什么挡着，主行把它作为那次检查的读数接在后面：「收尾中：<任务>；上次检查时
+还挡着：……」「交还设备中，上次检查时挡着：……」。状态自己不跑检查，所以这些词和这份暂停最近一次检查一样旧：检查失败后最多旧 10 秒，
+检查自己在等（再排空一个运行、等别人手里的准入锁）时更旧。排空时，排空唯一读的那件事「任务还在跑」不再重复：「收尾中」带着任务名已经说了；
+而「已请它在下一个检查点停下」要过了这份暂停的排空时限才成立，别的一方的暂停可能把它设成一分钟（`actingctl pause`）或五分钟
+（Lab 的 `pause` 行）。交还时发现还有任务在跑，同样只说「有任务还在跑」，原因相同：交还会先按同一个排空时限再排空一遍，过了时限才请它停下。没有词时主行只说阶段，从不说「没有挡着的东西」：交还的头一次检查之前状态不答它，而那次检查可能要等准入锁，最长到
+调用方的时限，Lab 默认的排空下是 330 秒。暂停静没静只看阶段：设备交还了才算，这时卡片改说由谁解除。模式不跨 Runtime 重启：启动时恢复
+出来的暂停一律答 `stand`，工具的按住也是，是谁加的照旧看理由。关闭设备会话没能确认时，实例被隔离，不会再试：监控台自己的暂停，卡片会写出来，
+并提示按「恢复这个实例的调度」会重新连接它；别的一方的暂停，卡片上没有这个按钮，只说实例被隔离了、不会再试（账本窗口可能给它恢复入口，见下）。
+
+卡片上按出来的暂停，暂停还没收尾完就被恢复了、或者 Runtime 在收尾完之前关闭了（暂停会保留到下次启动），按钮下那行也都会说。Runtime 回答
+暂停失败时，卡片用红字写出码和码的简短说明，但不断言有没有暂停：收尾的某个阶段出错（致命错误，或者实例被隔离），人按的暂停仍然有效；
+记下暂停之前就致命出错，就什么都没设；回答里分不出这两种，所以有没有暂停以卡片上的状态为准。被拒（Runtime 拒绝了，或者记不下暂停）
+是什么都没设。监控台自己加的这份暂停在任何阶段，按钮都是
+「恢复这个实例的调度」：按卡片所依据的那次状态读取里的 owner epoch 和修订号，发一次带条件的 `ResumeScheduling`，
+暂停已有变动时 Runtime 就拒绝，什么也不恢复。按一下就发，不像「全部开始执勤」碰到别的工具加的暂停那样要先
+确认，因为这份暂停是监控台自己加的；人按的暂停 Runtime 在任何阶段都接受恢复。设备已经交还的，恢复会重新连接设备，
+最多要半分钟左右；重连失败会用红字带码写出来，但恢复照样算数。还在排空或交还设备的，马上解除，不重新连接（还在用这个实例的
+东西照旧进行）；但实例被隔离（关闭设备会话没能确认）、或者交还已经开始关设备会话的，和已交还的一样，要重新连接。有没有重新连接，
+看 Runtime 回答里带的因，不看自检的形状（这时自检两边都是 `ok: false`、没有码）；监控台钉到 v0.12.74 起读这个因
+（`resume_scheduling_expected_as`）：因是 `scheduling_resume_without_reconnect`（v0.12.73 的 Runtime 就已经答它）时，卡片说这个实例的调度已恢复，
+暂停还没收尾完，所以没有重新连接设备。iOS 手机（Runtime v0.12.74 起）是所有重连的例外：Runtime 这一版没有它的输入后端（v0.12.75 只给了
+只读的取帧后端），恢复在任何阶段都只解除暂停、不连接任何东西，被隔离的也一样，隔离照留（在 Runtime 能操控它之前，没有东西能重新证明它）；
+因是 `scheduling_resume_without_backend`，卡片说这个实例的调度已恢复，它是 iOS 手机，这一版 Runtime 还不能操控它，所以没有连接设备。这两种都不标红。恢复自检里有两个码不是重连失败，卡片照它们的意思说，码的类别不是提示时才标红：
+`dispatch_paused_instance`，这是 Runtime 停着时加进来的实例，它的首次启动暂停还没套用，Runtime 改用这份暂停
+（`instance.added`）把它又暂停了，卡片说已恢复、但又被首次启动暂停按住了；`player_hold_active`，设备正被人占用，所以没有重新连接。
+第三个是 `instance_not_running`，恢复时检查设备，模拟器没开：卡片说这个实例的调度已恢复，模拟器现在没开，所以这次没有连接设备，
+这不算失败，从不标红。状态显示这个实例开始做事（开模拟器、跑启动流程都算）以后，这句自己消掉；重新连接失败的那句，
+等状态显示这个实例上有任务在跑（那就一定连上了）也自己消掉。按下去的
+结果写在卡片上：已生效（恢复时全局暂停还在的，会补一句全局暂停还在、这个实例仍不会被安排任务）；已经有
+一份暂停在生效（原来的理由不变）；被拒，红字，原样写出码，再写码的简短说明
+（比如夹具（fixture）实例会被 `fixture_execution_scope_forbidden` 拒绝）；结果未确认，不重发。
+`resume_elsewhere_reasons` 用不了的时候，这份暂停照样能在卡片上恢复，和顶栏照样能解除自己的「全部暂停」
+一样；设置文件里列了 `console_pause_account`，就和列了的其他理由一样留给「设下它的一方」。卡片只恢复监控台
+自己的这份实例暂停：这个实例别的暂停（别的工具加的，包括用 `actingctl pause --instance` 加的），卡片上照旧只写
+由谁解除，能恢复的到账本窗口里恢复（见下）。新加实例的暂停（理由 `instance.added`：Runtime 第一次启动时见到声明了
+`start_paused` 的 `instances[]` 条目就用它暂停那个实例，那时条目已被别的暂停按着的，就在那个暂停解除时改挂它；Lab 的
+`instance add` 也给刚加进来的实例挂它）在账本窗口能恢复它时有
+自己的说法：卡片写「新加的实例，调度先暂停着；看过没问题后，可在「排障与账本」里恢复」，任务列表上方那行也这样说，不再写
+「已被其他工具暂停」和原始理由；只能由设下它的一方解除时（设置文件列了这个理由，或 `resume_elsewhere_reasons` 用不了），
+卡片和列了的其他理由一样照那样写。命令行上照旧可以用 `actingctl pause --state-root <状态根>
+--instance <别名>` 暂停一个实例、用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` /
+`ac_resume`（见「智能体用的 MCP」一节）。
+
+实时画面上方的救援条在这个实例有活动时多一行：别的工具直接发起的运行是「停下这次运行」（#429 UI-3e2，R-6 第一片，
+Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-3e2b，R-8 和 R-6b，Runtime v0.12.55 起）；调度运行没有
+只停不关的按钮。最近一次状态读取里这个实例的活动带着它的 `request_id` 时能按：别的工具直接发起的运行（`direct_run`，
+比如 Lab 的 `run start`、`actingctl task-run`、MCP 的 `ac_run_pack` 起的运行），和带着 `request_id`、`package_id`
+的调度运行（`policy_run`，全局暂停下「正在收尾」的也算）。Runtime 自己的步骤（启动、恢复、空闲时的收尾）不发请求，
+按钮灰着并写明原因。按一下就发，不问第二遍；暂停、免打扰、围栏都不挡它。「停下这次运行」在后台线程用一条新的「人」
+连接发一次 `StopInstanceRun`，`wait_ms` 5 秒；Runtime 让这次运行停在下一个检查点，再用这次运行自己的租约复位设备，
+然后回答。结果写在这一行下面，带时刻；屏上不出码、不出请求号，被停运行的请求号只写进技术日志。回答说还没停下
+（`settled: false`）或者结果未确认时，等同一个 owner epoch 里、这次回答之后的一次状态读取显示这次运行已经不在了，
+再补发一次停止，读复位的结果；最多补发这一次，没有定时重发，被拒或没发出去也不重发。补发读到的已停下、已结束，
+写的是控制台得知的时刻（「已停下（hh:mm:ss 得知）」），不是 Runtime 停下它的时刻，那要早一些；第一次请求在等待里
+就有结果的，照旧只写时刻。Runtime 重启了、这个实例不在列表里了、
+读取线程没了，就写结果不明，不补发；运行一直不结束就一直等，不另设上限。v0.12.53 之前的 Runtime 答 `not_implemented`
+（不入账），之后这一轮 Runtime 里两种按钮都灰着。别的控制台或工具已经请停时，这里看不出来；再按只多三条账本记录
+（`ui.action`、`command.received`，再加 `command.validated` 或 `command.rejected`），结果照样能读到。
+
+「关闭这个任务」先关掉这个任务，再停下这一次，都在同一条新的「人」连接上：先读这个实例的 `PackScheduleView`；这次运行的
+包在视图里，就写本实例范围这个包的一条从现在起、没有结束的「不安排」（和「日常任务」里开关「关」写的同一行，不带版本，
+所以别的包刚被改过也不会顶成冲突；`fact_observation_not_newer` 马上重发一次），回执 Completed 之后才发上面那次停止；
+关闭行没写上（被拒、没发出去、结果未确认）就不停，结果行写「没能关闭：…。这一次也没有停」或「关闭有没有写上，这里不知道…」。
+包不在视图里（这个实例的日常任务不跑它：读数维护，或者派发之后目录换了代）不写关闭行，只停，停下了结果行写「这个任务包不在这个实例的
+日常任务里，这里只停下了这一次」，其他情况（未确认、还在停、被拒、Runtime 重启等）就写「这个任务包不在这个实例的日常任务里，
+这里没有关闭什么」，后面接停的结果：这种行清单上看不见、撤不掉。视图读失败，什么都不做（「没能关闭：…」）；读视图时连接在回答
+之前断了（客户端报 `runtime_operation_unsupported`）也只算读失败（「没能关闭：读这个实例的任务开关时，连接在回答之前断了…。这一次
+也没有停」），不当成不支持。视图或关闭行答 `not_implemented`（0.12.55 之前）也什么都不做，之后这一轮 Runtime 里「关闭这个任务」
+灰着（「这一版 Runtime 还不支持在这里关闭任务」），「日常任务」也不读开关（和视图自己说不支持一样，60 秒以后「日常任务」重新出现时
+再探一次，读到了开关这个按钮就回来）。程序出错（线程崩溃）时结果行写有没有关闭、这一次有没有停都不知道，以卡片和「日常任务」
+为准，不自动重发。关上以后结果行开头是「已关闭这个
+任务（hh:mm:ss），之后不再安排」，后面接停止的结果，停下了还写「要恢复，到「日常任务」里打开它」：这就是撤销，
+清单里这一行显示「本实例设置：已关闭（自 hh:mm 起）」。补发的那次只停，不再写关闭行。关闭在途时这个实例的开关都灰着；
+开关的写在途时这个按钮和「停下这次运行」都灰着（「正在改这个实例的任务开关，稍等」）。账本里关闭是一条 `fact.published`，停止三条，补发再三条。
+既有日常任务、又兼读数的包，关闭行关掉的是它的日常任务，读数维护（`_fact_refresh`）照样会派。排队中、准备中的调度运行
+在状态读数里没有，按不到；要它们不跑，用「暂停这个实例的调度」。停下不算失败：不重试、不退避、不暂停任务、不起恢复梯子。
+直接运行的结果行和以前一样，不写关闭行。账本窗口里，停下的调度运行
+记的 `task.failed`（`contained_task_cancelled`）、`policy.execution_recorded`（结果 `stopped`）和调度驱动那条
+`runtime.failed`，备注栏写「已停下」，不按失败的红色显示，类型名和级别字照 Runtime 记的；运行恢复分组行由账本推出，
+可能照旧把它们算成「第 N 条失败，未见恢复」。「日常任务」页签里这一轮已经结束的派发写「这一轮已结束」，跑完和被停下的
+分不出来。
+
+- **有条件恢复（账本窗口）**：技术行下面按最近一次状态读取列出全局暂停和各实例的暂停（理由、修订、
+  起始时间），全局与实例各按各的范围。别的工具或监控台自己加的暂停（全局的、设备已交还的实例暂停，以及按状态答的模式（Runtime v0.12.75 起）
+  还在收尾的人按的实例暂停，监控台自己的和别的一方的都算；监控台自己加的那一行写「被这个监控台暂停」，不写「被其他工具暂停」）带「恢复自动调度…」：第一下只
+  亮出声明「只恢复这一份暂停」和「确认并恢复」；确认后在后台线程用一条新的「人」连接（actor `user`）
+  发一次带条件的 `ResumeScheduling`，条件是这份状态里的 owner epoch 与该范围的修订号——暂停已有变动或 Runtime 已换进程，Runtime 就拒绝，什么也不恢复；只恢复按钮所在的
+  那一份。无论恢复了、被拒（按码写出，码表没收录的写「未收录的码」）还是结果未确认（回执超时、断线、
+  `runtime_scheduling_resume_unconfirmed`），都不重发，换一条新连接重读状态再画。结果行跟着写这次重读
+  的结果：重读失败，或窗口读不了（离线读取、已不在读取），就用红字带码写「暂停情况未知」，状态没读到时
+  暂停行的位置也只剩一行红字说明；只有真读到了才写「以上方的暂停行为准」。三类暂停不给按钮、
+  只写说明：理由列在 `resume_elsewhere_reasons` 里的（「此暂停要由设下它的一方解除」）；部署暂停
+  （理由以 `deploy-` 开头），请用安装器恢复（监控台不接
+  `release-hold`）；Lab 救急模块挂的暂停（Runtime 0.12.48 起），理由恰好是 `lab-<操作>-<毫秒时间戳>`，
+  操作是 `config`、`deploy`、`down`、`instance`（加实例，Runtime 0.12.52 起）、`place`、`restore`、
+  `rollback` 之一，由那次操作结束时自己解除；
+  只有停机 `down` 挂的会一直留着，要从 Lab 解除（「此暂停是 Lab 救急操作挂的，操作结束会自己解除；停机
+  （理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除」），顶栏和
+  实例卡片也一样。这一行设置用不了的时候，除了部署暂停、Lab 救急暂停和监控台自己加的两种（「全部暂停」的
+  全局暂停 `console_pause_all`、「暂停这个实例的调度」的实例暂停 `console_pause_account`），所有暂停都按第一类处理。
+  有两种等人看过再解除的暂停既不是部署暂停，也不是 Lab 救急暂停，所以和别的工具加的暂停一样带「恢复自动调度…」，
+  除非 `resume_elsewhere_reasons` 列了它们的理由，或者像上面说的这一行用不了，那时它们按第一类处理：一是 `instance.added`，Lab 救急模块添加实例
+  （`instance add`，Runtime INST-5）后给刚加进来的实例挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
+  没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
+  挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
+  暂停，0.12.52 起才有，钉住的 0.12.81 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
+  `instance.added`（#453 S2）。钉住的 Runtime 还会在这种条目那次启动时已经被别的理由的暂停按着、而 Runtime 运行中那个暂停
+  解除时（包括人在这个窗口里恢复）改挂 `instance.added`，所以它不一定是这个实例的第一次暂停。实例的 `instance.added` 暂停那一行写「新加实例的暂停」，
+  不写「被其他工具暂停」，理由、修订和起始时间照写；给不给恢复、由谁解除和上面说的一样。
+  Lab 录制按住的暂停（Runtime 0.12.64 起）另成一类：实例暂停，理由恰好是 `lab-record-<毫秒时间戳>`，前缀后面只有数字
+  （Lab 的 `record start` 只暂停它录的那一个实例；别的范围上同样理由的暂停、别的 `lab-` 理由照旧）。这一行写「被 Lab 的录制按住」、
+  Lab 正在这个实例上录制、录制结束时会自己放开，并按理由里的毫秒数写出多久以前开始按住（比如「3 天前开始按住」），刚开始的和忘了
+  结束的一眼分得出；实例卡片和「日常任务」页签里也这样说。录制结束（`record stop`、`record archive`）时，Lab 只恢复显示这个理由的那一个
+  暂停；暂停没有期限，忘了结束的录制、或结束时没能放开暂停的录制（Lab 这时留着这份按住），会让这个实例一直不在调度里，所以这里仍然给
+  恢复，按钮是「仍要恢复调度…」。第一下在这一行后面写明后果：恢复以后调度会回到这个实例上，录制要是还没结束，它接下来每按一下都会
+  在回答里带警告 `instance_not_held`，录下的画面可能混进调度任务的画面；这份暂停已有变动时（比如录制刚好结束，放开了它）Runtime
+  会拒绝这次恢复。同时亮出声明「只恢复这一份暂停；录制从此不再按住这个实例」和「确认，仍要恢复调度」。确认后和别的暂停
+  一样发一次带条件的 `ResumeScheduling`。这样恢复以后，录制结束时找不到自己的暂停，回答 `already_gone`，不算失败。
+  `resume_elsewhere_reasons` 列了这个理由，或者这一行用不了的时候，它按第一类处理，只写说明、不给按钮。
+  别的还在排空或交还设备的实例暂停，那一行说它现在在做什么，再照实例卡片的说法接上它最近一次检查读到什么挡着（见上），给不给按钮按状态答的
+  模式，也就是 Runtime 判断收不收恢复的那个模式：人按的暂停（`stand`：监控台自己的、`actingctl pause` 的、MCP 的、Lab `pause` 行的）
+  在任何阶段都给，因为它要等人来解除，可能一直停在收尾中（关闭设备会话没能确认时，会一直停在交还设备，直到人来恢复）；工具的按住
+  （`quiet_or_lift`，Lab 录制按住的就是）要等设备交还以后才给，之前 Runtime 会拒绝。模式只决定 Runtime 现在收不收恢复。由谁解除照旧看理由，
+  所以只能由设下它的一方解除的、部署暂停、Lab 救急暂停在哪个阶段都不给按钮；模式也说不出暂停是谁的，因为它不跨重启：启动时恢复出来的暂停
+  一律答 `stand`，录制按住的也是，靠理由照旧认得出，它的说法和警告都照留。v0.12.75 以前的 Runtime 状态不答模式，那时还在收尾的只有监控台
+  自己加的实例暂停给按钮，和以前一样。下面说的账本里暂停一生的记录都不改变这些：它们说的是发生过什么，不是现在怎样。监控台自己加的实例暂停是人按的，
+  Runtime 在任何阶段都接受恢复（v0.12.73 起）；还在排空或交还设备时恢复，不重新连接，除非实例被隔离、或者交还已经开始关设备会话，那时会重新连接。
+  iOS 手机的恢复（Runtime v0.12.74 起）从不重新连接：只解除暂停、不连接任何东西，被隔离的隔离照留。结果行照 Runtime 回答里带的因说这两种：
+  「暂停还没收尾完，所以没有重新连接设备」（`scheduling_resume_without_reconnect`），「它是 iOS 手机，这一版 Runtime 还不能操控它，
+  所以没有连接设备」（`scheduling_resume_without_backend`），都不标红。恢复自检写的是 `dispatch_paused_instance` 时，
+  结果行说这个实例是 Runtime 停着时加进来的、又被首次启动暂停按住了；写的是 `player_hold_active` 时，说设备正被人占用、所以没有重新连接；
+  都带码和码的简短说明，码的类别不是提示时才标红。写的是 `instance_not_running` 时，说模拟器现在没开、所以这次没有连接设备，
+  这不算失败，从不标红。每一行都照原样显示暂停的理由，不管操作方写的是什么。
+- **暂停的一生（账本窗口）**：Runtime v0.12.74 起（#480 PG-2d），实例暂停一生里回答和阶段说不出的每个时刻，各记一条
+  `runtime.lifecycle_observed`，阶段 `device_state_observed`，记在实例名下、带暂停自己那个请求的链接（没有请求设下的 iOS 手机暂停用它自己新铸的链接），
+  所以把那个请求编号（详情里的「请求编号」）填进编号框，就能把一份暂停的几条记录筛到一起；级别是码的类别。窗口和读别的行一样，在线、离线都读公开投影，
+  里面有码和 `pause_stage`、`in_the_way` 两个值，没有 `pause_reason`。六个码配了控制台自己的话，行上事件名后面接一句短的，详情里加「结果」「阶段」
+  「挡着的事」「原因码」几行：`scheduling_pause_standing`「暂停还在收尾」，写出当时在哪个阶段、挡着什么（关闭设备会话没能确认那一条不提卡片的按钮，
+  因为记录不说这是谁的暂停），收尾检查出错时写出下一层的原因码；
+  `scheduling_pause_settled`「暂停已收尾」：任务都停了、设备已交还，暂停仍然有效；`scheduling_resume_without_reconnect`：暂停还没收尾完就被恢复了，
+  没有重新连接设备，这条记在暂停请求名下，不在恢复请求名下；`scheduling_pause_kept_at_shutdown`，写出阶段：Runtime 在收尾完之前关闭，暂停保留到下次启动；
+  `scheduling_pause_lifted_not_quiet` 是警告级，所以也在「错误」页签里：某个工具的暂停没等到这个实例空闲就撤了，它没有把实例暂停住，写出挡着的事
+  和结束它的那次失败的原因码；公开投影里没有理由，所以不写是哪个工具；`scheduling_resume_without_backend`：iOS 手机的暂停已解除，这一版还不能操控它，没有连接。
+  别的 `device_state_observed` 记录（模拟器看护的、空闲检查的）照旧显示。v0.12.75 起，空闲检查的唤醒记录（`instance_idle_action`，`operation` 为
+  `queue_idle_wake`）多了为什么醒的 `idle_wake_cause`（`task_due`、`action_changed`、`owed_at_start`、`planned_time_reached` 之一），公开投影在线、离线都留着它，
+  控制台把它当载荷里的普通值原样显示，没有配自己的话；`task_due` 旁边的 `task_id` 是名字类的值，投影里没有。这些记录说的是发生过什么，实例卡片和暂停行都不读它们：
+  暂停现在在做什么看状态的阶段，v0.12.75 起状态还说它的模式和最近一次检查读到什么挡着。「已收尾」那条要等阶段到了 `released` 之后才写；v0.12.75 起，它和调用方
+  时限过后的「关闭时保留暂停」一样，只在暂停还在时、在每次解除都要拿的那道门里写，所以不会排在解除或恢复自己的记录后面；先被恢复的、在调用方时限内就静下来的、
+  启动时还原的暂停，都根本不写「已收尾」这一条。
+- **实例不可用时的自动体检和实例的事实（账本窗口）**：Runtime v0.12.76 起，四种 `runtime.failed` 记录（多半记在实例名下）配了控制台自己的话：
+  行上事件名（仍是「运行时失败」）后面接一句短的，详情里加「结果」一行写这条记录的结果；记录带了 `failure_code` 时（最后一条从不带），
+  再加「原因码」一行写它指的码和码的简短说明。前三条说的是设备体检让它对调度不可用、Runtime 随后自己再去体检的实例：
+  `instance_unavailable_probe_failed`「自动体检没通过」，一次这样的体检没通过，记录写了原因就带上；`instance_unavailable_probe_passed`
+  「自动体检通过，实例恢复可用」，是信息级，记录写了它之前不可用的原因就带上；`instance_unavailable_awaiting_person`「不可用太久，等人处理」，
+  不可用的时间已到设置的提醒时限、自动体检还在继续，记录写了它不可用的原因就带上；这条的原因码是 `panic_caught` 时写「自动体检出错停了，等人处理」：
+  自动体检自己出了错，这个实例这次不可用期间不再自动体检，直到 Runtime 重启；人来体检或恢复它，通过了就恢复可用。第四条 `fact_store_capacity_share_reached`
+  「实例的事实快满了」：这个实例自己的事实已到上限的八成；上限放不下新键时，带新键的事实会被拒收，只更新已有键的照常收下。公开投影里这几条只留码、`operation` 和
+  `failure_code`，所以行上说不出是第几次体检、已经不可用多久、下次几点再体检。三条警告级的也在「错误」页签里。状态成员 `unavailable`
+  （修订 14）控制台解得了，但还不显示，留给后面一片（#489）。
+- **进不了入口的实例（账本窗口）**：Runtime v0.12.77 起，又有三种记在实例名下的 `runtime.failed` 记录（都是警告级）照同样的做法配了控制台的话。
+  它们来自进不了任务入口的运行，游戏停在没有哪个包认得的画面：实例被挡住，它的候选都在等，Runtime 自己去恢复它。
+  `instance_entry_blocked_awaiting_person`「任务老进不了入口，等人处理」：这个实例上的任务一直进不了入口、中间没有任务跑进去，已到设置的提醒时限；
+  请把游戏切回认得的画面，再在这个实例上跑一个任务，或者暂停再恢复它。`instance_entry_blocked_recovery_failed`「进不了入口，自动恢复没成功」，
+  详情按记录的 `entry_recovery_end` 说恢复怎么结束的：走完了也没恢复（`exhausted`），过一阵自己再试，间隔越来越长；游戏弹出了更新提示
+  （`update_dialog`），任务重新跑进去之前不再自动恢复，要先更新游戏；做恢复的程序自己出了错（`worker_panicked`），这一次不再自动恢复。
+  `instance_entry_task_set_aside_reported`「一个任务老进不了入口，这个时段先放下」：别的任务能进去，这一个却一再进不了入口、到了失败门槛，
+  所以它的活动时段结束前不再安排它；修好它的任务包再放上去，就会马上重新安排。记录带了进不了入口的那次失败，就作为原因码带上。公开投影只留
+  `operation`、`failure_code` 和 `entry_recovery_end`，其余都丢掉，所以行上说不出是哪个任务、挡了多久、下次几点再试。
+
+## 实例配置
+
+监控台不再有实例配置窗口。Runtime 0.12.52 起，模拟器实例用 Lab 救急模块的 `instance add` 添加（Runtime
+`contracts/install-cli.md`「Instances, the first slice」）：一次调用写好条目、提交配置，并把加进来的实例暂停
+（`instance.added`），等人恢复；actingd 配置（`actingd_config`）里 `instances` 的其他改动照旧按 Runtime 的安装说明
+手工编辑，再重启 Runtime。工作台上的「添加实例」按钮继续置灰，监控台自己的按钮以后的版本再做，下面的说明这样写，
+再下面列出这个配置文件的路径（可选中复制）。实例发现会随以后版本里监控台自己的实例页回来。
+
+## 安装向导 acsetup
+
+`acsetup.exe`（`crates/acui-wizard`）是 0.12 的安装向导：把 ActingCommand 的 Runtime、工具和监控台装进
+**一个新文件夹**（Runtime 所说的单位置根），并把 MuMu 模拟器里、或用 USB 连着的安卓手机上登录好的游戏接上（手机能连接、
+能看画面；在手机上跑任务要等后续版本）。双击打开是一个窗口，与监控台
+同一套界面和图标。打开时跟随 Windows 自己的界面语言（中文系统用中文，其他用英文），右上角随时可以在中文和
+English 之间切换；带子命令时是命令行（见下文）。它不联网、不下载
+任何东西，也不改动电脑上已有的 ActingCommand。
+
+**安装集**。向导只从「安装集」装：一个文件夹，里面有 `install-set.json`（`actingcommand.install-set.v1`）
+和它列出的每个文件——Runtime zip、Tools zip、监控台 zip、每个游戏一个标准包 zip（以及挂在它旁边的许可、
+声明文件）、文字识别（视觉）用的文件——每个都写明大小和 SHA-256。向导先找自己旁边的 `install-set.json`，
+找不到就请人选文件夹。它逐个核对大小与 SHA-256，再按三个程序 zip 自带的 `BUILD-MANIFEST.json` 逐文件核对
+（提交号要与安装集写的一致）；按 Runtime `contracts/component-interfaces.md` 核监控台和 Runtime 两份清单里的
+`interfaces`：`runtime-client`、`actingd-config` 两边要有交集，`ledger`、`runtime-outcomes` 要 Runtime 的最高
+修订落在监控台的区间里（这个监控台声明 `runtime-client` [12, 14]，所以 Runtime 最多只声明到 11 的安装集，即 v0.12.72 及更早，
+会被拒绝，v0.12.73 到 v0.12.77 都能通过）；每个标准包核它的 `bundle.json`、`applications.json`、`schedule.json` 与
+`interfaces.json`（`package` 修订要落在这一版 Runtime 声明的区间里）。视觉文件必须带上 ONNX Runtime 的两个文件，
+而且要和 Runtime 钉住的一模一样（`ort/onnxruntime.dll`，17,328,152 字节，SHA-256 `e7eedec6…bff40`；
+`ort/onnxruntime_providers_shared.dll`，22,040 字节，`265c8daf…ec3b6`）。用显卡（DirectML）时 Runtime 会拒绝别的版本；
+用 CPU 时 Runtime 不核这两个文件，可安装集照样只收钉住的这一套；
+还要带它的 `ort/licenses/onnxruntime/LICENSE` 和 `ThirdPartyNotices.txt`。视觉文件里可以带 DirectML（`ort/DirectML.dll`），
+只认 Runtime 钉住的那一个（DirectML 1.15.4：18,527,776 字节，SHA-256
+`9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`，见 Runtime
+`crates/vision-ffi/src/runtime_pin.rs`）；带了它，就必须同时带上它的许可文件，即 Runtime 工具登记表
+（`scripts/windows-tools/windows-tool-sources.v1.json` 的 `directml-1.15.4`）要放在它旁边的三个：
+`ort/licenses/directml/LICENSE.txt`、`LICENSE-CODE.txt` 和 `ThirdPartyNotices.txt`。配置仍写 CPU 提供方
+（`vision.execution_provider` 为 `cpu`）：CPU 运行只加载 `onnxruntime_providers_shared.dll` 和 `onnxruntime.dll`，
+旁边有没有 `DirectML.dll` 都一样，`cpu` 时 `check-config` 和启动也都不看它（Runtime
+`contracts/vision-model-folders.md`「Loading」）；选用 DirectML 和显卡是下一步的事。文字识别模型的许可（例如
+PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至少要有一份，装到 `<根>\licenses\vision\<path>`，
+规则与下面标准包旁边的文件相同。哪一项不对就停下，什么也不写：文件坏了、
+和这一版不配套、读不懂，各有一句人话，技术细节写在下面一行小字里。安装集由提供安装包的人拼好交给你。
+
+标准包旁边的文件写在这个游戏的 `files` 里，装到 `<根>\licenses\<游戏>\<path>`；`path` 只能是普通的相对路径，
+同一个游戏里不能重复。`required_files` 列出这个包必须带着的那几个 `path`（它从别处带来的东西的许可和署名，
+比如一个 AGPL-3.0 项目的），安装集里缺了任何一个就拒：
+
+```json
+"bundles": [
+  {
+    "game": "arknights", "file": "bundles/arknights-resources.zip", "size": 123, "sha256": "…",
+    "files": [
+      {"path": "pack-files/NOTICE.md", "file": "bundles/arknights/NOTICE.md", "size": 1, "sha256": "…"},
+      {"path": "LICENSES/MaaAssistantArknights/LICENSE", "file": "bundles/arknights/LICENSE", "size": 1, "sha256": "…"}
+    ],
+    "required_files": ["pack-files/NOTICE.md", "LICENSES/MaaAssistantArknights/LICENSE"]
+  }
+]
+```
+
+视觉文件和模型的许可：
+
+```json
+"vision": {
+  "provider": "cpu",
+  "files": [
+    {"path": "ort/onnxruntime.dll", "file": "vision/onnxruntime.dll", "size": 17328152, "sha256": "…"},
+    {"path": "ort/onnxruntime_providers_shared.dll", "file": "vision/onnxruntime_providers_shared.dll", "size": 22040, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/LICENSE", "file": "vision/onnxruntime/LICENSE", "size": 1094, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/ThirdPartyNotices.txt", "file": "vision/onnxruntime/ThirdPartyNotices.txt", "size": 331175, "sha256": "…"},
+    {"path": "ort/DirectML.dll", "file": "vision/DirectML.dll", "size": 18527776, "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"},
+    {"path": "ort/licenses/directml/LICENSE.txt", "file": "vision/directml/LICENSE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/LICENSE-CODE.txt", "file": "vision/directml/LICENSE-CODE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/ThirdPartyNotices.txt", "file": "vision/directml/ThirdPartyNotices.txt", "size": 1, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/det.onnx", "file": "vision/det.onnx", "size": 62032837, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/rec.onnx", "file": "vision/rec.onnx", "size": 76554979, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/keys.txt", "file": "vision/keys.txt", "size": 74947, "sha256": "…"}
+  ],
+  "licenses": [
+    {"path": "PaddleOCR/LICENSE", "file": "vision/PaddleOCR/LICENSE", "size": 1, "sha256": "…"}
+  ]
+}
+```
+
+**十二页**。第 1 到 10 页只收集选择、做只读的检查，不写任何东西，只有勾了安卓真机时第 7 页为找手机往安装位置里
+铺的设备桥例外，页面上会写明；在这些页上按「取消」或关窗都会先问一句，退出不留任何东西，除了那套设备桥，这时的
+问话会写明它在哪（正在铺的时候不让关窗）。
+
+1. **欢迎**：将要安装什么，开始前要准备什么（Windows 10 或 11 的 64 位版、大约要多少磁盘空间）。游戏用包里写的
+   名字：核对之前，向导只从每个标准包 zip 里读那个很小的
+   `applications.json` 取名字，读不出时写文件夹名。
+2. **用途**：这一套给什么用。**MuMu 模拟器**默认勾上，和没有这一页时一样，并写明要先准备什么（装好 MuMu，版本
+   不低于 Runtime 要求的，游戏已在里面装好并登录好）。**安卓真机**也能勾，并写明现在能做什么：能连接、能看画面；
+   跑任务要等后续版本（它的策略行写 `available` false：Runtime 照常准备、自检这部手机，但从不派任务给它；画面靠监控台的
+   「刷新」，那是只读的截一帧）。**iOS 真机**（还不支持）灰着、不能勾；读屏软件念名字时连原因一起念。Runtime v0.12.74 已经认识
+   iOS 实例（`device.system: "ios"`），v0.12.75 能经 `<安装根>\tools\acib.exe` 取它的只读帧（#479 F-3a），但不按、不跑、不调度，
+   发版也不带 `acib`（这种条目 `check-config` 会出提示 `device_acib_missing`），而且这段取帧还从没对着手机跑过，所以这个框还是灰的。一项都不勾也可以：这时
+   页面上写明向导只装核心部分、不建实例，以及以后怎么加实例。没勾 MuMu 时不进第 6 页，也不去找 MuMu；没勾安卓真机
+   时不进第 7 页；两样都没勾时第 8 页也不进（「游戏」页的下一步直接到「选项」，「选项」页的上一步回到「游戏」，步骤栏里
+   不进的页都显示成跳过）。把 MuMu 从勾上改成不勾，之前选好的模拟器和实例都清掉，和在第 6 页跳过一样；再勾回来，
+   第 6 页会重新找一次；把安卓真机从勾上改成不勾，选好的手机、手机实例和第 7 页找到的都清掉，再勾回来，第 7 页会重新
+   列一次（它铺下的设备桥留在原处，安装时接着用）。用途只是窗口里的选择，计划文件里没有这一项。
+3. **安装文件**：核对安装集，带进度条，进度条下面一行用人话写核到哪了（核了几个文件、刚核完哪个程序或游戏）；
+   仓库名和提交号只写进安装记录。核完列出版本和游戏。
+4. **安装位置**：默认是系统盘以外第一个本地固定盘的 `X:\ActingCommand`，没有这样的盘就用
+   `%USERPROFILE%\ActingCommand`；默认的已经存在且不空时，依次试 `-2`、`-3`……。可以直接输入，也可以按
+   「浏览…」选（选文件夹的窗口属于向导窗口，开着时向导不接受操作）；输入停下后逐条检查并打 ✓ / ✗：文件夹不存在或是空的（或者里面只有第 7 页铺进去的 `tools`）、最后一级不叫 `A` 或 `B`、路径里没有
+   `'` 和 `%`、不在另一套 ActingCommand 里面、不是 ActingCommand 每个用户的文件夹 `%APPDATA%\ActingCommand`
+   （全局的监控台设置 `acui.toml` 在那里）和 `%LOCALAPPDATA%\ActingCommand`（监控台和 Runtime 的日志在那里，
+   各套看门狗都读），也不在它们里面、不包着它们、磁盘剩余空间够。有一条 ✗ 就不能往下。窗口里的大小写 GB、MB
+   （按 1024 算，与资源管理器一致）；安装记录和命令行写 GiB、MiB。
+5. **游戏**：勾选要装的游戏，安装集里有的都列出来，默认全勾。
+6. **模拟器**（第 2 页勾了 MuMu 才有）：只读地找 MuMu（找法与 Runtime 相同：正在运行的 MuMu、注册表里的卸载项、Program Files 里的
+   MuMu 文件夹），再运行 `MuMuManager.exe info -v all` 列出里面的模拟器（无窗口、10 秒为限），不打开也不关闭
+   任何模拟器。所有模拟器默认都不勾，由人自己勾要交出去的那几台；一台都没勾就按「下一步」会先问一句（勾了安卓真机时
+   不问，直接到第 7 页，实例可以由手机来）。
+   这一页说明向导从这里起说的「实例」：每台勾选的模拟器在 ActingCommand 里叫一个实例；实例指一台模拟器或一部手机，
+   上面是登录好的游戏。
+   已被这台电脑上另一套 ActingCommand 用着的模拟器灰字标出，勾上要先确认一次。另一套从两处找：正在运行的
+   `actingcommand-actingd.exe`，和登记了的看门狗计划任务（停着的那套也能找到）；那一套的配置按模拟器序号、
+   名字、`serial` 或 adb 端口绑了这台，都算用着。
+   找不到 MuMu 时可以跳过（勾了安卓真机时接着到第 7 页）：先装一套没有模拟器实例的，以后再加。
+7. **手机**（第 2 页勾了安卓真机才有）：找手机用的是安装位置自己的设备桥，即这个根里的 adb 和 Lab，正是以后 Runtime
+   要用的那一套。所以一进这一页，先把 Tools 铺进 `<根>\tools`（每个文件都按清单的大小和 SHA-256 读回核对，和第 2 步
+   的铺法一样），页面上写明这件事，以及这是安装之前唯一写下的东西：之后第 4 页接受只有这个 `tools` 的文件夹，安装时
+   逐个文件核对后当成自己的接着用。然后用 `actinglab --json help devices` 和 `help devices bind` 问 Lab：`devices`
+   收不收 `root` 和 `key_salt_env`，`devices bind` 收不收 `config`、`device_key`、`root`、`key_salt_env` 和
+   `bound_via`（不看版本号）；缺一个就写「这份安装集里的 Runtime 还不能在安装前绑定手机」，「下一步」按不了。再用
+   `actinglab --json devices --root <根> --key-salt-env ACSETUP_DEVICE_KEY_SALT` 列出设备：密钥盐每运行一次向导只生成
+   一次，向导只把它放在 Lab 环境里的这个变量里，不进命令行，也不进任何日志（Lab 跑的 adb 会继承这份环境，这个 adb
+   顺带启动的 adb 服务也会，而且向导结束后它还在跑）。每一行写设备型号（读不出写「未知型号」）、连接方式
+   和状态；不显示序列号（答复里也没有）。只有用 USB 连着、状态是 `device`、带设备键的那一行能勾；其余的照实列出，并
+   写明怎么办：在手机上允许 USB 调试（`unauthorized`）；电脑缺这台手机的 USB 驱动（要去手机厂商那里装，我们不带），
+   或者没连好（`no`、`offline`）；模拟器或无线连接，不算手机（`tcp`）。「刷新」重新列一次；一部都没找到时页面上写明，
+   并写以后怎么加；一部都不勾也可以往下走。铺设备桥失败时写明原因、往哪里写了什么，「下一步」按不了，什么都不删；按
+   「刷新」或回到这一页会重新铺（文件夹里还留着上次铺下的东西时，和别的不是新的、也不是空的文件夹一样被拒），问 Lab
+   或列手机失败的也一样重来。
+8. **实例**（勾了模拟器或手机才有）：每台勾选的模拟器，名字单独占一行，下面一行是实例的名字（默认「游戏名-序号」）、
+   游戏、区服；游戏框占满这一行剩下的宽度，游戏的中英两个名字能完整显示。「高级设置」里是触控方式和截图方式（默认都是
+   `nemu_ipc`）以及「ActingCommand 启动时自动打开这台模拟器」（默认关）。每部勾选的手机也一样有一个手机实例，默认名字
+   是「游戏名-phoneN」，「高级设置」里是手机用的方式（默认 `adb_shell_input` 和 `adb`，截图也可以选 `scrcpy`），
+   没有要打开的模拟器；页面上写明哪些是模拟器实例、哪些是手机实例。名字不能重复，不能有空格，不能以 `-` 开头（Lab
+   的命令行按名字绑手机，会把这样的词当成选项），也不能太长：同一个游戏有两个以上实例时，Runtime 排程会把任务编号写成
+   `<编号>@<名字>`，整串不超过 128 字节，所以名字的上限按这个游戏 `schedule.json` 里最长的编号算出来，手机实例的名字
+   还不能超过 248 字节。
+9. **选项**：桌面快捷方式与开始菜单快捷方式（默认开）；开机后自动运行（即 Runtime 的看门狗计划任务，
+   **默认关**；这台电脑上已有另一套在自动运行时请别开）；装完马上启动（默认开）；第一次启动时先让所有实例
+   暂停（默认开：在监控台看过每个实例都正常后，按「全部开始执勤」才开始操作游戏）。
+   只有向导启动的 Runtime 才挂得上暂停，所以暂停跟着启动走：没勾「装完马上启动」时，暂停这一项变灰、不勾，
+   页面上写明这时实例会在第一次启动时直接开始执勤（计划文件里有实例、要暂停却不启动的，直接拒）。看门狗不用
+   限制：它从不拉起一个从没启动过的根，没勾「装完马上启动」时，这一套会一直停着，直到你自己启动它。
+10. **确认**：把安装位置、版本、游戏、用途（「MuMu 模拟器」「安卓真机」或两样都有，一项都没勾时写「只装核心部分，
+    不建实例」）、勾了安卓真机时的手机（几部、它们的实例名，或者没有选、以后再加）、实例、选项、会建的文件夹和会写的
+    文件列一遍（选的游戏或文字识别模型带许可文件时多一个 `licenses`；有实例又勾了启动和暂停时多一个
+    `install-wizard.config.json`；有手机时多一个 `state\private\device-bindings.json`，这是唯一存着手机序列号的
+    文件）；有实例、第一次启动不暂停时，多一行「注意」，写明 ActingCommand 一启动实例就开始执勤。第 4 页说到文件夹时
+    也这样写。按「开始安装」后不能再回到前面几页。
+11. **安装**：逐步显示，每步完成、跳过或失败，进行中的一步下面有一行细节和进度条。写入之前先把安装文件、
+    模拟器和安装位置再核一遍。任何一步失败就停下，已经写下的东西原样留着，向导不删除任何东西。安装中关窗会被
+    拦住。
+12. **完成**：写明装在哪里、安装记录在哪里、建了哪些快捷方式。「打开监控台」（从新装的根启动 `ui\acui.exe`，
+    与向导分开运行，不带向导自己继承来的任何 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量）和
+    「打开安装文件夹」都由人自己按，向导不自动打开任何东西。建了实例才说到实例（所有实例都先暂停着、在监控台里
+    看一看每个实例）；有手机实例时写明它们已经绑定，能连接、能看画面，跑任务要等后续版本。这一页还写明以后怎么加实例（监控台现在还不能直接
+    添加）：再运行一次向导装到另一个文件夹（那是另一套，分开运行），或者等以后的新版。第 7 页铺进别的文件夹（不是
+    装好的这一个）的设备桥留在那里，这一页写明在哪。失败时这一页写明在哪一步、为什么，可以复制错误
+    信息、打开安装记录（里面写着安装位置等文件夹的路径，用户文件夹写成 `%USERPROFILE%`），并按向导真的做过的
+    几样逐项写怎么收拾。向导启动过、可能开着却没有已确认的暂停的 Runtime（没要暂停、还没挂上暂停，或者接上实例的
+    那次启动、最后一次读状态没能确认暂停），在显示失败之前先由向导正式关闭，清单上写它已经停下；还可能开着的，写它
+    是挂着首次暂停，还是暂停没有确认、可能已经在操作游戏，以及怎么停（打开 `<根>\ui\acui.exe` 按「请求关闭」，或运行
+    `"<根>\runtime\actingctl.exe" request-shutdown --state-root "<根>\state"`）；第 14 步在停下 Runtime 之后失败的，
+    写明它已经停下、不用再停，首次暂停留到下次启动。装过看门狗的，写 `"<根>\runtime\actingctl.exe" watchdog
+    uninstall --root "<根>"`；建过快捷方式的，列出路径；第 7 页铺下的 Tools（里面的 adb 可能还在后台开着，在重启电脑
+    之前占着某个文件）；绑定手机在 `<根>\state\private` 里留下的东西：每次绑定之后，不管它答了什么，在那里找到的每个
+    文件（绑定文件，或者写失败时留下的 `.tmp`），可能存着手机的序列号，不要发给别人；还有超时后留着在跑的绑定，它之后
+    可能还会往那里写；这些都随整个文件夹一起删。最后才是删除整个文件夹。
+
+**装成什么样**：
+
+```text
+<根>\
+  runtime\              Runtime
+  tools\                工具（勾了安卓真机时，第 7 页已经铺好）
+  ui\                   监控台（acui.exe）
+  packages\<游戏>\      标准包，按 Runtime 读的已安装布局铺开
+  licenses\<游戏>\      标准包旁边的许可、声明文件（安装集里有才建）
+  licenses\vision\      文字识别模型的许可（安装集里有才建）
+  vision\               文字识别：ort\（含 ONNX Runtime 的许可文件；安装集带 DirectML 时还有 DirectML.dll，
+                        它的许可在 ort\licenses\directml\）与 models\<模型>\
+  state\                运行记录（状态根）
+  state\private\device-bindings.json  手机绑定（有手机实例才有）：每部手机的序列号对着它的实例，只存在这个
+                        文件里
+  actingd.config.json   Runtime 的配置
+  install-wizard.config.json  带实例的完整配置（有实例又先暂停时才写，换上之后与上一行相同）
+  actingd.config.json.prev-<毫秒>  不带实例的那份配置，第 14 步换上完整配置时由 `config replace` 留下
+  acui.toml             这一套监控台的设置（只写语言）
+  install-wizard.log    安装记录
+```
+
+第 11 页的十六步依次是：建文件夹和安装记录；铺开 Runtime、Tools 和监控台，每个文件都对 `BUILD-MANIFEST.json`
+核一遍（第 7 页铺好的 Tools 再逐个文件核一遍，不再重铺）；放视觉文件并逐个核哈希，模型的许可放进 `licenses\vision\`；铺标准包（铺之前对 zip 再算一次 SHA-256，和安装集对上才铺），并把它旁边的
+许可文件逐个核哈希放进 `licenses\<游戏>\`；用 `actinglab standard-pack check` 检查每个游戏；写配置（先写成
+`actingd.config.json.part`）；绑定手机：每个手机实例运行一次 `actinglab --json devices bind <名字> --device-key <键>
+--key-salt-env ACSETUP_DEVICE_KEY_SALT --config <根>\actingd.config.json.part --bound-via ui --root <根>`，用的是第 7
+页在同一次运行的密钥盐下列出它时的设备键（盐同样只经 Lab 环境里的这个变量给出），在候选配置检查之前对着它绑：Lab
+按键重新找到这部手机，把它的序列号对着这个名字写进 `state\private\device-bindings.json`，状态根里别的什么都不写；只有
+`device_binding_changed` 算过，被拒就停下安装，写出代码和怎么办（比如 `device_key_unknown`：手机现在不在 adb 的列表里，拔掉了或还没重新连好；
+`device_row_unbindable`：它的状态，没允许调试或缺驱动），没有手机实例时这一步跳过；`actingd check-config` 通过才改名
+就位（没有绑定的手机实例它会拒，`device_binding_missing`）；`actinglab adopt` 把这个根交给 Runtime
+自己的安装器；写监控台设置；建快捷方式（名字带根文件夹名，如「ActingCommand 监控台（AC2）」，同名的已经在
+就加序号，从不动别人的）；启动（`actinglab up`：退出码要是 0，答复里 `post_check.checks` 列出的启动后检查中，
+`fail_class` 为 true 的不能有 `fail`，有就报错并逐项写出失败项和它的数值——启动遇到检查不过只报告、不拒绝；不属于
+这一类的不通过项，比如账本打开慢，只记下来）；首次暂停（`actinglab pause --reason first-start`）；接上实例：先停下
+Runtime，换上带实例的配置，再启动（见下文）；`actinglab status` 确认在线；装看门狗（`actinglab watchdog
+install`）。没勾的步骤显示「跳过」。所有子程序都不开窗口；窗口里只显示每条答复的一句话，安装记录里除了这句，还
+另起一行存下答复的完整输出。读手机列表（第 7 页）和绑定（第 7 步）的答复时，如果 Lab 早于 Runtime 0.12.73，它的输出管道可能被
+它启动的 adb 服务占着：Lab 要运行 adb，没有同一版本的 adb 服务在跑时 adb 会先启动一个，这个服务继承了 Lab 的输出，只要它还在跑就一直
+不放（0.12.73 起 Lab 一启动就把自己的标准句柄设成不可继承，#398 DB-3，它的答复和别的一样按时结束）。所以 Lab 退出、答复以完整的结果行结尾时，向导照常用这份答复（退出码和结果码照常判），并在安装记录里写一句输出
+管道仍被占着；答复不完整就照旧失败，并写明原因。
+
+为什么实例最后才接上：全局暂停不打断已经在跑的任务，带着实例启动的 Runtime 在启动和暂停之间就可能派出任务。
+所以有实例又勾了「先暂停」时，第 8 步核过带实例的完整配置后，先把它留成 `install-wizard.config.json`，放进去的是
+同一份配置去掉实例（盐、状态根、MuMu 位置都不变，也过一遍 `check-config`）；Runtime 带着它启动、挂上暂停之后，
+第 14 步分三段接上实例，每段都核答复：
+
+1. 正式关闭：`"<根>\runtime\actingctl.exe" request-shutdown --state-root "<根>\state" --wait 60`，要答
+   `runtime_shutdown_completed`（不用 `actinglab down`：它的关闭会挂一个自己的保持，监控台解不开）；
+2. Runtime 停着时运行 `actinglab config replace install-wizard.config.json --sha <它的 SHA-256>`：只用这一版的
+   `check-config` 校验并换文件，被换下的留成 `actingd.config.json.prev-<毫秒>`；答复里要有 `runtime_running` 为
+   false，换完再读一遍就位的文件，哈希要等于完整配置的；
+3. 再运行 `actinglab up`，按第 12 步的同样标准核。
+
+全局暂停是持久的运行事实，每次不是安装器保持的启动都会在准备任何实例之前把它恢复（Runtime
+`contracts/scheduling-pause.md`「Persistence, no expiry」），所以第 3 段启动起来就是暂停着的。向导不在 Runtime
+运行时跑 `config replace`：在一台实验机上（0.12.58）这样做两次都被判失败，`install_command_refused`、
+`post_check_failed`（`count` 1），可实际上文件已经换了、Runtime 也重启了，暂停也恢复了。没过的是 `no_seeding`
+这一行：新装的根头几次启动时状态还标着 `seed`，`up` 自己的这一行带 `earlier_runtime` 为 false 判通过，
+`config replace` 里重启后的检查不放行；零实例、配置内容不变也一样被拒。另带的提醒 `guard_failed`、`foreign_pauses`
+（就是首次暂停）两种做法都有，不判失败。按上面的顺序，同一台机器上每段都过：关闭完成；`config replace` 答
+`install_command_done`、`runtime_running` 为 false；`up` 退出码 0，十项启动后检查全过；`status` 里首次暂停还在、
+实例都接上了，第一个任务挂在全局暂停上等着。随后读一次状态：要在线、全局暂停仍是首次暂停、没有实例在跑任务
+（有就报错，绝不报成功），配置里的实例都在；这一步过了才算暂停已确认，没过就先关掉 Runtime。
+
+手机实例也这样接上。第 7 步对着带实例的完整配置候选绑手机，所以第 8 步检查它时每个手机实例都已绑定；不带实例的那份
+配置里没有手机，而配置里没有手机时，检查和启动都不读绑定文件（Runtime `apps/actingd/src/config.rs`：配置了手机才读
+私有的绑定文件），所以第一次启动根本看不到绑定，把只有 `private\device-bindings.json` 的状态根当成新的（Runtime
+`contracts/device-binding.md`「Against a candidate configuration」），它的 `bindings` 检查也没有要找的实例。第 3 段的
+启动不管手机插没插着，都把每个手机实例登记上，所以它的 `bindings` 检查和最后一次读状态都能找到；那时手机拔了的，在监控台
+里显示成不可用，插回去才恢复。首次暂停挡手机实例和挡模拟器实例一样：暂停管的是每个实例的派发，不分是什么设备。
+
+看门狗放在最后，在读状态之后：它从不拉起从没启动过的根、正式关掉的根和安装器正在动的根，只拉起上次启动以出错收场的
+（Runtime `contracts/runtime-watchdog.md`「Decision」第 3、5、6、7a 行）。装在最后，向导刚报失败的启动不会
+被它在背后再拉起来；前面哪一步失败，也不会留下计划任务。
+
+**不碰已有的 ActingCommand**：向导只写它新建的那个文件夹，外加你勾选的快捷方式和看门狗计划任务；它从不写
+全局的 `%APPDATA%\ActingCommand\acui.toml`，不碰别的安装和别的状态根，也不启动或关闭任何模拟器。它运行的每个
+子程序（以及「打开监控台」）都去掉了向导自己继承来的所有 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量，Lab 的程序
+只带它自己设的发起者，所以从带着别的状态根变量的环境里启动，也只动这一套。它读别的 ActingCommand 只为一件事：
+从正在运行的 `actingcommand-actingd.exe` 和登记了的看门狗计划任务（在隐藏的 Windows PowerShell 里只读地
+跑 `Get-ScheduledTask`，与 Runtime 读计划任务的办法相同）找出各套的根，只读那一套根下的
+`actingd.config.json`，看它绑了哪些模拟器，好在第 6 页标出来。
+
+**卸载**：没有卸载程序。先在这一套的监控台按「请求关闭」停下 Runtime；开了「开机后自动运行」的，再运行
+`"<根>\runtime\actingctl.exe" watchdog uninstall --root "<根>"` 把看门狗关掉（监控台的设置页只能查看它）；
+然后删除整个 `<根>` 文件夹和向导建的快捷方式（完成页列出了它们）即可。
+
+**命令行**：带子命令时不开窗口，输出写到调用它的控制台（Release 版是窗口程序，命令行模式会挂到父控制台上）。
+
+```text
+acsetup check-set --set <安装集文件夹>
+    只核对安装集，打印摘要
+acsetup discover [--mumu-root <MuMu 文件夹>]
+    列出 MuMu 里的模拟器，以及别的 ActingCommand 正用着的那些（只读）
+acsetup install --set <安装集文件夹> --root <新的安装文件夹> --plan <plan.json>
+    照计划安装，步骤与窗口第 11 页相同
+```
+
+退出码：0 完成，1 失败（stderr 写明哪一步、为什么，以及和失败页一样逐项写怎么收拾），2 用法。计划文件是窗口在第 1 到 10 页收集的那些选择（用途和手机除外）
+（`actingcommand.install-wizard-plan.v1`）：`language`（`zh` 或 `en`）、`games`（游戏文件夹名）、可选的
+`mumu_root`、`instances`（每台的 `index`、`alias`、`game`、`server`，可选 `touch_backend`、`capture_backend`、
+`start_emulator`、`confirmed_in_use`）和 `options`（`desktop_shortcut`、`start_menu_shortcut`、`watchdog`、
+`start_after_install`、`pause_first_start`，缺省与窗口相同）。规则与窗口相同，不合规则就在写任何东西之前停下。
+计划文件里不能写手机：带 `handsets` 的、或者有实例的 `device` 是手机的，都拒，因为手机要用窗口这一次运行自己的密钥盐
+算出的键来指认，这个盐不在任何文件里；手机只能从窗口装，窗口在同一次运行里列出手机、再绑定。所以命令行安装跳过第 7 步。
+
+**拼安装集**：`tools/make_install_set.py`（Python 3，只用标准库）拼出向导读的安装集，格式就是向导认的那一种，
+两边一起改。它只复制文件、算哈希、把监控台的文件夹打成 zip，不运行它复制的任何东西，也不删除、不覆盖任何东西：
+**输出文件夹必须是新的，事先不能存在**。复制时逐项核对：Runtime 和 Tools 的 zip 对它们的 `SHA256SUMS`，监控台的
+文件夹对它的 `BUILD-MANIFEST.json`，每个标准包 zip 对旁边的 `SHA256SUMS`（旁边没有这个文件、或者文件里没列这个 zip，脚本就报错停下）和它 `bundle.json` 里的游戏，
+每个识别文件对脚本里钉住的大小和 SHA-256。
+
+```text
+python tools/make_install_set.py --out <新文件夹> --label <安装集的名字>
+    --runtime-dir <放着 Runtime 发布件两个 zip 和 SHA256SUMS 的文件夹> --runtime-tag <标签>
+    --console-dir <本仓发布件 zip 解开后的文件夹> --console-tag <标签>
+    --wizard <同一个文件夹里的 acsetup.exe>
+    --bundle <游戏>=<标准包 zip>                    每个游戏一个
+    --bundle-file <游戏>=<licenses\<游戏>\ 下的路径>=<文件>   同时写进 required_files
+    --vision <vision\ 下的路径>=<文件>              钉住的七个；DirectML 的四个要么都带，要么都不带
+    --vision-license <licenses\vision\ 下的路径>=<文件>      给了模型就必须给
+```
+
+**依赖**：`crates/acui-wizard` 用 Slint（窗口，与监控台同一份工作区依赖）、`serde`、`serde_json`、`sha2`（校验）、
+`zip`（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（配置的
+`secret_fingerprint_salt` 与每台的 `instance_id`），以及仅限 Windows 的 `windows` 0.62（`Win32_Foundation`、
+`Win32_System_Com`、`Win32_System_RestartManager`、`Win32_UI_Shell`：经 `SHGetKnownFolderPath` 找开始菜单与
+桌面文件夹，经 `IShellLinkW` + `IPersistFile` 写快捷方式，经 `IFileOpenDialog` 选文件夹；与 Slint 已锁定的同一
+版本，锁文件不新增 crate）。exe 图标同监控台，由 `winresource` 编进资源段。
+
+监控台的 Win7 Aero 外框在锁文件里只多本仓的 `acui-glass` 一个 crate。它打开 Slint 的 `raw-window-handle-06` 特性
+以取得原生窗口，`acui-glass` 用 `raw-window-handle` 0.6（所有平台，接口按它接收窗口），以及仅限 Windows 的
+`windows` 0.62（在上面的特性之外加 `Foundation`、`Graphics_Effects`、`System`、`UI_Composition`、
+`UI_Composition_Desktop`、`Win32_Graphics_Dwm`、`Win32_Graphics_Gdi`、`Win32_System_WinRT`、
+`Win32_System_WinRT_Composition`、`Win32_System_WinRT_Graphics_Direct2D`、`Win32_UI_HiDpi`、
+`Win32_UI_WindowsAndMessaging`：子类化与命中测试、DWM 属性、玻璃窗、Composition 及其 Direct2D 互操作）、
+`windows-core`（`#[implement]` 宏按名引用）和 `windows-numerics`（Composition 的向量），版本都是 Slint 已锁定的。
+
+## 智能体用的 MCP
+
+监控台自己没有 MCP 服务。MCP 服务由 Runtime 的命令行提供：`actingctl mcp-serve`（Runtime v0.11.0 起）是 stdio 上的
+本地 MCP 服务，只有工具，供 Claude Code、Codex 等智能体使用。`actingctl mcp-config` 打印给某个客户端的注册内容，
+不写任何客户端文件：
+
+```powershell
+& '<安装根>\runtime\actingctl.exe' mcp-config --client claude --tier observer
+& '<安装根>\runtime\actingctl.exe' mcp-config --client codex --tier observer,operator
+```
+
+- **Claude Code**：打印一条命令
+  `claude mcp add --scope user actingcommand -- "<安装根>\runtime\actingctl.exe" mcp-serve --tier …`，运行一次即可。
+- **Codex**：打印一段 `[mcp_servers.actingcommand]`（命令、参数、两个超时，以及注释掉的 `enabled_tools` 示例），
+  放进 Codex 的 `config.toml`。
+- **档位**（0.11 系列）：`observer`（只读；总是开着，也是默认）、`operator`（设备与调度）、`author`（Lab 录制）。
+  未开档位的工具答 `tier_not_enabled`。`actingctl mcp-serve --list-tools [--format json|markdown]` 列出全部 22 个工具。
+- 批准、actingd 配置的改动与 Runtime 的重启归人。
+
+每个工具接收什么、回答什么：`actingctl mcp-serve --list-tools --format markdown`。给智能体的操作手册是
+[伞仓](https://github.com/HS7097/ActingCommand/tree/main/skills/actingcommand)里的 `skills/actingcommand/`。
+
+## 四层四 crate
+
+同一个 Cargo workspace，依赖方向 app → model → rows ← source；另有 source → model，只为实时画面和账本窗口共用的那一个帧分组函数：
+
+- `acui-rows`：唯一为视图模型命名契约类型的地方；再导出契约类型，外加显示用函数、显示名
+  字典，与两个由 `acui-source` 填、`acui-model` 读的平铺结构。
+- `acui-source`：读面，唯一碰状态根的地方。离线读面是 `EvidenceSource::open` / `query` /
+  `open_report` / `read_material`；`Session::open(root, mode)` 按 `--source`
+  在它和在线的 `OnlineSource` 之间选一张，账本拒开离线读面时交回带账本原错误的
+  `Session::Unopened`（`LedgerOpenFailure`：code、operation、detail、IO 类别），`auto` 连不上时交回带原因的
+  `Session::OfflineOffered`，一张读面都不打开；`material_reader()` 交给后台线程读素材。
+  它还每个会话读一次实例的任务事实（`instance_facts()`）：离线在钉住的位置重放，在线连同实例状态
+  一起读，钉点就取自这两次读；事实快照的作用域与取值类型直接从契约 crate 取。
+- `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
+  出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。操作意图的点画到设备帧上用的是 Runtime 的显示适配器
+  （`actingcommand-display-adapter`，它只依赖契约库）；`acui-model` 自己不直接依赖契约库，契约类型照旧经 `acui-rows` 取。
+- `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
+  `strings.rs`，设置文件的读写在 `settings.rs`。各窗口共用的东西——语言、字号、主题、启动器的视图，以及
+  工作台和各账本窗口的登记处——在 `ui.rs`，只在事件循环上用；各窗口按主题换的外观在 `skin.rs` 里设。
+  账本窗口只按自己的状态绘制（`ledger/state.rs`、`ledger/paint.rs`），不直接问读面；读面由窗口自己的
+  读线程打开并独占（`ledger/worker.rs`），读取
+  先把结果放进状态，读帧与解码在窗口自己的工作线程上（`ledger/frame.rs`），有条件恢复在
+  `ledger/resume.rs`。
+
+`slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
+请求、恢复请求——由 Runtime 自己记账；状态读取不留账本记录），控制入口只有启动器的两个按钮（启动 /
+请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与账本窗口里经确认的有条件恢复（见「启动器」一节末尾），没有审批入口；监控台的 crate 只有两个带测试：`acui-model` 四条单元测试（测的是 `stop_marked` 里那个纯函数判定 `stopped`，UI-3e3），`acui-source` 六条单元测试（测的是 `pack::switch`，即按下任务开关时写什么的纯函数判定，UI-3f2），别的不带测试。CI 构建工作区之后，只跑带纯函数单元测试的 crate，现在是 `cargo test --locked -p acui-model -p acui-source -p acui-wizard`（`acui-wizard` 是安装向导，测的是安装集、安装位置、布局映射、配置生成、名字规则、监控台与 Runtime 的接口配套、子程序不继承哪些环境变量、Runtime 答复的读法、别的安装绑了哪些模拟器、失败后要收拾什么这些只算数的纯函数）；界面和整个工作区不跑测试。启动器在
+`crates/acui-app/src/launcher.rs`，路径从哪来在 `install.rs`，技术日志与启动失败窗口在 `report.rs`，
+探测、请求关闭、记下启动按钮、在线开台时的状态与事实读取、有条件恢复这几个客户端操作在 `acui-source`
+（`probe_runtime` / `request_shutdown` / `record_start` / `instance_facts` / `resume_paused`）。
+
+每个后台工作线程——开台时的探测、整段启动（探测、拉起、就绪等待与记账）、请求关闭、unlock-owner、
+有条件恢复、读帧，以及安装向导的每个工作线程（核对安装集、检查安装位置、找模拟器、选文件夹的对话框、安装）——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
+回报的位置写明，附系统错误，并把工作线程本该复位的状态（进行中的探测、启动、关闭、解锁或恢复，保存中，帧请求）复位：
+绝不在事件循环里 panic。启动的线程起不来时什么也没拉起，结果行直说。子进程终止了但
+回收失败时照实写，不说成终止失败。
+
+另有三个 crate 在这四层之外。`acui-glass` 是 Win7 Aero 外框的原生一半，`acui-app` 经它不认识 Slint 的安全接口
+使用；监控台窗口的 Win32、WinRT 代码及其 unsafe 都在这里，Windows 以外只回答做不到。`acui-wizard`（二进制
+`acsetup`）是 0.12 安装向导：一个后端库，加上共用它的窗口和命令行，不依赖上面任何一层，依赖见「安装向导 acsetup」
+一节。`acui-installation` 为监控台提供共享的安装选择消费者。
+
+## 图标
+
+应用图标是黑色单人「指挥官」标记，素材在 `crates/acui-app/assets/`：
+`acui-256.png`（256×256 透明 PNG）与 `acui.ico`（16..256 多尺寸）。
+
+- **窗口与任务栏图标**：`app.slint` 的 `Window.icon: @image-url("../assets/acui-256.png")`。
+- **可执行文件图标**：`build.rs` 里 `#[cfg(windows)]` 调 `winresource` 把 `acui.ico` 编进
+  exe 资源段；这条依赖挂在 `[target.'cfg(windows)'.build-dependencies]` 下，Linux 上不编译。
+- **acsetup**：同一套素材，不复制：`crates/acui-wizard/build.rs` 与 `ui/wizard.slint` 用相对路径指向
+  `crates/acui-app/assets/` 里的这两个文件；`ui/wizard.slint` 也用相对路径引监控台的界面套件 `crates/acui-app/ui/kit/`。
+
+## 读面挡住的事
+
+这些不是绕过去了，是照实显示、在此记录。文件都指钉住的 rev 上的 Runtime 源码：
+
+- **事件条数与修复条数：离线都已解决，在线只有事件条数**。`GlobalLedgerMetadata`
+  （`crates/ledger/src/global/evidence.rs`）现在给出 `event_count()` 与 `repair_count()`，取自已认证的
+  元数据，不校验任何素材，监控台不再需要为此去调 `GlobalLedger::open_evidence`（同一文件）。实例卡两项都显示，另外标出**本视图已载入**的
+  条数，两者不混用。读取不完整时事件条数只计已校验的前缀，实例卡写明这一点。SQLite 介质没有
+  修复日志（`None`），实例卡照写，不显示成 0；修复日志与事件快照不共用同一个序号边界。在线时
+  事件条数就是钉住的位置，依据 `contracts/runtime-state-observation.md`（序号从 1 起无缺口）；页
+  （`LedgerReadScope`）与 `runtime-info.json` 都不给修复条数，这一行写 Runtime 不提供。
+- **整份读素材：两张读面都已解决**。`read_material_complete`
+  （`crates/ledger-forensics/src/material.rs`）整份读一个对象：重开两次账本元数据、一个
+  reader、整份哈希一次，受 `max_material_bytes` 与期限约束。离线读面以 8 MiB 帧上限和 30 秒
+  期限调用它（Runtime 里还没有它的调用方定下期限；契约的 4 秒 `RUNTIME_MATERIAL_READ_BUDGET_MS`
+  约束的是单段读，不是整份对象）。在线由类型化客户端的 `RuntimeClient::read_material_complete`
+  （`crates/runtime-client/src/client.rs`）在校验过的分段上给出同样形状的结果，监控台以同样
+  的上限与期限调用它；Runtime 仍对每一段校验整份素材（一张 3.6 MB 的帧是 19 段 192 KiB）。
+- **实例事实：两张读面都已解决，位置不同**。在线经 `RuntimeClient::runtime_fact_snapshot()`
+  （`crates/runtime-client/src/client.rs`）读，它答的是 Runtime 最新位置上的状态，在钉点上或晚于钉点。离线由
+  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs`）按 Runtime 自己的重放规则，在
+  钉住的位置本身重放事实库；监控台从不自己折叠 `runtime.fact_*` 事件。租约只来自在线的状态读取，离线
+  没有。
+- **几何与帧在两个早期状态根上凑不到一起**。监控台最初核对用的两个早期实机状态根里，带 `capture.frame`
+  产物的事件只有 `artifact.created` / `artifact.verified`，payload 里没有几何；带几何的事件只有寥寥几条
+  `task.effect_intent`，payload 里是一个 tap 坐标，`links` 里**没有** `frame_id`。账本没有给出把这两者连起来的
+  关系，监控台就不连——真实帧照画，叠加为空。钉住的 rev 上，`task.effect_intent` 可以给出坐标所在的画面范围
+  （`frame_extent`，`crates/actingcommand-contract/src/event/payload.rs`），`task.geometry_observed` 可以给出其
+  画面的范围（`TaskGeometryFrame::extent`，同一文件）；事件给了，叠加画布就用它。那两个根上的 effect intent
+  都没给，尺寸仍是「未记录」。
+- **那两个根里都没有产物淘汰事实**，所以淘汰占位在它们上面不会出现；代码路径按契约写好。
+
+## 许可
+
+`GPL-3.0-only`。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint` 文件的 SPDX 头与之一致。界面由
+[Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime crate（contract / display-adapter / ledger /
+ledger-forensics / runtime-client / runtime-config）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
+
+本仓没有其他自动化项目的源码。整个项目族的上游许可矩阵见伞仓的
+[LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md)。
