@@ -1219,6 +1219,11 @@ pub struct Labels {
     /// back too.
     pub card_why_other_value_set: &'static str,
     pub card_why_rule_value_refused: &'static str,
+    /// Runtime 0.12.89 on: the package needs a value only a rule gives, and this task's rule
+    /// carries none, so it is held back. Runtime 0.12.13 on: the instance's idle setting closed
+    /// it, so this reading waits for its next wake.
+    pub card_why_rule_value_missing: &'static str,
+    pub card_why_idle_closed: &'static str,
     pub card_why_reason_missing: &'static str,
     pub card_why_unlisted: &'static str,
     /// The right column's second tab, the account's daily task list (UI-3f1), and what it says
@@ -2879,6 +2884,8 @@ pub const ZH: Labels = Labels {
     card_why_waking: "正在叫醒这个实例来跑它",
     card_why_other_value_set: "目标页上设的值不是这条规则带的，先不跑",
     card_why_rule_value_refused: "规则带的值，任务包已经不收了，先不跑",
+    card_why_rule_value_missing: "任务包要一个只能由规则给的值，这条规则没带，先不跑",
+    card_why_idle_closed: "实例按闲置设置关着，这项读数等它下次醒来再做",
     card_why_reason_missing: "原因没写明（程序的问题，已记入日志）",
     card_why_unlisted: "现在不安排",
     tasks_tab: "日常任务",
@@ -4275,6 +4282,8 @@ pub const EN: Labels = Labels {
     card_why_waking: "Waking the instance to run it",
     card_why_other_value_set: "The value set on the goal page is not the one this rule carries; held back",
     card_why_rule_value_refused: "The package no longer takes the value its rule carries; held back",
+    card_why_rule_value_missing: "The package needs a value only its rule gives, and the rule carries none; held back",
+    card_why_idle_closed: "The instance is closed by its idle setting; this reading waits for its next wake",
     card_why_reason_missing: "No reason was given (a program problem; written to the log)",
     card_why_unlisted: "Not scheduled right now",
     tasks_tab: "Daily Tasks",

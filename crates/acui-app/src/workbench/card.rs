@@ -191,6 +191,15 @@ pub enum ReasonClass {
     /// which a person is to mend.
     OtherValueSet,
     RuleValueRefused,
+    /// Runtime 0.12.89 on (#455 TK-1; runtime-host `codes.rs` 3700 at 1f86956d): the package
+    /// declares a variable only a rule gives, and this task's rule carries no value for it, so it
+    /// is held back until the resource side mends the rule or the package.
+    RuleValueMissing,
+    /// Runtime 0.12.13 on (IDLE-1P; runtime-host `codes.rs` 3445 at 1f86956d, the code's
+    /// description in `contracts/outcome-codes/runtime-host.json`): the instance's idle action
+    /// closed it, so its fact refresh reading waits for its next wake unless a task that needs
+    /// the reading is due.
+    IdleClosed,
     /// The Runtime gave a decision no reason: its fault, which the log hears of.
     ReasonMissing,
     /// No sentence of its own: a general one says it is not scheduled now, and the log
@@ -286,6 +295,8 @@ impl ReasonClass {
             "instance_asleep_wake_due" => Self::Waking,
             "goal_value_excludes_rule" => Self::OtherValueSet,
             "goal_value_rule_refused" => Self::RuleValueRefused,
+            "goal_value_rule_missing" => Self::RuleValueMissing,
+            "instance_idle_action" => Self::IdleClosed,
             "decision_reason_missing" => Self::ReasonMissing,
             other if other.starts_with("perf_") => Self::Paced,
             _ => Self::Unlisted,
@@ -324,6 +335,7 @@ impl ReasonClass {
             | Self::LinesUnspendable
             | Self::EntrySetAside
             | Self::RuleValueRefused
+            | Self::RuleValueMissing
             | Self::ReasonMissing => Band::Attention,
             _ => Band::Ok,
         }
