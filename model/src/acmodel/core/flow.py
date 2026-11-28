@@ -1766,12 +1766,14 @@ class _Certifier:
 
     def refused(self) -> str | None:
         """Item 9: the first condition that refuses the pass, or None when it is proven. A program that differs
-        elsewhere is `program`; an empty J is proven with no LP (item 1)."""
+        elsewhere is `program`. An empty J takes no LP (item 1): C1, C2 and C3 have nothing to decide, and C4 compares
+        the pass's P and A with the steady state's all the same, since a rule the pass moves may change what is
+        protected without reaching a coefficient of S3's program."""
         columns = self.compared.columns
         if columns is None:
             return PROGRAM
         if not columns:
-            return None
+            return self.c4(columns)
         for condition in (self.c1, self.c2, self.c3, self.c4):
             found = condition(columns)
             if found is not None:
@@ -1789,8 +1791,8 @@ class _Certifier:
     def above_zero(self, row: _Row, condition: str) -> str | None:
         """Whether the least of a column's dual slack on D* (its dual row's right side less its left side) is above 0:
         None when it is; `condition` when it is not (the greatest left side reaches the right side) or HiGHS finds the
-        greatest left side unbounded (reading 1: item 8 reads that status alone, and it cannot hold here, D* being dual
-        feasible, so the reading that refuses); `lp_unverified` when the LP is not certified or fails."""
+        greatest left side unbounded (item 2: "a least that HiGHS finds unbounded fails too, though D* allows none");
+        `lp_unverified` when the LP is not certified or fails."""
         found = self.greatest(row.coefficients)
         if isinstance(found, _Unverified):
             return LP_UNVERIFIED
@@ -1800,9 +1802,9 @@ class _Certifier:
 
     def c1(self, columns: tuple[Key, ...]) -> str | None:
         """Item 2, C1, for each column of J in order: its dual slack with the steady state's coefficients is above 0
-        on all of D*. C1 reads the steady state alone, so a column is decided once per assessment (`answers`), and a
-        pass whose J holds it reads that answer (reading 3: its LP is counted in the pass that solved it, and in no
-        other)."""
+        on all of D*. C1 reads the steady state alone, so a column is decided once per run of the assessment
+        (`answers`), by the first pass that comes to it, which counts its LP; a later pass whose J holds it reads that
+        answer and counts none (item 2). A pass refused at an earlier column of its J decides no later one (item 9)."""
         for column in columns:
             if column not in self.answers:
                 self.answers[column] = self.never_run(column)
@@ -1840,11 +1842,12 @@ class _Certifier:
         return self.pools[resource]
 
     def balance_only(self, activity: str, in_j: set[Key]) -> bool:
-        """Reading 2 (item 4: "nor for one whose columns lie in balance rows only"): every step's execution column of
-        the activity is in J, none has an upper bound or a term of the objective, and in the pass's program each lies in
-        balance rows only. Its value on D* is then minus the mean of those columns' dual slacks with the pass's
-        coefficients, which C2 has kept above 0 on all of D*: below 0 everywhere, so it never enters K. An activity
-        with a column outside J is not one: C2 does not bound that column's slack."""
+        """Item 4's way without an LP ("one whose columns are all in J and lie in balance rows only, in the pass's
+        program"): every step's execution column of the activity is in J, none has an upper bound or a term of the
+        objective, and in the pass's program each lies in balance rows only. Its value on D* is then minus the mean of
+        those columns' dual slacks with the pass's coefficients, which C2 has kept above 0 on all of D*: below 0
+        everywhere, so it never enters K. An activity with a column outside J is not one: C2 decides the columns of J
+        alone."""
         program = self.built.program
         mine = {("x", activity, step) for step in range(self.built.model.steps)}
         if not mine <= in_j or any(program.variables[key][1] is not None or program.objective.get(key) for key in mine):
@@ -1883,13 +1886,17 @@ class _Certifier:
         return None
 
     def c4(self, columns: tuple[Key, ...]) -> str | None:
-        """Item 5, C4: when A has no term it holds; otherwise the pass's P and A (term by term) are the steady state's,
-        no J activity is in P and the walk holds (`walk`). No LP: a pass whose walk fails is solved."""
+        """Item 5, C4: when A has no term, the steady state's and the pass's alike, it holds; otherwise the pass's P and
+        A (term by term) are the steady state's, no J activity is in P and the walk holds (`walk`). No LP: a pass whose
+        walk fails is solved. The pass's A is read too: a rule the pass moves may make an activity a protected
+        acquisition, or give one a term, where the steady state had none, and S1 would then run what C1 shows no
+        optimum of S3 runs, so the pass solved may be `objective_tier_conflict` where the steady state is not."""
         held, model = self.held, self.built.model
-        if not held.acquisition:
+        moved = acquisition(model)
+        if not held.acquisition and not moved:
             return None
         protected = tuple(record["activity"] for record in acquirers(model) if protects(record))
-        if protected != held.protected or acquisition(model) != held.acquisition:
+        if protected != held.protected or moved != held.acquisition:
             return C4
         if not set(self.compared.activities).isdisjoint(protected):
             return C4
@@ -3013,8 +3020,7 @@ class _Solver:
         self.held: Held | None = None
         # #430 METHOD-C C-2a-2a: the activities whose `most` or range this pass's vector could not verify, each with
         # those probes (`vector`), which `compute` hands on beside the vector's value and never in it; None until then.
-        # Not named `unverified`: that is the method that words an unverified probe's warning, which `joint` and the
-        # ties call (the first build's tests crashed where this attribute hid it).
+        # Not named `unverified`: that is the method that words an unverified probe's warning.
         self.left_unverified: dict[str, tuple[str, ...]] | None = None
 
     def lap(self, stage: str) -> None:

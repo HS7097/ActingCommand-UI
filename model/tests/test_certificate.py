@@ -5,12 +5,12 @@ counted in the pass's `lps.certificate`. `impact.certify` false solves every pas
 (contracts/formats.md, "`acmodel export prices`", "A pass", "The certificate" items 1 to 10, "Timing"; contracts/cli.md,
 "Configuration").
 
-Three readings of the contract that it leaves open are taken as the certificate's code takes them (`flow._Certifier`):
-an unbounded answer of C1's or C2's LP refuses (reading 1), C3 takes no LP for an activity only when every step's column
-of it is in J and lies in balance rows only (reading 2), and an LP of C1 is counted in the pass that solved it (reading
-3). The fixtures are hand-solvable neutral models, each docstring working out by hand what the certificate finds; those
-of test_economy.py, test_prices.py and test_method_c.py are reused where they say what is needed. CI runs these tests on
-Windows and on Ubuntu."""
+Three sentences of the contract that the docstrings below call readings 1 to 3 (items 2 and 4, since #430 C-2a-2,
+11-28): an unbounded answer of C1's or C2's LP refuses (reading 1), C3 takes no LP for an activity only when every
+step's column of it is in J and lies in balance rows only (reading 2), and an LP of C1 is counted in the pass that
+solved it (reading 3). The fixtures are hand-solvable neutral models, each docstring working out by hand what the
+certificate finds; those of test_economy.py, test_prices.py and test_method_c.py are reused where they say what is
+needed. CI runs these tests on Windows and on Ubuntu."""
 
 from __future__ import annotations
 
@@ -256,6 +256,27 @@ def pair_fixture(folder: Path, dominated: str, running: str) -> Path:
     return priced(model(folder, [DAY], entities, rules, {"fact.s": 0, "fact.v": 0}))
 
 
+def gained_fixture(folder: Path) -> Path:
+    """C4 where the pass alone has an acquisition (item 5, the review of 11-28). st comes at 10 a day; act.farm turns 1
+    st into 1 v, v the main goal worth 1, and nothing bounds it: a conversion, so P is empty and A has no term at the
+    steady state. act.j turns 2 st into `pt.j` v, at most once a day, pt.j 0 estimated from 0 to 1. By hand: act.farm
+    runs 10 times, V0 = 10, st and v are worth 1 and the limit's dual is 0 (act.j does not run): D* is that point.
+    act.j's dual slack is 2 - pt.j, 2 at the steady state and 1 at the pass: C1 and C2 hold, an LP each. Its value
+    pt.j - 2 is below 0 on D*, and a limit's row holds its column: C3 is an LP, greatest -1. At pt.j = 1 act.j brings in
+    v, a limit counts it and it takes st alone, which a regen brings: it is protected, and the pass's A is what it
+    brings in, where the steady state's has no term. Solved, S1 runs act.j once (A* = 1) and S2 then reaches 8 + 1 = 9,
+    below V0 = 10: `objective_tier_conflict`, which blocks the pass."""
+    rules = [
+        regen("regen.st", "res.st", "10", "1d"),
+        flow("flow.farm", "act.farm", consumes={"res.st": "1"}, produces={"res.v": "1"}),
+        provisional("pt.j", "act.j", "0", estimate("0", "1", "act.j")),
+        flow("flow.j", "act.j", consumes={"res.st": "2"}, produces={"res.v": "rule:pt.j"}),
+        limit("limit.j", "act.j", "1", "day"),
+    ]
+    entities = [resource("res.st", "fact.st"), resource("res.v", "fact.v"), activity("act.farm"), activity("act.j")]
+    return priced(model(folder, [DAY], entities, rules, {"fact.st": 0, "fact.v": 0}))
+
+
 # Helpers ----------------------------------------------------------------------------------------------------------
 
 
@@ -425,6 +446,27 @@ def test_c4_holds_without_a_term_of_a_and_refuses_each_walk_that_fails(tmp_path,
     if shape == "potion":
         _, rows = pass_vectors(demand_fixture(tmp_path / "demand"), True)
         assert decided(rows) == [({"pt.j": "low"}, "steady_state", None), ({"pt.j": "high"}, "solved", "c4")]
+
+
+@pytest.mark.parametrize("certify", [True, False])
+def test_a_pass_that_alone_has_a_protected_acquisition_is_not_proven(tmp_path, certify):
+    """gained_fixture: the steady state has no protected acquisition (P empty, A without a term); the pass at 1 makes
+    act.j one. C1, C2 and C3 hold for it and C4 refuses it by the pass's A, so it is solved, and solving it is
+    `objective_tier_conflict`: the pass's refusal (`impact_blocked`), with the certificate as without it. A certificate
+    that read the steady state's A alone would prove this pass, and an export would then succeed with `impact.certify`
+    true where it is refused with it false."""
+    folder = gained_fixture(tmp_path)
+    graph = graph_of(folder)
+    held = impact._Assessor(graph, solved(graph, STEADY)).held
+    assert (held.protected, held.acquisition) == ((), {})
+
+    with pytest.raises(Failure) as refused:
+        pass_vectors(folder, certify)
+
+    errors = refused.value.errors
+    assert [each["code"] for each in errors] == ["export_refused", "objective_tier_conflict"]
+    assert (errors[0]["detail"]["reason"], errors[0]["detail"]["value"]) == ("impact_blocked", "pt.j=high")
+    assert errors[1]["needed_by"] == ["rule:pt.j"]
 
 
 # Contract test 11: an LP the certificate cannot read refuses it ---------------------------------------------------
