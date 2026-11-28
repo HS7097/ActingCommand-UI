@@ -11,12 +11,12 @@ license = "GPL-3.0-only"
 publish = false
 
 # One exact Runtime source for every Runtime crate, the one the console's
-# offline read pins (UI-W0q, Runtime v0.12.95). Without `fixture-backends`:
+# offline read pins (UI-W0r, Runtime aa6765dd, ledger revision 11). Without `fixture-backends`:
 # the fake instances resolve as physical devices, as the observe and lease
 # paths require.
 [dependencies]
-actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-device = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-runtime-host = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-device = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-runtime-host = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
