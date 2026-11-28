@@ -28,7 +28,11 @@
 //! Or, while that account's Goals tab shows instead (Workflow #455, #463 V3), its `GoalView`, on
 //! the switches' clock: it records nothing, but is computed under the policy's locks and the
 //! fact write gate, so it is read as seldom. Not after the Runtime said it has no such read,
-//! which the slot says too, until the tab is shown anew or the owner epoch changes.
+//! which the slot says too, until the tab is shown anew or the owner epoch changes. Right after
+//! each `GoalView` that answered, in the same read and never on a clock of its own, the part
+//! `records` of the account's `GoalPageView` (Workflow #455 RR4b), page after page; not in an owner
+//! epoch whose Runtime said it has none (`acui_source::workbench::ReadLane::read_goals`). A records
+//! entry's picker reads the rest of that view only as a person opens it (`super::goals`).
 //!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its

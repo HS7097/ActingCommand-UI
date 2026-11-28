@@ -222,6 +222,51 @@ export struct GoalOffer {
     mark: string,
 }
 
+// One row of a list of the records entries' picker (Workflow #455 RR4b): a character, or a
+// position of a ladder ("no target" first); in grey beside it what marks it (a character's class,
+// whether it is held, whether it is recorded), and whether it is greyed (a character not held; a
+// position at or before the one now), which can still be chosen.
+export struct GoalPickRow {
+    title: string,
+    mark: string,
+    greyed: bool,
+}
+
+// One lane of the character chosen in the picker: its column (and sub), its position now or why
+// that is not known, that its positions are being read, its rows and the one chosen (0: no
+// target), and in grey what its column requires first, which holds nothing back.
+export struct GoalLaneChoice {
+    title: string,
+    now: string,
+    reading: string,
+    rows: [GoalPickRow],
+    chosen: int,
+    note: string,
+}
+
+// The picker of a records entry (Workflow #455 RR4b), shown under the line whose key is `at` (none
+// while empty): what it does, in bold; what its read is doing or came to, red when that failed;
+// whether its "save" and its lists can be pressed now; whether it lists the characters (a search
+// field, the switch of every character, the characters it finds, how many more or that none is
+// found) or the lanes of the one chosen (its class and held state, its lanes); why "save" cannot be
+// pressed, in amber, and whether it can.
+export struct GoalPickerData {
+    at: string,
+    title: string,
+    status: string,
+    status-failed: bool,
+    enabled: bool,
+    choosing: bool,
+    search-text: string,
+    all: bool,
+    keys: [GoalPickRow],
+    keys-more: string,
+    key-title: string,
+    lanes: [GoalLaneChoice],
+    problem: string,
+    save-ready: bool,
+}
+
 // One line of the account's Goals tab (Workflow #455, #463 V3), in words, at most three layers. A
 // group's title in bold; a note's words in grey, its help under them. An entry: its title, greyed
 // while no goal can be set on its pool or no pack offers it; the value now, in the accent once a
@@ -237,6 +282,8 @@ export struct GoalOffer {
 // a draft, and in amber what keeps the draft from being saved; the clear's words ("clear", "back
 // to the default"; none: no clear); what its last press came to, red when that failed and amber
 // when it asks to look again; and the question a press asks first, with "confirm" and "cancel".
+// Workflow #455 RR4b: a record's line, set in under its entry's (`nested`); a records entry's
+// "add a character" (`records-add`), and a record's "change" and "remove" (`record-actions`).
 export struct GoalRowData {
     kind: GoalRowKind,
     title: string,
@@ -271,6 +318,9 @@ export struct GoalRowData {
     said-failed: bool,
     said-warning: bool,
     confirm: string,
+    nested: bool,
+    records-add: bool,
+    record-actions: bool,
 }
 
 // Around the Goals tab's lines, in words: whether it says what can be changed here (only on a page
@@ -627,6 +677,17 @@ export global Strings {
     in property <string> goals-order-options-label;
     in property <string> goals-order-gone-mark;
     in property <string> goals-none-chosen;
+    // The records entries (Workflow #455 RR4b): an entry's "add a character", a record's "change"
+    // and "remove"; the picker's search field, the words of its switch of every character, the name
+    // of its list of characters for a screen reader, its "save" and "another character".
+    in property <string> goals-records-add;
+    in property <string> goals-records-change;
+    in property <string> goals-records-remove;
+    in property <string> goals-picker-search;
+    in property <string> goals-picker-all;
+    in property <string> goals-picker-keys-label;
+    in property <string> goals-picker-save;
+    in property <string> goals-picker-back;
     // Under the live view: the button that refreshes the picture of the account picked, and in
     // grey what a refresh costs.
     in property <string> refresh-frame;
@@ -2602,16 +2663,19 @@ component GoalChoiceBox {
 // is typed is the caller's as much as the person's, both ways, and the field takes what the caller
 // holds whenever that changes. It is never off: a search writes nothing. The Down key hands the
 // keyboard focus to the list of options under it (`to-options`); every other key is the field's.
+// What it says when empty, and to a screen reader, is the list's (Workflow #455 RR4b: the picker's
+// characters too).
 component GoalSearch {
     in property <string> text-shown;
+    in property <string> placeholder: Strings.goals-order-search;
     callback edited(string);
     callback to-options();
     HorizontalLayout {
         padding: 0;
         search-field := LineEdit {
             text: root.text-shown;
-            placeholder-text: Strings.goals-order-search;
-            accessible-label: Strings.goals-order-search;
+            placeholder-text: root.placeholder;
+            accessible-label: root.placeholder;
             font-size: Scale.body-font;
             min-width: 120px * Scale.factor;
             preferred-width: 220px * Scale.factor;
@@ -2969,6 +3033,306 @@ component GoalOrderEditor {
     }
 }
 
+// One list of the records entries' picker (Workflow #455 RR4b), built as an ordered variable's
+// options are: no popup and no virtualized list, one Tab stop, eight rows in sight. The row chosen
+// (`chosen`, -1: none) shows in the selection's colour, and the list opens scrolled to it; the
+// Up and Down keys move a mark, ringed while the list has the focus, and Return picks the row
+// marked, a click the row clicked; a greyed row shows in grey, and can still be picked. While off
+// (`enabled`) nothing is picked, and its words are grey.
+component GoalPickList inherits Rectangle {
+    in property <[GoalPickRow]> rows;
+    in property <int> chosen;
+    in property <bool> enabled;
+    // What the list is, for a screen reader.
+    in property <string> label;
+    callback picked(int);
+    // The marked row, kept within the rows.
+    property <int> mark;
+    property <int> mark-at: root.rows.length == 0 ? -1 : clamp(root.mark, 0, root.rows.length - 1);
+    property <int> shown-rows: min(8, root.rows.length);
+    property <length> list-padding: 4px;
+    // The row at `at` picked, while it can be.
+    function pick-at(at: int) {
+        if (root.enabled && at >= 0 && at < root.rows.length) {
+            root.picked(at);
+        }
+    }
+    // Scrolls the list just enough for the marked row to show.
+    function reveal() {
+        if (root.mark-at * Scale.row < -rows-scroller.viewport-y) {
+            rows-scroller.viewport-y = -(root.mark-at * Scale.row);
+        } else if ((root.mark-at + 1) * Scale.row + 2 * root.list-padding > rows-scroller.visible-height - rows-scroller.viewport-y) {
+            rows-scroller.viewport-y = rows-scroller.visible-height - (root.mark-at + 1) * Scale.row - 2 * root.list-padding;
+        }
+    }
+    height: root.rows.length == 0 ? 0px : root.shown-rows * Scale.row + 2 * root.list-padding;
+    vertical-stretch: 0;
+    background: Look.card-background;
+    border-radius: Look.radius;
+    border-width: root.rows.length == 0 ? 0px : 1px;
+    border-color: Look.card-border;
+    accessible-role: AccessibleRole.list;
+    accessible-label: root.label;
+    accessible-delegate-focus: root.mark-at;
+    accessible-item-count: root.rows.length;
+    // Opened scrolled so that the row chosen is in sight, at the foot of the rows shown.
+    init => {
+        root.mark = max(0, root.chosen);
+        rows-scroller.viewport-y = -(max(0, root.chosen - root.shown-rows + 1) * Scale.row);
+    }
+    rows-keys := FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: root.rows.length > 0;
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow) {
+                root.mark = max(0, root.mark-at - 1);
+                root.reveal();
+                return EventResult.accept;
+            }
+            if (event.text == Key.DownArrow) {
+                root.mark = max(0, min(root.rows.length - 1, root.mark-at + 1));
+                root.reveal();
+                return EventResult.accept;
+            }
+            if (event.text == Key.Return) {
+                root.pick-at(root.mark-at);
+                return EventResult.accept;
+            }
+            if (event.text == Key.Space) {
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        rows-scroller := ScrollView {
+            viewport-width: self.visible-width;
+            VerticalLayout {
+                alignment: LayoutAlignment.start;
+                padding: root.list-padding;
+                for row[at] in root.rows: Rectangle {
+                    height: Scale.row;
+                    background: at == root.chosen ? Look.selection : Colors.transparent;
+                    border-radius: max(0px, Look.radius - 2px);
+                    border-width: rows-keys.has-focus && at == root.mark-at ? 1px : 0px;
+                    border-color: Look.focus-ring;
+                    accessible-role: AccessibleRole.list-item;
+                    accessible-label: row.mark != "" ? row.title + " " + row.mark : row.title;
+                    accessible-item-selectable: true;
+                    accessible-item-selected: at == root.chosen;
+                    accessible-item-index: at;
+                    accessible-action-default => {
+                        root.pick-at(at);
+                    }
+                    HorizontalLayout {
+                        padding-left: 7px;
+                        padding-right: 7px;
+                        spacing: 6px;
+                        Text {
+                            text: row.title;
+                            font-size: Scale.body-font;
+                            // Greyed, or the list off: in grey.
+                            color: !root.enabled || row.greyed ? Look.text-caption : Look.text;
+                            vertical-alignment: TextVerticalAlignment.center;
+                            overflow: TextOverflow.elide;
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            accessible-role: AccessibleRole.none;
+                        }
+                        if row.mark != "": Text {
+                            text: row.mark;
+                            font-size: Scale.grey-font;
+                            color: Look.text-caption;
+                            vertical-alignment: TextVerticalAlignment.center;
+                            overflow: TextOverflow.elide;
+                            horizontal-stretch: 0;
+                            accessible-role: AccessibleRole.none;
+                        }
+                    }
+                    TouchArea {
+                        clicked => {
+                            root.mark = at;
+                            rows-keys.focus();
+                            root.pick-at(at);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if rows-keys.has-focus: FocusRing { }
+}
+
+// The picker of a records entry (Workflow #455 RR4b), under the line it was opened on, built of
+// the tab's own controls. In bold what it does; what its read is doing or came to, red when it
+// failed. Choosing a character: the search field over the characters' names in every language
+// and their ids, the switch of every character (only those held without it), the characters it
+// finds, each with its class, whether it is held and whether it is recorded (choosing one of those
+// changes its record), and how many more or that none is found. Of the character chosen: its class
+// and held state, then each lane: its column (and sub), its position now or why that is not known,
+// that its positions are being read, "no target" and its positions (those at or before the one now
+// greyed, which can still be chosen), and in grey what its column requires first, which blocks
+// nothing. In amber why "save" cannot be pressed; "save", "another character" and "cancel". Each
+// button's handler asks again what its button's state says, as the order editor's do.
+component GoalPicker inherits Rectangle {
+    in property <GoalPickerData> data;
+    callback searched(string);
+    callback all-toggled(bool);
+    callback key-picked(int);
+    callback lane-picked(int, int);
+    callback back();
+    callback saved();
+    callback cancelled();
+    vertical-stretch: 0;
+    background: Look.card-background;
+    border-radius: Look.radius;
+    border-width: 1px;
+    border-color: Look.card-border;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 4px;
+        Text {
+            text: root.data.title;
+            font-size: Scale.body-font;
+            font-weight: 700;
+            color: Look.text;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.data.status != "": Notice {
+            text: root.data.status;
+            failed: root.data.status-failed;
+        }
+        if root.data.choosing: GoalSearch {
+            text-shown: root.data.search-text;
+            placeholder: Strings.goals-picker-search;
+            edited(text) => {
+                root.searched(text);
+            }
+            to-options => { }
+        }
+        if root.data.choosing: HorizontalLayout {
+            vertical-stretch: 0;
+            SkinCheckBox {
+                text: Strings.goals-picker-all;
+                checked: root.data.all;
+                toggled => {
+                    root.all-toggled(self.checked);
+                    self.checked = root.data.all;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.data.choosing: GoalPickList {
+            rows: root.data.keys;
+            chosen: -1;
+            enabled: true;
+            label: Strings.goals-picker-keys-label;
+            picked(at) => {
+                root.key-picked(at);
+            }
+        }
+        if root.data.choosing && root.data.keys-more != "": Text {
+            text: root.data.keys-more;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if !root.data.choosing && root.data.key-title != "": Text {
+            text: root.data.key-title;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if !root.data.choosing: VerticalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            for lane[place] in root.data.lanes: VerticalLayout {
+                spacing: 2px;
+                vertical-stretch: 0;
+                Text {
+                    text: lane.title;
+                    font-size: Scale.body-font;
+                    color: Look.text;
+                    wrap: word-wrap;
+                    min-height: self.preferred-height;
+                    vertical-stretch: 0;
+                }
+                if lane.now != "": Text {
+                    text: lane.now;
+                    font-size: Scale.grey-font;
+                    color: Look.text-caption;
+                    wrap: word-wrap;
+                    min-height: self.preferred-height;
+                    vertical-stretch: 0;
+                }
+                if lane.reading != "": Text {
+                    text: lane.reading;
+                    font-size: Scale.grey-font;
+                    color: Look.text-caption;
+                    wrap: word-wrap;
+                    min-height: self.preferred-height;
+                    vertical-stretch: 0;
+                }
+                GoalPickList {
+                    rows: lane.rows;
+                    chosen: lane.chosen;
+                    enabled: true;
+                    label: lane.title;
+                    picked(at) => {
+                        root.lane-picked(place, at);
+                    }
+                }
+                if lane.note != "": Text {
+                    text: lane.note;
+                    font-size: Scale.grey-font;
+                    color: Look.text-caption;
+                    wrap: word-wrap;
+                    min-height: self.preferred-height;
+                    vertical-stretch: 0;
+                }
+            }
+        }
+        if root.data.problem != "": Text {
+            text: root.data.problem;
+            font-size: Scale.grey-font;
+            color: Severity.warning;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            if !root.data.choosing: SkinButton {
+                text: Strings.goals-picker-save;
+                enabled: root.data.save-ready;
+                clicked => {
+                    if (root.data.save-ready) {
+                        root.saved();
+                    }
+                }
+            }
+            if !root.data.choosing: SkinButton {
+                text: Strings.goals-picker-back;
+                clicked => {
+                    root.back();
+                }
+            }
+            SkinButton {
+                text: Strings.goals-cancel;
+                clicked => {
+                    root.cancelled();
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
 // One line of the Goals tab (Workflow #455, #463 V3), by its kind. A group's title, in bold. A
 // note's words in grey, its help under them. An entry: its title, greyed while no goal can be set
 // on its pool or no pack offers it; the value now, in the accent once a goal is met; G2's control
@@ -2986,8 +3350,13 @@ component GoalOrderEditor {
 // does not go round the window to the top bar's buttons that act on every instance; and Tab from
 // there goes on to the line's first control that takes the focus. It is the line's first child,
 // outside the layout: placed, it adds nothing to the line's size.
+//
+// Workflow #455 RR4b: a record's line is set in under its entry's; a records entry's "add a
+// character", a record's "change" and "remove", and the picker under the line it was opened on
+// (`picker`, whose `at` is the line's key), whose buttons park the focus here too.
 component GoalLineView {
     in property <GoalRowData> line;
+    in property <GoalPickerData> picker;
     callback amount-edited(string);
     callback set-pressed();
     callback picked(int);
@@ -3001,6 +3370,16 @@ component GoalLineView {
     callback order-saved();
     callback order-discarded();
     callback order-searched(string);
+    callback records-add();
+    callback record-change();
+    callback record-remove();
+    callback picker-searched(string);
+    callback picker-all(bool);
+    callback picker-key(int);
+    callback picker-lane(int, int);
+    callback picker-back();
+    callback picker-saved();
+    callback picker-cancelled();
     vertical-stretch: 0;
     line-park := FocusScope {
         x: 0px;
@@ -3018,6 +3397,7 @@ component GoalLineView {
     }
     VerticalLayout {
         spacing: 2px;
+        padding-left: root.line.nested ? 16px * Scale.factor : 0px;
         if root.line.kind == GoalRowKind.heading: Text {
             text: root.line.title;
             font-size: Scale.body-font;
@@ -3189,6 +3569,73 @@ component GoalLineView {
             }
             Rectangle { horizontal-stretch: 1; }
         }
+        // Workflow #455 RR4b: a records entry's and a record's own buttons.
+        if root.line.records-add: HorizontalLayout {
+            vertical-stretch: 0;
+            SkinButton {
+                text: Strings.goals-records-add;
+                enabled: root.line.enabled;
+                clicked => {
+                    line-park.focus();
+                    if (root.line.enabled) {
+                        root.records-add();
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.line.record-actions: HorizontalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            SkinButton {
+                text: Strings.goals-records-change;
+                enabled: root.line.enabled;
+                clicked => {
+                    line-park.focus();
+                    if (root.line.enabled) {
+                        root.record-change();
+                    }
+                }
+            }
+            SkinButton {
+                text: Strings.goals-records-remove;
+                enabled: root.line.enabled;
+                clicked => {
+                    line-park.focus();
+                    if (root.line.enabled) {
+                        root.record-remove();
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.picker.at != "" && root.picker.at == root.line.key: GoalPicker {
+            data: root.picker;
+            searched(text) => {
+                root.picker-searched(text);
+            }
+            all-toggled(on) => {
+                root.picker-all(on);
+            }
+            key-picked(at) => {
+                root.picker-key(at);
+            }
+            lane-picked(lane, at) => {
+                root.picker-lane(lane, at);
+            }
+            back => {
+                line-park.focus();
+                root.picker-back();
+            }
+            saved => {
+                line-park.focus();
+                root.picker-saved();
+            }
+            cancelled => {
+                line-park.focus();
+                root.picker-cancelled();
+            }
+        }
         if root.line.said != "": Notice {
             text: root.line.said;
             failed: root.line.said-failed;
@@ -3234,6 +3681,8 @@ component GoalLineView {
 component GoalList {
     in property <GoalListData> data;
     in property <[GoalRowData]> rows;
+    // Workflow #455 RR4b: the picker of a records entry, shown under the line it names.
+    in property <GoalPickerData> picker;
     callback amount-edited(string, string);
     callback set-pressed(string);
     callback picked(string, int);
@@ -3247,6 +3696,16 @@ component GoalList {
     callback order-saved(string);
     callback order-discarded(string);
     callback order-searched(string, string);
+    callback records-add(string);
+    callback record-change(string);
+    callback record-remove(string);
+    callback picker-searched(string);
+    callback picker-all(bool);
+    callback picker-key(int);
+    callback picker-lane(int, int);
+    callback picker-back();
+    callback picker-saved();
+    callback picker-cancelled();
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 6px;
@@ -3288,6 +3747,37 @@ component GoalList {
         }
         for item in root.rows: GoalLineView {
             line: item;
+            picker: root.picker;
+            records-add => {
+                root.records-add(item.key);
+            }
+            record-change => {
+                root.record-change(item.key);
+            }
+            record-remove => {
+                root.record-remove(item.key);
+            }
+            picker-searched(text) => {
+                root.picker-searched(text);
+            }
+            picker-all(on) => {
+                root.picker-all(on);
+            }
+            picker-key(at) => {
+                root.picker-key(at);
+            }
+            picker-lane(lane, at) => {
+                root.picker-lane(lane, at);
+            }
+            picker-back => {
+                root.picker-back();
+            }
+            picker-saved => {
+                root.picker-saved();
+            }
+            picker-cancelled => {
+                root.picker-cancelled();
+            }
             amount-edited(text) => {
                 root.amount-edited(item.key, text);
             }
@@ -3570,6 +4060,9 @@ export component WorkbenchWindow inherits Window {
     in property <[TaskRowData]> task-fold-lines;
     in property <GoalListData> goals;
     in property <[GoalRowData]> goal-rows;
+    // Workflow #455 RR4b: the picker of a records entry, under the line it names; none while that
+    // is empty.
+    in property <GoalPickerData> goal-picker;
     // Between the title and the frame, while the main page shows that account's picture: its
     // rescue bar, in words.
     in property <RescueBar> rescue;
@@ -3685,6 +4178,21 @@ export component WorkbenchWindow inherits Window {
     callback goal-order-saved(string);
     callback goal-order-discarded(string);
     callback goal-order-searched(string, string);
+    // The records entries (Workflow #455 RR4b), by the line's key: "add a character" on an entry's,
+    // "change" and "remove" on a record's; and of the picker open: its search field typed in (as
+    // typed), its switch of every character, a character picked (its place among those listed), a
+    // lane's row picked (the lane's place, the row's: 0 no target), "another character", "save",
+    // "cancel".
+    callback goal-records-add(string);
+    callback goal-record-change(string);
+    callback goal-record-remove(string);
+    callback goal-picker-searched(string);
+    callback goal-picker-all(bool);
+    callback goal-picker-key(int);
+    callback goal-picker-lane(int, int);
+    callback goal-picker-back();
+    callback goal-picker-saved();
+    callback goal-picker-cancelled();
     // The box beside the picture's title, as it is now.
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
@@ -4575,6 +5083,37 @@ export component WorkbenchWindow inherits Window {
                                     if root.right-tab == WorkbenchTab.goals: GoalList {
                                         data: root.goals;
                                         rows: root.goal-rows;
+                                        picker: root.goal-picker;
+                                        records-add(key) => {
+                                            root.goal-records-add(key);
+                                        }
+                                        record-change(key) => {
+                                            root.goal-record-change(key);
+                                        }
+                                        record-remove(key) => {
+                                            root.goal-record-remove(key);
+                                        }
+                                        picker-searched(text) => {
+                                            root.goal-picker-searched(text);
+                                        }
+                                        picker-all(on) => {
+                                            root.goal-picker-all(on);
+                                        }
+                                        picker-key(at) => {
+                                            root.goal-picker-key(at);
+                                        }
+                                        picker-lane(lane, at) => {
+                                            root.goal-picker-lane(lane, at);
+                                        }
+                                        picker-back => {
+                                            root.goal-picker-back();
+                                        }
+                                        picker-saved => {
+                                            root.goal-picker-saved();
+                                        }
+                                        picker-cancelled => {
+                                            root.goal-picker-cancelled();
+                                        }
                                         amount-edited(key, text) => {
                                             root.goal-amount-edited(key, text);
                                         }

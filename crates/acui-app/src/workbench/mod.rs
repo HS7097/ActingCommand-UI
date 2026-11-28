@@ -100,9 +100,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acui_rows::outcome::Tongue;
+use acui_source::workbench::goal_records::{
+    Came, KeyHeld, LaneUnknown, ListUnknown, PartAnswer, RecordLine,
+};
 use acui_source::workbench::goals::{
     Form, GoalLine, GoalsAnswer, GoalsRead, OtherTarget, Stored, Unapplied, VariableLine,
-    VariableState,
+    VariableState, WriteProblem,
 };
 use acui_source::workbench::pack::PacksRead;
 use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, StartRead, TasksRead};
@@ -798,9 +801,13 @@ fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
 /// too, beside what the tab says of it.
 fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
     let problems = match &read {
-        Ok(GoalsRead { answer: GoalsAnswer::Read(loaded), .. }) => {
+        Ok(GoalsRead { answer: GoalsAnswer::Read(loaded), records, .. }) => {
             // The words of the lines do not matter here: what does not read is the same in any.
-            let page = loaded.page(Tongue::En, &|_| None);
+            let records = match records {
+                Some(PartAnswer { came: Came::Read(records), .. }) => Some(records),
+                Some(_) | None => None,
+            };
+            let page = loaded.page(Tongue::En, &|_| None, records);
             let mut problems = Vec::new();
             let mut newer = false;
             if let Stored::Document(document) = &page.stored {
@@ -831,8 +838,17 @@ fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
                              by its code"
                         ));
                     }
+                    // Workflow #455 RR4b: a record's words this console has none for.
+                    GoalLine::Record(record) => problems.extend(record_problems(alias, record)),
                     _ => {}
                 }
+            }
+            if page.records_loose > 0 {
+                problems.push(format!(
+                    "the goal page of {alias} answered {} record(s) before any row of their entry: \
+                     not shown",
+                    page.records_loose
+                ));
             }
             problems
         }
@@ -858,6 +874,31 @@ fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
         }
         tasks_sync(ui);
     }
+    // Workflow #455 RR4b: the records, as the view's read is said.
+    match &landed.records_news {
+        News::Nothing => {}
+        News::Failed(failure) => {
+            let line = format!("goal records of {alias} failed: {}", failure_line(failure));
+            report::log(thread, &line);
+        }
+        News::Recovered => report::log(thread, &format!("goal records of {alias} read again")),
+    }
+    if let Some((epoch, code)) = &landed.records_unsupported {
+        let line = format!(
+            "the Runtime of owner epoch {epoch} has no GoalPageView ({alias}: {code}): the Goals \
+             tab shows no records entries, and they are not asked for again in that epoch"
+        );
+        if ui.model.borrow_mut().first_told(&line) {
+            report::log(thread, &line);
+        }
+    }
+    if landed.records_moved {
+        let line = format!(
+            "goal records of {alias} moved again while they were read: what was read before \
+             stays until the next read"
+        );
+        report::log_quiet(thread, &line);
+    }
     if landed.counted {
         for line in &problems {
             if ui.model.borrow_mut().first_told(line) {
@@ -869,6 +910,40 @@ fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
         ui.paint_notices();
     }
     paint::tasks(ui);
+}
+
+/// What the log hears once of a record's line of the goals of `alias` (Workflow #455 RR4b): each
+/// word of the Runtime this console has no words for, which the line says by its code: why the
+/// record is not applied, why a list gives no reading, a lane's note.
+fn record_problems(alias: &str, record: &RecordLine) -> Vec<String> {
+    let mut problems = Vec::new();
+    if let Some(WriteProblem::Other(word)) = &record.problem {
+        problems.push(format!(
+            "a goal record of {alias} is not applied for goal_problem {word}, which this console \
+             has no words for: shown by its code"
+        ));
+    }
+    let mut reasons: Vec<&str> = Vec::new();
+    if let Some(KeyHeld::Unknown(Some(ListUnknown::Other(word)))) = &record.held {
+        reasons.push(word);
+    }
+    for lane in &record.lanes {
+        match &lane.unknown {
+            Some(LaneUnknown::Progress(Some(ListUnknown::Other(word)))) => reasons.push(word),
+            Some(LaneUnknown::Other(code)) => problems.push(format!(
+                "a goal record of {alias} has a lane not known for {code}, which this console has \
+                 no words for: shown by its code"
+            )),
+            _ => {}
+        }
+    }
+    for word in reasons {
+        problems.push(format!(
+            "a goal record of {alias} says unknown_reason {word}, which this console has no words \
+             for: shown by its code"
+        ));
+    }
+    problems
 }
 
 /// The servers are on the cards, the version says whether the finishing count holds,

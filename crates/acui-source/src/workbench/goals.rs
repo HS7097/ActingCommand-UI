@@ -154,6 +154,15 @@
 //! client then says `runtime_operation_unsupported` (`crates/runtime-client/src/client.rs:1723-1787`);
 //! that, or a refusal `not_implemented`, is an answer here, that this Runtime has no goals to read
 //! ([`GoalsAnswer::Unsupported`]).
+//!
+//! Workflow #455 RR4b: the `records` entries, whom to raise and to which grade, which `GoalView`
+//! never lists, are read with each `GoalView` through `GoalPageView` ([`GoalsRead::records`];
+//! [`super::goal_records`]) and placed among the lines here ([`page_with`]): each entry's line
+//! ([`GoalLine::Records`]) and its records' ([`GoalLine::Record`]) right after the entry its
+//! `after_entry` names, and the records of names no entry declares in a group of their own before
+//! the other targets ([`Group::RecordsUndeclared`]). A write of them is decided on the page
+//! ([`press_on`]) and names the records read's version ([`GoalsPage::version_of`]); only a clear
+//! of an entry's name asks first, saying what it removes ([`Loses::Records`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -172,6 +181,10 @@ use actingcommand_contract::{
 use actingcommand_runtime_client::RuntimeClientError;
 use serde_json::{Map, Value};
 
+use super::goal_records::{
+    self, placed, records_key, record_key, PartAnswer, RecordLine, RecordsBlock, RecordsLine,
+    RecordsLoaded, RecordsShown, Slot,
+};
 use super::{configure_config, pack};
 use crate::{runtime_connection, ClientFailure, Spelling};
 
@@ -220,6 +233,9 @@ pub struct GoalsRead {
     /// The alias asked for: the client refuses an answer that names another.
     pub alias: String,
     pub answer: GoalsAnswer,
+    /// Workflow #455 RR4b: the part `records` of `GoalPageView`, read right after the view on the
+    /// same connection; none when the view was not read either.
+    pub records: Option<PartAnswer<RecordsLoaded>>,
 }
 
 /// What the view said.
@@ -237,9 +253,15 @@ pub struct GoalsLoaded(Box<GoalView>);
 
 impl GoalsLoaded {
     /// The page's lines in `tongue`, the groups of variables no entry places titled by
-    /// `pack_title`, the display name of a package by its id ([`page`]).
-    pub fn page(&self, tongue: Tongue, pack_title: &dyn Fn(&str) -> Option<String>) -> GoalsPage {
-        page(&self.0, tongue, pack_title)
+    /// `pack_title`, the display name of a package by its id, with the records entries of
+    /// `records` among them ([`page_with`]).
+    pub fn page(
+        &self,
+        tongue: Tongue,
+        pack_title: &dyn Fn(&str) -> Option<String>,
+        records: Option<&RecordsLoaded>,
+    ) -> GoalsPage {
+        page_with(&self.0, tongue, pack_title, records)
     }
 }
 
@@ -260,9 +282,28 @@ pub struct GoalsPage {
     pub no_catalog: bool,
     /// The Runtime reads the instance's stored record as no document (`stale_schema`).
     pub stale_schema: bool,
+    /// Workflow #455 RR4b: the version of the records read the records lines are of, which a
+    /// write of them names; none without such a read.
+    pub records_version: Option<u64>,
+    /// The stored goal records do not read (`records_state: unreadable`), on a page that lists.
+    pub records_unreadable: bool,
+    /// Records the Runtime answered before any row of their entry, which no line shows.
+    pub records_loose: usize,
 }
 
 impl GoalsPage {
+    /// The version a write of `line` names: the records read's for a records entry's line or a
+    /// record's (`expected_version`, the version of the read the change was made on), the view's
+    /// for any other.
+    pub fn version_of(&self, line: &GoalLine) -> u64 {
+        match line {
+            GoalLine::Records(_) | GoalLine::Record(_) => {
+                self.records_version.unwrap_or(self.version)
+            }
+            _ => self.version,
+        }
+    }
+
     /// Whether anything of it can be written: only a page that lists, of a record not stored in the
     /// old form. One that does not list (`not_checked_yet`, `root_failing`, `no_schedule`) refuses
     /// every `EditGoal` with its word; against a `v1` record every one is refused
@@ -339,6 +380,11 @@ pub enum GoalLine {
     /// A pool no goal can name, and why: neither a declared entry's nor an other target's, nor one
     /// out of the instance's scope.
     Closed { pool: String, why: Closed },
+    /// Workflow #455 RR4b: a `records` entry of `goals.json`, whom to raise and to which grade, or
+    /// a name the stored records hold that no records entry declares.
+    Records(RecordsLine),
+    /// One stored record, under its entry's line, in stored order.
+    Record(RecordLine),
 }
 
 impl GoalLine {
@@ -353,6 +399,8 @@ impl GoalLine {
             Self::Variable(line) => Some(format!("{VARIABLE_KEY}{}", line.name)),
             Self::Orphan(line) => Some(format!("orphan:{}", line.name)),
             Self::OtherTarget(other) => Some(format!("target:{}", other.id)),
+            Self::Records(line) => Some(records_key(&line.name)),
+            Self::Record(line) => Some(record_key(&line.entry, &line.key)),
             Self::Heading(_)
             | Self::Note { .. }
             | Self::Tier(_)
@@ -371,6 +419,9 @@ pub const VARIABLE_KEY: &str = "variable:";
 pub enum Group {
     /// Stored values no entry offers any more (`orphans`).
     NoLongerOffered,
+    /// Workflow #455 RR4b: stored records under names no records entry declares (`declared:
+    /// false`), each name with its records and its clear.
+    RecordsUndeclared,
     /// Stored targets on no declared resource entry's pool (`other_targets`).
     OtherTargets,
     /// Pools no goal can name (`targets.not_targetable`), but those out of the instance's scope;
@@ -1091,16 +1142,22 @@ pub enum Form {
     Newer(String),
 }
 
-/// The page of `alias` as the console keeps it.
-pub(super) fn goals_read(epoch: String, alias: &str, view: GoalView) -> GoalsRead {
+/// The page of `alias` as the console keeps it, with what its read of the records came to.
+pub(super) fn goals_read(
+    epoch: String,
+    alias: &str,
+    view: GoalView,
+    records: PartAnswer<RecordsLoaded>,
+) -> GoalsRead {
     let answer = GoalsAnswer::Read(GoalsLoaded(Box::new(view)));
-    GoalsRead { epoch, alias: alias.to_owned(), answer }
+    GoalsRead { epoch, alias: alias.to_owned(), answer, records: Some(records) }
 }
 
 /// A Runtime's answer that it has no such read, by the code that says so
 /// (`super::pack::view_unsupported`).
 pub(super) fn goals_unsupported(epoch: String, alias: &str, code: &'static str) -> GoalsRead {
-    GoalsRead { epoch, alias: alias.to_owned(), answer: GoalsAnswer::Unsupported { code } }
+    let answer = GoalsAnswer::Unsupported { code };
+    GoalsRead { epoch, alias: alias.to_owned(), answer, records: None }
 }
 
 /// The text of `texts`, each per locale in the order written, in `tongue`: Chinese tries `zh-Hans`,
@@ -1124,28 +1181,46 @@ fn text_in<'a>(texts: &'a [(String, String)], locale: &str) -> Option<&'a str> {
 }
 
 /// The page's lines of `view` in `tongue`, each group of variables no entry places titled by
-/// `pack_title` (see the module's words).
+/// `pack_title` (see the module's words), without records.
 pub fn page(view: &GoalView, tongue: Tongue, pack_title: &dyn Fn(&str) -> Option<String>) -> GoalsPage {
+    page_with(view, tongue, pack_title, None)
+}
+
+/// [`page`], with the records entries of `records` among the lines (Workflow #455 RR4b): only on
+/// a page that lists, each declared entry's block where [`placed`] puts it, and the names no
+/// records entry declares in their group ([`lines`]). A page that lists nothing but records has
+/// something to set.
+pub fn page_with(
+    view: &GoalView,
+    tongue: Tongue,
+    pack_title: &dyn Fn(&str) -> Option<String>,
+    records: Option<&RecordsLoaded>,
+) -> GoalsPage {
     let targets = view.targets.as_ref();
     let active = targets.active.as_ref();
     let form = active.map(|active| form_of(&active.schema_version));
+    let shown = records.map(|records| records.shown(tongue));
+    let blocks = shown.as_ref().is_some_and(RecordsShown::any);
     let state = match view.declaration.state {
         GoalDeclarationRead::NotCheckedYet => PageState::NotCheckedYet,
         GoalDeclarationRead::RootFailing => {
             PageState::RootFailing { path: view.declaration.path.clone() }
         }
         GoalDeclarationRead::NoSchedule => PageState::NoSchedule,
-        GoalDeclarationRead::Accepted => listed(view, Declaration::Accepted),
-        GoalDeclarationRead::Absent => listed(view, Declaration::Absent),
+        GoalDeclarationRead::Accepted => listed(view, Declaration::Accepted, blocks),
+        GoalDeclarationRead::Absent => listed(view, Declaration::Absent, blocks),
         GoalDeclarationRead::Refused | GoalDeclarationRead::Unreadable => {
-            listed(view, Declaration::NotTaken)
+            listed(view, Declaration::NotTaken, blocks)
         }
-        GoalDeclarationRead::NotRead => listed(view, Declaration::NotRead),
+        GoalDeclarationRead::NotRead => listed(view, Declaration::NotRead, blocks),
     };
+    let listing = matches!(state, PageState::Listed { .. });
+    let records_unreadable = listing && shown.as_ref().is_some_and(|shown| shown.unreadable);
+    let records_loose = shown.as_ref().map_or(0, |shown| shown.loose);
     let lines = match state {
         PageState::Listed { .. } => {
             let read = Targets { view: targets, active, form: form.as_ref() };
-            lines(view, &read, tongue, pack_title)
+            lines(view, &read, tongue, pack_title, shown)
         }
         PageState::NotCheckedYet | PageState::RootFailing { .. } | PageState::NoSchedule => {
             Vec::new()
@@ -1168,11 +1243,16 @@ pub fn page(view: &GoalView, tongue: Tongue, pack_title: &dyn Fn(&str) -> Option
         stored,
         no_catalog: targets.catalog_hash.is_none(),
         stale_schema: targets.stale_schema == Some(true),
+        records_version: records.map(RecordsLoaded::version),
+        records_unreadable,
+        records_loose,
     }
 }
 
-fn listed(view: &GoalView, declaration: Declaration) -> PageState {
-    let nothing = nothing_to_set(view);
+/// How a page that lists stands; `records` whether it shows records entries besides, which are
+/// something to set.
+fn listed(view: &GoalView, declaration: Declaration, records: bool) -> PageState {
+    let nothing = nothing_to_set(view) && !records;
     // Workflow #455 G0's rule: no `goals.json`, and `targets.targetable` empty. A pool targetable
     // may take an other target `{resource, at_least}` (945727d4
     // `crates/runtime-host/src/goals.rs:288-289`, `:334-343`, `:540-546`), but for one without the
@@ -1285,15 +1365,19 @@ fn reading_beside(reading: Option<Reading>, goal: Option<&StoredGoal>) -> Option
     }
 }
 
-/// The lines of a page that lists: its entries in their order, each group of the variables no
-/// entry places, then the three groups that close it, each under its title while it has a line.
-/// The pools no goal can name close only a page with something to set, and never with one out of
-/// the instance's scope (Workflow #455 G0).
+/// The lines of a page that lists: its entries in their order, with the blocks of the records
+/// entries of `records` among them (Workflow #455 RR4b, [`placed`]: each right after the entry its
+/// `after_entry` names), each group of the variables no entry places, then the groups that close
+/// it, each under its title while it has a line: values no longer offered, records of names no
+/// records entry declares, other targets, pools no goal can name. The pools no goal can name close
+/// only a page with something to set, and never with one out of the instance's scope (Workflow #455
+/// G0).
 fn lines(
     view: &GoalView,
     targets: &Targets<'_>,
     tongue: Tongue,
     pack_title: &dyn Fn(&str) -> Option<String>,
+    records: Option<RecordsShown>,
 ) -> Vec<GoalLine> {
     let mut lines = Vec::new();
     let shared = shared_names(view);
@@ -1306,12 +1390,36 @@ fn lines(
         let shared = shared.contains(entry.name.as_str());
         entry_line(entry, targets, &others, &view.entries, shared, tongue)
     };
+    let (declared, undeclared) = match records {
+        Some(records) => (records.declared, records.undeclared),
+        None => (Vec::new(), Vec::new()),
+    };
+    let placed_entries: Vec<&GoalViewEntry> =
+        view.entries.iter().filter(|entry| entry.placed).collect();
+    let names: Vec<&str> = placed_entries.iter().map(|entry| entry.name.as_str()).collect();
+    let order = {
+        let after: Vec<(&str, Option<&str>)> = declared
+            .iter()
+            .map(|block| (block.line.name.as_str(), block.after.as_deref()))
+            .collect();
+        placed(&names, &after)
+    };
+    let mut blocks: Vec<Option<RecordsBlock>> = declared.into_iter().map(Some).collect();
+    for slot in order {
+        match slot {
+            Slot::Entry(at) => lines.push(line_of(placed_entries[at])),
+            Slot::Block(at) => {
+                if let Some(block) = blocks.get_mut(at).and_then(Option::take) {
+                    push_block(&mut lines, block);
+                }
+            }
+        }
+    }
     // By the first package's id, in the order the page first names it, with its display name.
     let mut groups: Vec<(&str, String, Vec<&GoalViewEntry>)> = Vec::new();
     let mut unnamed: Vec<&GoalViewEntry> = Vec::new();
     for entry in &view.entries {
         if entry.placed {
-            lines.push(line_of(entry));
             continue;
         }
         let first = entry.packages.first().map(String::as_str);
@@ -1338,6 +1446,12 @@ fn lines(
         lines.extend(view.orphans.iter().map(|orphan| {
             orphan_line(orphan, shared.contains(orphan.name.as_str()))
         }));
+    }
+    if !undeclared.is_empty() {
+        lines.push(GoalLine::Group(Group::RecordsUndeclared));
+        for block in undeclared {
+            push_block(&mut lines, block);
+        }
     }
     // A pool a declared entry or an other target names says why on that line, not on one of its
     // own.
@@ -1385,6 +1499,12 @@ fn lines(
         lines.extend(closed);
     }
     lines
+}
+
+/// A records entry's line, then its records' lines in stored order.
+fn push_block(lines: &mut Vec<GoalLine>, block: RecordsBlock) {
+    lines.push(GoalLine::Records(block.line));
+    lines.extend(block.records.into_iter().map(GoalLine::Record));
 }
 
 /// The names more than one line of the page has: its entries' (of any type, placed or not), its
@@ -1870,7 +1990,7 @@ fn other_target(id: &str, targets: &Targets<'_>, shared: bool) -> OtherTarget {
 }
 
 /// Who set a stored row.
-fn set_by(set: &GoalSetBy) -> SetBy {
+pub(super) fn set_by(set: &GoalSetBy) -> SetBy {
     let by = match set.channel {
         RuntimeChannel::Ui => Setter::Console,
         RuntimeChannel::Cli => Setter::CommandLine,
@@ -2326,7 +2446,8 @@ pub fn pointed_key(value_json: &str, pointer: &str) -> Option<String> {
 
 /// What a press on a line does: set an amount or a number (as typed), clear, pick a `choice`'s
 /// option (by its place among the options), turn a `switch`, save an `ordered` variable's list (its
-/// keys in order).
+/// keys in order). Workflow #455 RR4b, of a records entry: save the record of a key with its `to`
+/// (the picker's), and remove a record (on its line).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalAct {
     Amount(String),
@@ -2334,6 +2455,8 @@ pub enum GoalAct {
     Pick(usize),
     Switch(bool),
     Order(Vec<String>),
+    Put { key: String, to: Map<String, Value> },
+    Remove,
 }
 
 /// What one press writes, and what it loses that this page cannot set back, which it asks about
@@ -2374,6 +2497,22 @@ pub enum Loses {
     /// entry's goal; and what the goal on the entry's own pool, set elsewhere, carries that one
     /// set here does not, when it carries any.
     SameName { removed: Removed, carried: Option<Carried> },
+    /// Workflow #455 RR4b: the records of a records entry cleared by its name: how many the
+    /// Runtime counts under it (`records_total`), whose characters and targets are entered anew to
+    /// be raised again; or, while the stored record does not read (`unreadable`), all it holds,
+    /// which is rewritten empty (`contracts/runtime-interface.md` 776-780 at aa6765dd).
+    Records { count: u16, unreadable: bool },
+}
+
+/// What a press `act` on the line `key` of `page` writes: of a records entry's line or a record's,
+/// what [`goal_records::records_press`] says, which asks first only before a clear (the line of the
+/// entry the press needs is on the page); of any other, [`press`].
+pub fn press_on(page: &GoalsPage, key: &str, act: &GoalAct) -> Option<Press> {
+    let line = page.line(key)?;
+    match line {
+        GoalLine::Records(_) | GoalLine::Record(_) => goal_records::records_press(page, line, act),
+        _ => press(line, act),
+    }
 }
 
 /// What a press `act` on `line` writes, the one place that decides it: none when it writes nothing
@@ -2765,7 +2904,8 @@ mod tests {
     use super::{
         amount, answered, choice_json, entry_unit, failure_of, in_language, integer_json, largest,
         newer_than_this_console, number, order_edit, order_fits, order_matches, order_problem,
-        order_room, ordered_json, page, pointed_key, press, resource_json, switch_json, whole_time,
+        order_room, ordered_json, page, page_with, pointed_key, press, press_on, resource_json,
+        switch_json, whole_time,
         AmountProblem, Answered, Carried, ChoiceOption, ClearOffer, Closed, Declaration, Document,
         Failed, Form, GoalAct, GoalChange, GoalLine, GoalWrite, GoalsPage, Group, LabEntry, Loses,
         NumberProblem, NumberRule, NumberUnit, OrderEdit, OrderOption, OrderProblem, OrderRule,
@@ -2774,8 +2914,9 @@ mod tests {
         Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid, WriteProblem,
         ORDER_SHOWN, RECEIPT_DECODE_FAILED, VALUE_BYTES,
     };
+    use crate::workbench::goal_records::RecordsLoaded;
     use acui_rows::outcome::Tongue;
-    use actingcommand_contract::{GoalProblem, GoalView};
+    use actingcommand_contract::{GoalPageRecordsState, GoalProblem, GoalView};
     use serde_json::{json, Map, Value};
 
     const EVALUATED: u64 = 1_794_532_592_000;
@@ -6577,5 +6718,317 @@ mod tests {
         for word in ["value_too_large", "variable_not_applying", "not_offered", "name_unknown", "a_newer_word"] {
             assert!(!WriteProblem::of(word).of_the_rule(), "{word}");
         }
+    }
+
+    /// Workflow #455 RR4b: a records entry's row as the wire carries it, of the table `heroes`.
+    fn records_entry(name: &str, after: Option<&str>, total: u16, max: u64) -> Value {
+        let mut row = json!({
+            "row": "entry",
+            "name": name,
+            "declared": true,
+            "entry": {
+                "name": name,
+                "type": "records",
+                "title": {"en": format!("Raise {name}")},
+                "table": "heroes",
+                "max_records": max,
+            },
+            "applies": true,
+            "records_total": total,
+        });
+        if let Some(after) = after {
+            row["after_entry"] = json!(after);
+        }
+        row
+    }
+
+    /// A stored record's row of `entry`, applied, held, without lanes.
+    fn record_row(entry: &str, key: &str, to: Value) -> Value {
+        json!({
+            "row": "record",
+            "entry": entry,
+            "key": key,
+            "to": to,
+            "set": set("ui", None),
+            "applied": true,
+            "held": {"state": "held"},
+            "lanes": [],
+        })
+    }
+
+    /// A records read of `rows` at version 9, its record read.
+    fn records(rows: Vec<Value>) -> RecordsLoaded {
+        let rows = rows
+            .into_iter()
+            .map(|row| serde_json::from_value(row).expect("a row the pinned contract reads"))
+            .collect();
+        RecordsLoaded::of_rows(9, Some(GoalPageRecordsState::Read), rows)
+    }
+
+    /// A line's place in a test's order: its kind and what names it.
+    fn shape(line: &GoalLine) -> String {
+        match line {
+            GoalLine::Heading(_) => "heading".to_owned(),
+            GoalLine::Records(line) => format!("records {}", line.name),
+            GoalLine::Record(line) => format!("record {}", line.key),
+            GoalLine::Group(group) => format!("{group:?}"),
+            other => other.key().unwrap_or_else(|| format!("{other:?}")),
+        }
+    }
+
+    /// The name a press writes and the value it sets, read as JSON; asked about or not.
+    fn sent(press: Option<Press>) -> (String, Value, bool) {
+        let press = press.expect("a press that writes");
+        let value = match &press.write.change {
+            GoalChange::Set(json) => serde_json::from_str(json).expect("JSON"),
+            GoalChange::Clear => Value::Null,
+        };
+        (press.write.name, value, press.asks.is_some())
+    }
+
+    #[test]
+    fn records_blocks_stand_after_the_entry_they_follow_and_undeclared_ones_before_other_targets() {
+        let view = view(
+            state("accepted"),
+            json!([
+                heading("top", json!({"en": "Top"})),
+                resource("gold", "pool.gold", None, None),
+                unplaced_switch("auto", "Auto", &["pack.a"]),
+            ]),
+            json!({
+                "orphans": [{"name": "stale", "value_json": "1"}],
+                "other_targets": ["t1"],
+            }),
+            no_targets(),
+        );
+        let read = records(vec![
+            records_entry("first", None, 0, 3),
+            records_entry("raise", Some("gold"), 1, 3),
+            record_row("raise", "hero_a", json!({"phase": [2]})),
+            json!({
+                "row": "entry",
+                "name": "old",
+                "declared": false,
+                "applies": false,
+                "problem": "name_unknown",
+                "records_total": 1,
+            }),
+            json!({
+                "row": "record",
+                "entry": "old",
+                "key": "hero_c",
+                "to": {"phase": [0]},
+                "set": set("cli", None),
+                "applied": false,
+                "problem": "name_unknown",
+                "lanes": [],
+            }),
+        ]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&read));
+        let shapes: Vec<String> = page.lines.iter().map(shape).collect();
+        assert_eq!(
+            shapes,
+            vec![
+                "records first",
+                "heading",
+                "resource:gold",
+                "records raise",
+                "record hero_a",
+                "Package(None)",
+                "variable:auto",
+                "NoLongerOffered",
+                "orphan:stale",
+                "RecordsUndeclared",
+                "records old",
+                "record hero_c",
+                "OtherTargets",
+                "target:t1",
+            ]
+        );
+        assert_eq!(page.records_version, Some(9));
+        assert!(!page.records_unreadable);
+        // Without records the page is as before.
+        let before: Vec<String> = read_page(&view).lines.iter().map(shape).collect();
+        assert_eq!(before[..2], ["heading".to_owned(), "resource:gold".to_owned()]);
+        assert!(!before.iter().any(|shape| shape.starts_with("record")));
+        // A page that does not list shows no records either.
+        let unchecked = self::view(state("not_checked_yet"), json!([]), json!({}), no_targets());
+        let page = page_with(&unchecked, Tongue::En, &|_| None, Some(&read));
+        assert!(page.lines.is_empty());
+        assert_eq!(page.state, PageState::NotCheckedYet);
+    }
+
+    fn read_page(view: &GoalView) -> GoalsPage {
+        page(view, Tongue::En, &|_| None)
+    }
+
+    #[test]
+    fn a_page_of_records_entries_alone_has_something_to_set() {
+        let view = view(state("accepted"), json!([]), json!({}), no_targets());
+        assert!(!read_page(&view).something_to_set());
+        let read = records(vec![records_entry("raise", None, 0, 3)]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&read));
+        assert!(page.something_to_set());
+        assert_eq!(page.lines.iter().map(shape).collect::<Vec<_>>(), vec!["records raise"]);
+    }
+
+    #[test]
+    fn a_records_press_sends_the_whole_array_names_the_records_version_and_never_asks() {
+        let view = view(state("accepted"), json!([]), json!({}), no_targets());
+        let read = records(vec![
+            records_entry("raise", None, 2, 3),
+            record_row("raise", "hero_a", json!({"phase": [2], "mastery": {"1": [1]}})),
+            record_row("raise", "hero_b", json!({"phase": [1]})),
+            json!({
+                "row": "entry",
+                "name": "old",
+                "declared": false,
+                "applies": false,
+                "problem": "name_unknown",
+                "records_total": 1,
+            }),
+            json!({
+                "row": "record",
+                "entry": "old",
+                "key": "hero_c",
+                "to": {"phase": [0]},
+                "set": set("ui", None),
+                "applied": false,
+                "problem": "name_unknown",
+                "lanes": [],
+            }),
+        ]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&read));
+        let put = |key: &str, to: Value| GoalAct::Put {
+            key: key.to_owned(),
+            to: match to {
+                Value::Object(to) => to,
+                other => panic!("{other}"),
+            },
+        };
+        // Added at the end, every other record as answered.
+        assert_eq!(
+            sent(press_on(&page, "records:raise", &put("hero_z", json!({"phase": [1]})))),
+            (
+                "raise".to_owned(),
+                json!([
+                    {"key": "hero_a", "to": {"phase": [2], "mastery": {"1": [1]}}},
+                    {"key": "hero_b", "to": {"phase": [1]}},
+                    {"key": "hero_z", "to": {"phase": [1]}},
+                ]),
+                false,
+            )
+        );
+        // Changed in place, from its own line.
+        assert_eq!(
+            sent(press_on(&page, "record:raise:hero_b", &put("hero_b", json!({"phase": [2]})))),
+            (
+                "raise".to_owned(),
+                json!([
+                    {"key": "hero_a", "to": {"phase": [2], "mastery": {"1": [1]}}},
+                    {"key": "hero_b", "to": {"phase": [2]}},
+                ]),
+                false,
+            )
+        );
+        // Removed.
+        assert_eq!(
+            sent(press_on(&page, "record:raise:hero_a", &GoalAct::Remove)),
+            ("raise".to_owned(), json!([{"key": "hero_b", "to": {"phase": [1]}}]), false)
+        );
+        // The same `to` as stored, or one that names nothing, writes nothing.
+        assert_eq!(
+            press_on(&page, "records:raise", &put("hero_b", json!({"phase": [1]}))),
+            None
+        );
+        assert_eq!(press_on(&page, "records:raise", &put("hero_y", json!({}))), None);
+        // A declared entry whose records all apply is not cleared by name; an undeclared one is,
+        // asked first with how many records it removes, and its records are neither changed nor
+        // removed.
+        assert_eq!(press_on(&page, "records:raise", &GoalAct::Clear), None);
+        let clear = press_on(&page, "records:old", &GoalAct::Clear);
+        assert_eq!(
+            clear.as_ref().and_then(|press| press.asks.clone()),
+            Some(Loses::Records { count: 1, unreadable: false })
+        );
+        assert_eq!(sent(clear), ("old".to_owned(), Value::Null, true));
+        assert_eq!(press_on(&page, "record:old:hero_c", &GoalAct::Remove), None);
+        assert_eq!(press_on(&page, "records:old", &put("hero_c", json!({"phase": [1]}))), None);
+        // The records read's version, not the view's.
+        let line = page.line("record:raise:hero_a").expect("a record's line");
+        assert_eq!((page.version, page.version_of(line)), (7, 9));
+        let heading = GoalLine::Heading(None);
+        assert_eq!(page.version_of(&heading), 7);
+        // Removing the last record sends an empty array.
+        let one = records(vec![
+            records_entry("raise", None, 1, 1),
+            record_row("raise", "hero_a", json!({"phase": [2]})),
+        ]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&one));
+        assert_eq!(
+            sent(press_on(&page, "record:raise:hero_a", &GoalAct::Remove)),
+            ("raise".to_owned(), json!([]), false)
+        );
+        // A full entry takes no new character, but its record still changes.
+        assert_eq!(press_on(&page, "records:raise", &put("hero_b", json!({"phase": [1]}))), None);
+        assert_eq!(
+            sent(press_on(&page, "records:raise", &put("hero_a", json!({"phase": [1]})))),
+            ("raise".to_owned(), json!([{"key": "hero_a", "to": {"phase": [1]}}]), false)
+        );
+    }
+
+    /// Workflow #455 RR4b: a declared entry two of whose records no longer apply (removing either
+    /// would send the other, refused), or that holds more than its `max_records` now (every set
+    /// refused), is cleared by its name, asked first with how many records that removes; and while
+    /// the stored record does not read, every declared entry is, asked first that what it holds is
+    /// lost.
+    #[test]
+    fn a_stuck_or_unreadable_entry_is_cleared_after_one_question_of_what_it_removes() {
+        let view = view(state("accepted"), json!([]), json!({}), no_targets());
+        let gone = |key: &str| {
+            json!({
+                "row": "record",
+                "entry": "raise",
+                "key": key,
+                "to": {"phase": [1]},
+                "set": set("ui", None),
+                "applied": false,
+                "problem": "not_an_option",
+                "lanes": [],
+            })
+        };
+        let stuck =
+            records(vec![records_entry("raise", None, 2, 3), gone("hero_a"), gone("hero_b")]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&stuck));
+        let clear = press_on(&page, "records:raise", &GoalAct::Clear);
+        assert_eq!(
+            clear.as_ref().and_then(|press| press.asks.clone()),
+            Some(Loses::Records { count: 2, unreadable: false })
+        );
+        assert_eq!(sent(clear), ("raise".to_owned(), Value::Null, true));
+        // More records than the entry keeps now.
+        let over = records(vec![
+            records_entry("raise", None, 2, 1),
+            record_row("raise", "hero_a", json!({"phase": [2]})),
+            record_row("raise", "hero_b", json!({"phase": [1]})),
+        ]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&over));
+        assert_eq!(
+            press_on(&page, "records:raise", &GoalAct::Clear).and_then(|press| press.asks),
+            Some(Loses::Records { count: 2, unreadable: false })
+        );
+        // The stored record unreadable.
+        let rows = vec![records_entry("raise", None, 0, 3)]
+            .into_iter()
+            .map(|row| serde_json::from_value(row).expect("a row the pinned contract reads"))
+            .collect();
+        let unreadable =
+            RecordsLoaded::of_rows(9, Some(GoalPageRecordsState::Unreadable), rows);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&unreadable));
+        assert!(page.records_unreadable);
+        assert_eq!(
+            press_on(&page, "records:raise", &GoalAct::Clear).and_then(|press| press.asks),
+            Some(Loses::Records { count: 0, unreadable: true })
+        );
     }
 }
