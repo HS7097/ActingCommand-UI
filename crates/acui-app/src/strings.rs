@@ -1219,6 +1219,11 @@ pub struct Labels {
     /// back too.
     pub card_why_other_value_set: &'static str,
     pub card_why_rule_value_refused: &'static str,
+    /// Runtime 0.12.89 on: the package needs a value only a rule gives, and this task's rule
+    /// carries none, so it is held back. Runtime 0.12.13 on: the instance's idle setting closed
+    /// it, so this reading waits for its next wake.
+    pub card_why_rule_value_missing: &'static str,
+    pub card_why_idle_closed: &'static str,
     pub card_why_reason_missing: &'static str,
     pub card_why_unlisted: &'static str,
     /// The right column's second tab, the account's daily task list (UI-3f1), and what it says
@@ -1545,6 +1550,8 @@ pub struct Labels {
     pub goals_problem_not_checked_yet: &'static str,
     pub goals_problem_root_failing: &'static str,
     pub goals_problem_no_schedule: &'static str,
+    /// Runtime 0.12.89 on: the value is one only a rule gives, which the goal page cannot set.
+    pub goals_problem_rule_given: &'static str,
     pub goals_problem_other: &'static str,
     pub goals_problem_value_too_large_at: &'static str,
     pub goals_problem_record_out_of_limits_at: &'static str,
@@ -2879,6 +2886,8 @@ pub const ZH: Labels = Labels {
     card_why_waking: "正在叫醒这个实例来跑它",
     card_why_other_value_set: "目标页上设的值不是这条规则带的，先不跑",
     card_why_rule_value_refused: "规则带的值，任务包已经不收了，先不跑",
+    card_why_rule_value_missing: "任务包要一个只能由规则给的值，这条规则没带，先不跑",
+    card_why_idle_closed: "实例按闲置设置关着，这项读数等它下次醒来再做",
     card_why_reason_missing: "原因没写明（程序的问题，已记入日志）",
     card_why_unlisted: "现在不安排",
     tasks_tab: "日常任务",
@@ -3109,6 +3118,7 @@ pub const ZH: Labels = Labels {
     goals_problem_not_checked_yet: "Runtime 还没检查这个游戏的标准包，等它下一次检查后再按一次",
     goals_problem_root_failing: "这个游戏的标准包读不了，要先修好，再按也没用",
     goals_problem_no_schedule: "这个游戏的标准包没有排程文件，这里没有可设的项",
+    goals_problem_rule_given: "这个值只能由规则给，目标页上设不了",
     goals_problem_other: "原因代码 {}",
     goals_problem_value_too_large_at: "这个值超过了上限 {} 字节，存不下",
     goals_problem_record_out_of_limits_at: "这个实例存的目标或设置项已经到上限 {} 项，要先清掉一些",
@@ -4275,6 +4285,8 @@ pub const EN: Labels = Labels {
     card_why_waking: "Waking the instance to run it",
     card_why_other_value_set: "The value set on the goal page is not the one this rule carries; held back",
     card_why_rule_value_refused: "The package no longer takes the value its rule carries; held back",
+    card_why_rule_value_missing: "The package needs a value only its rule gives, and the rule carries none; held back",
+    card_why_idle_closed: "The instance is closed by its idle setting; this reading waits for its next wake",
     card_why_reason_missing: "No reason was given (a program problem; written to the log)",
     card_why_unlisted: "Not scheduled right now",
     tasks_tab: "Daily Tasks",
@@ -4505,6 +4517,7 @@ pub const EN: Labels = Labels {
     goals_problem_not_checked_yet: "The Runtime has not checked this game's standard pack yet; press again after its next check",
     goals_problem_root_failing: "This game's standard pack cannot be read and must be repaired first; pressing again does not help",
     goals_problem_no_schedule: "This game's standard pack has no schedule file, so nothing can be set here",
+    goals_problem_rule_given: "This value is one only a rule gives; the goal page cannot set it",
     goals_problem_other: "Reason code {}",
     goals_problem_value_too_large_at: "The value is longer than the {} bytes a value can hold",
     goals_problem_record_out_of_limits_at: "This instance holds as many goals or settings as a record keeps, at most {} items; clear some first",
