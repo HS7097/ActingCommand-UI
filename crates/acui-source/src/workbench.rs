@@ -20,7 +20,9 @@
 //! Runtime has brought its fact store up to the ledger under the fact write gate, a read of the
 //! ledger's newest records on its writer's thread that is nearly always empty; and for that
 //! account's goals (Workflow #455, #463 V3), its `GoalView` ([`ReadLane::read_goals`]), which
-//! records nothing and is computed under the policy's locks and the same gate. The picture's lane
+//! records nothing and is computed under the policy's locks and the same gate, and right after it
+//! the part `records` of its `GoalPageView` (Workflow #455 RR4b, [`goal_records`]), likewise
+//! answered from memory and the fact store under those locks. The picture's lane
 //! ([`preview::PreviewLane`], UI-3c) is the one exception: it reads ledger pages, which take no
 //! record either but are read from the ledger, and frames' material, whose read takes no record
 //! when it succeeds or
@@ -130,6 +132,7 @@ use super::{
 
 pub mod backends;
 pub mod device;
+pub mod goal_records;
 pub mod goals;
 pub mod pack;
 pub mod preview;
@@ -234,12 +237,16 @@ pub struct ReadLane {
     root: PathBuf,
     io: Duration,
     client: Option<RuntimeClient>,
+    /// Workflow #455 RR4b: the owner epoch whose Runtime said it has no `GoalPageView`, and the
+    /// code it said so by; in it the records are not asked for again
+    /// (`contracts/runtime-interface.md` 890-893 at aa6765dd).
+    records_unsupported: Option<(String, &'static str)>,
 }
 
 impl ReadLane {
     /// No connection yet: the first read makes it.
     pub fn new(root: impl Into<PathBuf>, io: Duration) -> Self {
-        Self { root: root.into(), io, client: None }
+        Self { root: root.into(), io, client: None, records_unsupported: None }
     }
 
     /// One `Status`. See [`LiveRead`] for how a failure is told apart.
@@ -281,7 +288,9 @@ impl ReadLane {
     /// #463 V3), kept whole until it is shown as its lines ([`goals::page`]). A Runtime
     /// that has no such read says so as its answer ([`goals::GoalsAnswer::Unsupported`]), as for the
     /// switches, and one that does not know the request costs this lane its connection, as any
-    /// fatal failure does.
+    /// fatal failure does. Workflow #455 RR4b: right after a view that answered, on the same
+    /// connection, the part `records` of its `GoalPageView`, page after page
+    /// ([`goal_records::read_records`]), but in an owner epoch whose Runtime said it has none.
     pub fn read_goals(&mut self, alias: &str) -> Result<goals::GoalsRead, ClientFailure> {
         self.asked_once_more(|lane| lane.ask_goals(alias))
     }
@@ -357,7 +366,10 @@ impl ReadLane {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.goal_view(alias) {
-            Ok(view) => Ok(goals::goals_read(epoch, alias, view)),
+            Ok(view) => {
+                let records = self.ask_records(&client, &epoch, alias);
+                Ok(goals::goals_read(epoch, alias, view, records))
+            }
             Err(error) => match pack::view_unsupported(&error) {
                 Some(code) => {
                     self.settled(error);
@@ -365,6 +377,37 @@ impl ReadLane {
                 }
                 None => Err(NoConnection::Failed(self.settled(error))),
             },
+        }
+    }
+
+    /// The part `records` of `alias` on `client`, of owner epoch `epoch`: not asked in an epoch
+    /// whose Runtime said it has no such read, which is answered as it said; a failure of it is its
+    /// answer, the goal view having answered, and costs the lane its connection as any fatal one.
+    fn ask_records(
+        &mut self,
+        client: &RuntimeClient,
+        epoch: &str,
+        alias: &str,
+    ) -> goal_records::PartAnswer<goal_records::RecordsLoaded> {
+        if let Some((said, code)) = &self.records_unsupported {
+            if said == epoch {
+                let came = goal_records::Came::Unsupported(*code);
+                return goal_records::PartAnswer { dropped: None, came };
+            }
+        }
+        match goal_records::read_records(client, alias) {
+            Ok(answer) => answer,
+            Err(goal_records::PartFailure::Stuck) => {
+                let came = goal_records::Came::Failed(goal_records::stuck());
+                goal_records::PartAnswer { dropped: None, came }
+            }
+            Err(goal_records::PartFailure::Client(error)) => {
+                let came = goal_records::came_of(self.settled(error));
+                if let goal_records::Came::Unsupported(code) = &came {
+                    self.records_unsupported = Some((epoch.to_owned(), *code));
+                }
+                goal_records::PartAnswer { dropped: None, came }
+            }
         }
     }
 

@@ -12,6 +12,9 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::device::DeviceOp;
+use acui_source::workbench::goal_records::{
+    key_matches, records_key, Came, PartAnswer, RecordsLoaded, Room,
+};
 use acui_source::workbench::goals::{
     self, GoalAct, GoalLine, GoalsAnswer, GoalsPage, GoalsRead, OrderEdit, OrderRule, ValueControl,
 };
@@ -24,7 +27,10 @@ use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, AccountEntry, Actions, ActionsView, PresetView, RulesView};
 use super::card::{self, CardView, Down, Schedule};
-use super::goals::{GoalPressed, GoalRequest, GoalsView, OrderDraft, WriteTarget, Writes};
+use super::goals::{
+    picker_view, GoalPressed, GoalRequest, GoalsView, OrderDraft, PickAnswer, PickRequest, Picker,
+    PickerView, Picks, WriteTarget, Writes,
+};
 use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
 };
@@ -176,6 +182,9 @@ struct PacksSlice {
 
 /// The Goals tab's read (Workflow #455, #463 V3: `GoalView`), of the one account `of` names while
 /// that tab shows, on the same terms as the list's. Another account, or none, starts it anew.
+/// Workflow #455 RR4b: beside it, the records its reads read last (`GoalsRead::records`), kept
+/// through a read whose records moved again as it read them, and the failure of the newest read of
+/// them, if it failed.
 #[derive(Default)]
 struct GoalsSlice {
     of: Option<String>,
@@ -183,6 +192,56 @@ struct GoalsSlice {
     read_at: Option<Instant>,
     error: Option<ClientFailure>,
     asked_at: Option<Instant>,
+    records: Option<RecordsLoaded>,
+    records_error: Option<ClientFailure>,
+}
+
+/// What a read of the goals said of their records (Workflow #455 RR4b), into `slice`, in owner
+/// epoch `epoch`, said on `landed`: records read take the place of those before; a failure, a page
+/// not in memory and a Runtime without the read let go of them, so that nothing of them shows, a
+/// failure being said with its codes; records that moved again as they were read leave what was
+/// read before, its failure too, until the next read.
+fn records_landed(
+    slice: &mut GoalsSlice,
+    records: PartAnswer<RecordsLoaded>,
+    epoch: &str,
+    landed: &mut GoalsLanded,
+) {
+    let failed = match records.came {
+        Came::Read(loaded) => {
+            slice.records = Some(loaded);
+            None
+        }
+        Came::Moved => {
+            landed.records_moved = true;
+            return;
+        }
+        Came::NotInMemory | Came::Refused { .. } => {
+            slice.records = None;
+            None
+        }
+        Came::Unsupported(code) => {
+            slice.records = None;
+            landed.records_unsupported = Some((epoch.to_owned(), code));
+            None
+        }
+        Came::Failed(failure) => {
+            slice.records = None;
+            Some(failure)
+        }
+    };
+    landed.records_news = match (failed, slice.records_error.take()) {
+        (Some(failure), Some(before)) if failure == before => {
+            slice.records_error = Some(failure);
+            News::Nothing
+        }
+        (Some(failure), _) => {
+            slice.records_error = Some(failure.clone());
+            News::Failed(failure)
+        }
+        (None, Some(_)) => News::Recovered,
+        (None, None) => News::Nothing,
+    };
 }
 
 /// Why the left column has no account to show, when no read has left one there.
@@ -285,6 +344,8 @@ pub struct Model {
     switches: Switches,
     goals: GoalsSlice,
     goal_writes: Writes,
+    /// What the records entries' pickers read (Workflow #455 RR4b), for the run.
+    goal_picks: Picks,
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
@@ -383,6 +444,12 @@ pub struct GoalsLanded {
     pub unsupported: Option<(String, &'static str)>,
     /// It is of the account the tab follows and of the owner epoch online, and it answered.
     pub counted: bool,
+    /// Workflow #455 RR4b, of its records: a failure and its end, as of the view; that its Runtime
+    /// has no such read (that owner epoch and the code); that they moved again as they were read,
+    /// so that what was read before stays.
+    pub records_news: News<ClientFailure>,
+    pub records_unsupported: Option<(String, &'static str)>,
+    pub records_moved: bool,
 }
 
 /// What a fact snapshot read changed, for what the event loop does next.
@@ -431,6 +498,7 @@ impl Model {
             switches: Switches::default(),
             goals: GoalsSlice::default(),
             goal_writes: Writes::default(),
+            goal_picks: Picks::default(),
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
             page: Page::Main,
@@ -1086,7 +1154,10 @@ impl Model {
 
     /// One read of the goals of `alias`, held to the account the tab follows and the owner epoch
     /// online as a read of the list is. One that says its Runtime has no such read says so
-    /// (`GoalsLanded::unsupported`), and is kept as the answer.
+    /// (`GoalsLanded::unsupported`), and is kept as the answer. Workflow #455 RR4b: of its records
+    /// (`records_landed`), what it read takes the place of what was read before, but for records
+    /// that moved again as they were read, which leave it; what the pickers kept under a tables'
+    /// sha256 the declaration moved from is let go of.
     pub fn apply_goals(
         &mut self,
         alias: &str,
@@ -1094,8 +1165,15 @@ impl Model {
         now: Instant,
     ) -> GoalsLanded {
         let fault_cleared = self.goals_fault.take().is_some();
-        let mut landed =
-            GoalsLanded { news: News::Nothing, fault_cleared, unsupported: None, counted: false };
+        let mut landed = GoalsLanded {
+            news: News::Nothing,
+            fault_cleared,
+            unsupported: None,
+            counted: false,
+            records_news: News::Nothing,
+            records_unsupported: None,
+            records_moved: false,
+        };
         let Link::Online { epoch, .. } = &self.link else {
             return landed;
         };
@@ -1103,9 +1181,10 @@ impl Model {
         if slice.of.as_deref() != Some(alias) {
             return landed;
         }
+        let mut dropped: Option<String> = None;
         landed.news = match read {
             Ok(read) if read.epoch != *epoch || read.alias != alias => News::Nothing,
-            Ok(read) => {
+            Ok(mut read) => {
                 if let GoalsAnswer::Unsupported { code } = &read.answer {
                     landed.unsupported = Some((epoch.clone(), *code));
                 }
@@ -1113,6 +1192,13 @@ impl Model {
                 // The read a write's answer waited for.
                 self.goal_writes.read(alias);
                 let recovered = slice.error.take().is_some();
+                if let Some(records) = read.records.take() {
+                    dropped = records.dropped.clone();
+                    records_landed(slice, records, epoch, &mut landed);
+                } else {
+                    slice.records = None;
+                    slice.records_error = None;
+                }
                 slice.value = Some(read);
                 slice.read_at = Some(now);
                 if recovered {
@@ -1127,6 +1213,9 @@ impl Model {
                 News::Failed(failure)
             }
         };
+        if let Some(sha) = dropped {
+            self.goal_picks.drop_moved(&sha);
+        }
         landed
     }
 
@@ -1174,9 +1263,10 @@ impl Model {
             Some(GoalsRead { answer: GoalsAnswer::Read(loaded), epoch, .. }) => {
                 let pack_title =
                     |package: &str| self.task_title(package, language).map(str::to_owned);
-                let page = loaded.page(language.outcome_tongue(), &pack_title);
+                let records = self.goals.records.as_ref();
+                let page = loaded.page(language.outcome_tongue(), &pack_title, records);
                 let writes = self.goal_writes.now(&instance.alias, epoch, page.writable());
-                GoalsView::Read(page, writes)
+                GoalsView::Read(page, writes, self.goals.records_error.clone())
             }
             None => GoalsView::Reading,
         }
@@ -1209,14 +1299,16 @@ impl Model {
             return None;
         }
         let pack_title = |package: &str| self.task_title(package, language).map(str::to_owned);
-        let page = loaded.page(language.outcome_tongue(), &pack_title);
+        let records = self.goals.records.as_ref();
+        let page = loaded.page(language.outcome_tongue(), &pack_title, records);
         Some((alias, epoch, page))
     }
 
     /// A press `act` on the line `key` of the Goals tab (Workflow #455 G2), shown in `language`:
     /// what it writes, of the page shown while its controls can be pressed (`Writes::now`), as
-    /// `goals::press` decides it, naming the page's version; asked first when it loses what the
-    /// page cannot set back.
+    /// `goals::press_on` decides it, naming the page's version (Workflow #455 RR4b: the records
+    /// read's, of a records entry's line or a record's, `GoalsPage::version_of`); asked first when
+    /// it loses what the page cannot set back.
     pub fn goal_pressed(&mut self, key: &str, act: &GoalAct, language: Language) -> GoalPressed {
         let Some((alias, epoch, page)) = self.goals_page_now(Instant::now(), language) else {
             return GoalPressed::Nothing;
@@ -1224,11 +1316,14 @@ impl Model {
         if !self.goal_writes.now(&alias, &epoch, page.writable()).enabled {
             return GoalPressed::Nothing;
         }
-        let Some(press) = page.line(key).and_then(|line| goals::press(line, act)) else {
+        let Some(line) = page.line(key) else {
             return GoalPressed::Nothing;
         };
-        let target =
-            WriteTarget { key: key.to_owned(), write: press.write, expected: page.version, epoch };
+        let expected = page.version_of(line);
+        let Some(press) = goals::press_on(&page, key, act) else {
+            return GoalPressed::Nothing;
+        };
+        let target = WriteTarget { key: key.to_owned(), write: press.write, expected, epoch };
         match press.asks {
             Some(loses) => {
                 self.goal_writes.ask(&alias, target, act.clone(), loses);
@@ -1268,8 +1363,8 @@ impl Model {
                     return None;
                 }
             }
-            let press = goals::press(line, act)?;
-            Some((press, page.version))
+            let press = goals::press_on(&page, key, act)?;
+            Some((press, page.version_of(line)))
         });
         let request = self.goal_writes.confirm(&alias, &epoch, again)?;
         Some((alias, request))
@@ -1374,6 +1469,134 @@ impl Model {
         if let Some(alias) = self.goals_wanted() {
             self.goal_writes.searched(&alias, key, text);
         }
+    }
+
+    /// The picker of a records entry opened on the line `at` of the Goals tab (Workflow #455
+    /// RR4b), shown in `language`, at `now_ms`: "add a character" on an entry's line with room for
+    /// one, "change" on a record's line that can be changed, of the page shown while its controls
+    /// can be pressed; its character chosen at once for "change". It reads under the tables'
+    /// sha256 of the records read, options kept whose lists have expired being let go of; what its
+    /// last read came to goes. The read it needs now, if any (`Picks::next`).
+    pub fn goal_picker_open(
+        &mut self,
+        at: &str,
+        language: Language,
+        now_ms: u64,
+    ) -> Option<PickRequest> {
+        let (alias, epoch, page) = self.goals_page_now(Instant::now(), language)?;
+        if !self.goal_writes.now(&alias, &epoch, page.writable()).enabled {
+            return None;
+        }
+        let (entry, key) = match page.line(at)? {
+            GoalLine::Records(line) if line.room == Room::Open => (line.name.clone(), None),
+            GoalLine::Record(line) if line.changeable => {
+                (line.entry.clone(), Some(line.key.clone()))
+            }
+            _ => return None,
+        };
+        let Some(GoalLine::Records(block)) = page.line(&records_key(&entry)) else {
+            return None;
+        };
+        let table = block.table_name().to_owned();
+        let records = self.goals.records.as_ref();
+        let sha = records.and_then(RecordsLoaded::tables_sha256).map(str::to_owned);
+        self.goal_picks.forget_stale(&alias, &entry, &sha, now_ms);
+        self.goal_picks.forget_said(&alias);
+        let picker = Picker {
+            at: at.to_owned(),
+            entry,
+            table,
+            sha,
+            search: String::new(),
+            all: false,
+            key,
+            choices: BTreeMap::new(),
+        };
+        self.goal_writes.set_picker(&alias, Some(picker));
+        self.goal_pick_next()
+    }
+
+    /// The read the picker of the account the Goals tab follows needs now, if any.
+    fn goal_pick_next(&mut self) -> Option<PickRequest> {
+        let alias = self.goals_wanted()?;
+        let picker = self.goal_writes.picker(&alias)?;
+        self.goal_picks.next(&alias, picker)
+    }
+
+    /// The picker of the account the Goals tab follows changed by `edit`, while it is open: what is
+    /// typed, the switch of every character, a lane's choice, another character. It writes nothing.
+    pub fn goal_picker_edit(&mut self, edit: impl FnOnce(&mut Picker)) {
+        if let Some(alias) = self.goals_wanted() {
+            if let Some(picker) = self.goal_writes.picker_mut(&alias) {
+                edit(picker);
+            }
+        }
+    }
+
+    /// The picker of the account the Goals tab follows closed.
+    pub fn goal_picker_close(&mut self) {
+        if let Some(alias) = self.goals_wanted() {
+            self.goal_writes.set_picker(&alias, None);
+        }
+    }
+
+    /// The character at `index` among those the picker lists now (`key_matches`, in `language`)
+    /// chosen: its lanes' choices start anew, what the last read came to goes, and the read it
+    /// needs now, if any.
+    pub fn goal_picker_key(&mut self, index: usize, language: Language) -> Option<PickRequest> {
+        let alias = self.goals_wanted()?;
+        let picker = self.goal_writes.picker(&alias)?;
+        let options = self.goal_picks.options(&alias, &picker.entry, &picker.sha)?;
+        let table = options.table(&picker.table, language.outcome_tongue());
+        let (found, _) = key_matches(&table.keys, &picker.search, picker.all);
+        let key = table.keys.get(*found.get(index)?)?.key.clone();
+        let picker = self.goal_writes.picker_mut(&alias)?;
+        picker.key = Some(key);
+        picker.choices.clear();
+        self.goal_picks.forget_said(&alias);
+        self.goal_pick_next()
+    }
+
+    /// A picker's read under `ticket` landed with `answer`: kept, or said on its picker
+    /// (`Picks::take`); the request it answered and the log's lines of it, and the read the picker
+    /// shown needs next. None when it is not the read out.
+    pub fn goal_pick_landed(
+        &mut self,
+        ticket: u64,
+        answer: PickAnswer,
+    ) -> Option<(PickRequest, Vec<String>, Option<PickRequest>)> {
+        let alias = self.goal_picks.out_alias(ticket)?;
+        let picker = self.goal_writes.picker_mut(&alias);
+        let (request, lines) = self.goal_picks.take(ticket, answer, picker)?;
+        let next = self.goal_pick_next();
+        Some((request, lines, next))
+    }
+
+    /// The picker of the account the Goals tab follows, as it shows on the page shown now, in
+    /// `language` (`goals::picker_view`): none while the page does not show, or no picker is open
+    /// on a records entry it has.
+    pub fn goal_picker_view(&self, language: Language) -> Option<PickerView> {
+        let (alias, epoch, page) = self.goals_page_now(Instant::now(), language)?;
+        let picker = self.goal_writes.picker(&alias)?;
+        let Some(GoalLine::Records(block)) = page.line(&records_key(&picker.entry)) else {
+            return None;
+        };
+        let enabled = self.goal_writes.now(&alias, &epoch, page.writable()).enabled;
+        let tongue = language.outcome_tongue();
+        Some(picker_view(picker, block, &self.goal_picks, &alias, enabled, tongue))
+    }
+
+    /// What the picker's "save" presses, on the line it shows under, while it makes a record.
+    pub fn goal_picker_put(&self, language: Language) -> Option<(String, GoalAct)> {
+        let view = self.goal_picker_view(language)?;
+        if view.unchanged {
+            return None;
+        }
+        Some((view.at, view.put?))
+    }
+
+    pub fn goal_picks_mut(&mut self) -> &mut Picks {
+        &mut self.goal_picks
     }
 
     pub fn goal_writes_mut(&mut self) -> &mut Writes {

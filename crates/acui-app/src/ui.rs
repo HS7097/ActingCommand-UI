@@ -709,6 +709,60 @@ fn install_workbench(window: &WorkbenchWindow) {
             workbench::goals::order_searched(&ui, &key, &text);
         }
     });
+    // The records entries (Workflow #455 RR4b), by the line's key: "add a character" and "change"
+    // open the picker under their line, "remove" writes at once; then the picker open: its search
+    // field, its switch of every character, a character picked, a lane's row picked, "another
+    // character", "save", "cancel".
+    window.on_goal_records_add(|key| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_opened(&ui, &key);
+        }
+    });
+    window.on_goal_record_change(|key| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_opened(&ui, &key);
+        }
+    });
+    window.on_goal_record_remove(|key| {
+        if let Some(ui) = current() {
+            workbench::goals::record_removed(&ui, &key);
+        }
+    });
+    window.on_goal_picker_searched(|text| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_searched(&ui, &text);
+        }
+    });
+    window.on_goal_picker_all(|all| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_all(&ui, all);
+        }
+    });
+    window.on_goal_picker_key(|index| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_key(&ui, index);
+        }
+    });
+    window.on_goal_picker_lane(|lane, row| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_lane(&ui, lane, row);
+        }
+    });
+    window.on_goal_picker_back(|| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_back(&ui);
+        }
+    });
+    window.on_goal_picker_saved(|| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_saved(&ui);
+        }
+    });
+    window.on_goal_picker_cancelled(|| {
+        if let Some(ui) = current() {
+            workbench::goals::picker_cancelled(&ui);
+        }
+    });
     window.on_rules_toggled(|| {
         if let Some(ui) = current() {
             workbench::actions::rules_toggled(&ui);
@@ -1073,6 +1127,14 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_goals_order_options_label(labels.goals_order_options_label.into());
     global.set_goals_order_gone_mark(labels.goals_order_gone_mark.into());
     global.set_goals_none_chosen(labels.goals_none_chosen.into());
+    global.set_goals_records_add(labels.goals_records_add.into());
+    global.set_goals_records_change(labels.goals_records_change.into());
+    global.set_goals_records_remove(labels.goals_records_remove.into());
+    global.set_goals_picker_search(labels.goals_picker_search.into());
+    global.set_goals_picker_all(labels.goals_picker_all.into());
+    global.set_goals_picker_keys_label(labels.goals_picker_keys_label.into());
+    global.set_goals_picker_save(labels.goals_picker_save.into());
+    global.set_goals_picker_back(labels.goals_picker_back.into());
     global.set_refresh_frame(labels.refresh_frame.into());
     global.set_refresh_cost(labels.refresh_cost.into());
     global.set_rescue_check(labels.rescue_check.into());

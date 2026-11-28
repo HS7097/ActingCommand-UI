@@ -25,6 +25,10 @@ use acui_source::workbench::backends::{
     SwitchVersion,
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
+use acui_source::workbench::goal_records::{
+    at_or_before, key_matches, KeyHeld, LaneLine, LaneUnknown, ListUnknown, RecordLine,
+    RecordsLine, Requirement, Room, APPLICATION_RECORDS,
+};
 use acui_source::workbench::goals::{
     amount as goal_amount, largest, newer_than_this_console, number as goal_number,
     order_matches, order_problem, order_room, whole_time, AmountProblem, Carried, ClearOffer,
@@ -54,7 +58,7 @@ use super::actions::{
     StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{reason_logged, Band, CardView, Down, Line, ReasonClass};
-use super::goals::{GoalSaid, GoalsView, WritesNow};
+use super::goals::{GoalSaid, GoalsView, PickSaid, PickerView, WritesNow};
 use super::model::{Fault, Page, RightTab};
 use super::picture::{
     DimWhy, Doing, EmptyWhy, Offline, Origin, OverlayView, PictureView, RefreshHold, RefreshWhyNot,
@@ -78,8 +82,8 @@ use crate::report;
 use crate::strings::{fill, outcome_informs, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, GoalControl, GoalListData, GoalOffer, GoalPick, GoalRowData,
-    GoalRowKind, IdlePick, OverlayItem,
+    AccountCard, BackendGroupItem, GoalControl, GoalLaneChoice, GoalListData, GoalOffer, GoalPick,
+    GoalPickRow, GoalPickerData, GoalRowData, GoalRowKind, IdlePick, OverlayItem,
     PresetChoice, QuietData, QuietEditor, QuietLine, RescueBar, RescueOp, RulesData, SettingItem,
     StatusTone, TargetItem, TaskListData, TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab,
     WorkbenchWindow,
@@ -3005,7 +3009,8 @@ pub fn tasks(ui: &Ui) {
 /// read of the targets stored, when it was read, and under them the old form's note and the
 /// validity. Each line as `goal_row` says, with its controls (G2). A choice's options keep the
 /// list the window shows of them while their words do not change, so a paint closes no open box.
-/// Under another tab the list holds nothing.
+/// Workflow #455 RR4b: the picker of a records entry, under the line it is open on
+/// (`goal_picker_data`). Under another tab the list holds nothing.
 fn goals(ui: &Ui, window: &WorkbenchWindow, labels: &Labels, tab: RightTab) {
     let view = match tab {
         RightTab::Goals => Some(ui.model.borrow().goals_view(Instant::now(), labels.tongue)),
@@ -3022,6 +3027,20 @@ fn goals(ui: &Ui, window: &WorkbenchWindow, labels: &Labels, tab: RightTab) {
     sync(window.get_goal_rows(), rows, |rows| window.set_goal_rows(rows));
     if window.get_goals() != data {
         window.set_goals(data);
+    }
+    let picker = match (tab, &view) {
+        (RightTab::Goals, Some(GoalsView::Read(..))) => {
+            ui.model.borrow().goal_picker_view(labels.tongue)
+        }
+        _ => None,
+    };
+    let old_picker = window.get_goal_picker();
+    let picker = match &picker {
+        Some(picker) => goal_picker_data(labels, picker, &old_picker),
+        None => GoalPickerData::default(),
+    };
+    if old_picker != picker {
+        window.set_goal_picker(picker);
     }
 }
 
@@ -3056,7 +3075,9 @@ fn goals_data(
         GoalsView::Unsupported(code) => {
             instead(fill(labels.goals_unsupported, &[*code]), false, true)
         }
-        GoalsView::Read(page, writes) => return goals_page(ui, labels, page, writes, old),
+        GoalsView::Read(page, writes, records_failed) => {
+            return goals_page(ui, labels, page, writes, records_failed.as_ref(), old)
+        }
     };
     (data, Vec::new())
 }
@@ -3085,12 +3106,16 @@ fn failure_codes_text(failure: &ClientFailure) -> String {
 /// but on a page that lists nothing. Under them, while the page lists: the old form's note, and
 /// the stored targets' validity (for a per-target record only once every target expired, each
 /// target's own being on its line; "none set" only while the page has a resource line). In amber,
-/// once, a Runtime that takes no writes of goals: the page only shows.
+/// once, a Runtime that takes no writes of goals: the page only shows. Workflow #455 RR4b, in amber
+/// on a page that lists: the stored records that do not read, which a clear of an entry ends
+/// (`contracts/runtime-interface.md` 776-780 at aa6765dd); and the read of the records that failed
+/// (`records_failed`), with its codes, the page shown without them.
 fn goals_page(
     ui: &Ui,
     labels: &Labels,
     page: &GoalsPage,
     writes: &WritesNow,
+    records_failed: Option<&ClientFailure>,
     old: &dyn Fn(usize) -> Option<GoalRowData>,
 ) -> (GoalListData, Vec<GoalRowData>) {
     let document = match &page.stored {
@@ -3147,6 +3172,12 @@ fn goals_page(
     if listed && writes.unsupported {
         notice.push(labels.goals_write_unsupported.to_owned());
     }
+    if page.records_unreadable {
+        notice.push(labels.goals_records_unreadable.to_owned());
+    }
+    if let (true, Some(failure)) = (listed, records_failed) {
+        notice.push(fill(labels.goals_records_failed, &[&failure_codes_text(failure)]));
+    }
     if listed && page.no_catalog {
         said.push(labels.goals_no_catalog.to_owned());
     }
@@ -3189,7 +3220,7 @@ fn goals_page(
             .enumerate()
             .map(|(at, line)| {
                 let row = goal_row(labels, line);
-                goal_controls(ui, labels, row, line, writes, old(at).as_ref())
+                goal_controls(ui, labels, row, line, page, writes, old(at).as_ref())
             })
             .collect()
     } else {
@@ -3207,13 +3238,17 @@ fn goals_page(
 /// not read, but where no bound package offers it, that this console cannot change it here; the
 /// clear it has; an other target the Lab alone can clear, so said in grey, as is a value no longer
 /// offered, an other target or a variable's value whose name another line has, which no clear here
-/// is sure to reach. Then what its last press came to and the question a press asks, if either.
-/// All of them are off while the page takes no press (`WritesNow::enabled`).
+/// is sure to reach. Workflow #455 RR4b: a records entry's "add a character" while it has room,
+/// and its clear where one is offered (a name no records entry declares, or the stored records
+/// unreadable); a record's "change" and "remove" while its entry takes them. Then what its last
+/// press came to and the question a press asks, if either. All of them are off while the page
+/// takes no press (`WritesNow::enabled`).
 fn goal_controls(
     ui: &Ui,
     labels: &Labels,
     mut row: GoalRowData,
     line: &GoalLine,
+    page: &GoalsPage,
     writes: &WritesNow,
     old: Option<&GoalRowData>,
 ) -> GoalRowData {
@@ -3314,6 +3349,13 @@ fn goal_controls(
             row.clear_label = labels.goals_clear.into();
         }
         GoalLine::OtherTarget(_) => notes.push(labels.goals_lab_only.to_owned()),
+        GoalLine::Records(records) => {
+            row.records_add = records.room == Room::Open;
+            if records.clearable() {
+                row.clear_label = labels.goals_clear.into();
+            }
+        }
+        GoalLine::Record(record) => row.record_actions = record.changeable,
         GoalLine::Heading(_)
         | GoalLine::Note { .. }
         | GoalLine::Tier(_)
@@ -3356,7 +3398,7 @@ fn goal_controls(
         row.note = all.join("\n").into();
     }
     if let Some(said) = writes.said.get(&key) {
-        let (text, tone) = goal_said_text(ui, labels, said, line);
+        let (text, tone) = goal_said_text(ui, labels, said, line, page);
         row.said = text.into();
         row.said_failed = matches!(tone, SaidTone::Failed);
         row.said_warning = matches!(tone, SaidTone::Warning);
@@ -3686,8 +3728,14 @@ fn carried_text(labels: &Labels, carried: Carried) -> String {
 }
 
 /// What a line's last press came to, in words, with when it landed: a refused value in the words of
-/// its `goal_problem`, of `line`'s rule (G3), another refusal by its codes.
-fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid, line: &GoalLine) -> (String, SaidTone) {
+/// its `goal_problem`, of `line`'s rule (G3) on `page`, another refusal by its codes.
+fn goal_said_text(
+    ui: &Ui,
+    labels: &Labels,
+    said: &GoalSaid,
+    line: &GoalLine,
+    page: &GoalsPage,
+) -> (String, SaidTone) {
     let at = |template: &str, at_ms: u64| fill(template, &[&format_second(at_ms)]);
     match said {
         GoalSaid::Sending => (labels.goals_write_sending.to_owned(), SaidTone::Plain),
@@ -3696,7 +3744,7 @@ fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid, line: &GoalLine) ->
             (at(labels.goals_write_not_newer, *at_ms), SaidTone::Warning)
         }
         GoalSaid::Invalid { at_ms, invalid, item } => {
-            let words = invalid_text(ui, labels, invalid, item.as_deref(), line);
+            let words = invalid_text(ui, labels, invalid, item.as_deref(), line, page);
             (fill(labels.goals_write_invalid, &[&words, &format_second(*at_ms)]), SaidTone::Failed)
         }
         GoalSaid::Refused { at_ms, codes } => {
@@ -3735,46 +3783,34 @@ fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid, line: &GoalLine) ->
 /// whole number of the unit typed in); of an `integer` or a list refused by its rule, that the
 /// package's rule may have just changed and the page is read again (`WriteProblem::of_the_rule`,
 /// which `goals::Landing::said` reads again for); then the item a list's refusal points at
-/// (`item`, by its key as sent), by its option's title or its key.
+/// (`item`, by its key as sent), by its option's title or its key. Workflow #455 RR4b: of a records
+/// entry's line or a record's, the record a refusal points at, by its character's name on `page`,
+/// else by its key.
 fn invalid_text(
     ui: &Ui,
     labels: &Labels,
     invalid: &WriteInvalid,
     item: Option<&str>,
     line: &GoalLine,
+    page: &GoalsPage,
 ) -> String {
-    let words = match &invalid.problem {
-        WriteProblem::NameUnknown => labels.goals_problem_name_unknown,
-        WriteProblem::HoldsNoValue => labels.goals_problem_holds_no_value,
-        WriteProblem::TierNotBuilt => labels.goals_problem_tier_not_built,
-        WriteProblem::RemedyParameter => labels.goals_problem_remedy_parameter,
-        WriteProblem::VariableNotApplying => labels.goals_problem_variable_not_applying,
-        WriteProblem::NotOffered => labels.goals_problem_not_offered,
-        WriteProblem::ValueNotJson => labels.goals_problem_value_not_json,
-        WriteProblem::WrongType => labels.goals_problem_wrong_type,
-        WriteProblem::OutOfRange => labels.goals_problem_out_of_range,
-        WriteProblem::OffStep => labels.goals_problem_off_step,
-        WriteProblem::NotAnOption => labels.goals_problem_not_an_option,
-        WriteProblem::KeyRepeated => labels.goals_problem_key_repeated,
-        WriteProblem::CountOutOfRange => labels.goals_problem_count_out_of_range,
-        WriteProblem::ValueTooLarge => labels.goals_problem_value_too_large,
-        WriteProblem::PoolNotTargetable => labels.goals_problem_pool_not_targetable,
-        WriteProblem::PoolUnvalued => labels.goals_problem_pool_unvalued,
-        WriteProblem::DeadlineUnsupported => labels.goals_problem_deadline_unsupported,
-        WriteProblem::ValueNotSet => labels.goals_problem_value_not_set,
-        WriteProblem::RecordUnreadable => labels.goals_problem_record_unreadable,
-        WriteProblem::RecordOutOfLimits => labels.goals_problem_record_out_of_limits,
-        WriteProblem::NotCheckedYet => labels.goals_problem_not_checked_yet,
-        WriteProblem::RootFailing => labels.goals_problem_root_failing,
-        WriteProblem::NoSchedule => labels.goals_problem_no_schedule,
-        WriteProblem::RuleGiven => labels.goals_problem_rule_given,
-        WriteProblem::Other(word) => {
-            let line = format!("no words for the goal_problem word {word:?}: shown by its code");
-            if ui.model.borrow_mut().first_told(&line) {
-                report::log(TASKS_LOG, &line);
-            }
-            return fill(labels.goals_problem_other, &[word.as_str()]);
+    let Some(words) = problem_words(labels, &invalid.problem) else {
+        let word = match &invalid.problem {
+            WriteProblem::Other(word) => word.as_str(),
+            _ => "",
+        };
+        let line = format!("no words for the goal_problem word {word:?}: shown by its code");
+        if ui.model.borrow_mut().first_told(&line) {
+            report::log(TASKS_LOG, &line);
         }
+        return fill(labels.goals_problem_other, &[word]);
+    };
+    // Of the records, a stored record that does not read is ended by a clear of an entry here
+    // (`contracts/runtime-interface.md` 776-780 at aa6765dd), not by the Lab.
+    let records = matches!(line, GoalLine::Records(_) | GoalLine::Record(_));
+    let words = match (&invalid.problem, records) {
+        (WriteProblem::RecordUnreadable, true) => labels.goals_records_unreadable,
+        _ => words,
     };
     // A bound with its unit, within the sentence: the bytes a value's text holds, the targets or
     // entries a record holds.
@@ -3812,16 +3848,63 @@ fn invalid_text(
         sentence = fill(labels.goals_problem_with, &[&sentence, labels.goals_rule_changed]);
     }
     if let Some(item) = item {
-        let title = match control {
-            Some(ValueControl::Ordered { rule, .. }) => {
+        let entry = match line {
+            GoalLine::Records(records) => Some(records.name.as_str()),
+            GoalLine::Record(record) => Some(record.entry.as_str()),
+            _ => None,
+        };
+        let title = match (control, entry) {
+            (Some(ValueControl::Ordered { rule, .. }), _) => {
                 rule.option(item).map_or(item, |option| option.title.as_str())
             }
+            (_, Some(entry)) => record_name(page, entry, item).unwrap_or(item),
             _ => item,
         };
         let named = fill(labels.goals_problem_item, &[title]);
         sentence = fill(labels.goals_problem_with, &[&sentence, &named]);
     }
     sentence
+}
+
+/// The words of a `goal_problem` word; none of a word of a newer Runtime, said by its code.
+fn problem_words(labels: &Labels, problem: &WriteProblem) -> Option<&'static str> {
+    Some(match problem {
+        WriteProblem::NameUnknown => labels.goals_problem_name_unknown,
+        WriteProblem::HoldsNoValue => labels.goals_problem_holds_no_value,
+        WriteProblem::TierNotBuilt => labels.goals_problem_tier_not_built,
+        WriteProblem::RemedyParameter => labels.goals_problem_remedy_parameter,
+        WriteProblem::VariableNotApplying => labels.goals_problem_variable_not_applying,
+        WriteProblem::NotOffered => labels.goals_problem_not_offered,
+        WriteProblem::ValueNotJson => labels.goals_problem_value_not_json,
+        WriteProblem::WrongType => labels.goals_problem_wrong_type,
+        WriteProblem::OutOfRange => labels.goals_problem_out_of_range,
+        WriteProblem::OffStep => labels.goals_problem_off_step,
+        WriteProblem::NotAnOption => labels.goals_problem_not_an_option,
+        WriteProblem::KeyRepeated => labels.goals_problem_key_repeated,
+        WriteProblem::CountOutOfRange => labels.goals_problem_count_out_of_range,
+        WriteProblem::ValueTooLarge => labels.goals_problem_value_too_large,
+        WriteProblem::PoolNotTargetable => labels.goals_problem_pool_not_targetable,
+        WriteProblem::PoolUnvalued => labels.goals_problem_pool_unvalued,
+        WriteProblem::DeadlineUnsupported => labels.goals_problem_deadline_unsupported,
+        WriteProblem::ValueNotSet => labels.goals_problem_value_not_set,
+        WriteProblem::RecordUnreadable => labels.goals_problem_record_unreadable,
+        WriteProblem::RecordOutOfLimits => labels.goals_problem_record_out_of_limits,
+        WriteProblem::NotCheckedYet => labels.goals_problem_not_checked_yet,
+        WriteProblem::RootFailing => labels.goals_problem_root_failing,
+        WriteProblem::NoSchedule => labels.goals_problem_no_schedule,
+        WriteProblem::RuleGiven => labels.goals_problem_rule_given,
+        WriteProblem::Other(_) => return None,
+    })
+}
+
+/// The name of the character of the record of `key` in the records entry `entry` on `page`.
+fn record_name<'a>(page: &'a GoalsPage, entry: &str, key: &str) -> Option<&'a str> {
+    page.lines.iter().find_map(|line| match line {
+        GoalLine::Record(record) if record.entry == entry && record.key == key => {
+            record.name.as_deref()
+        }
+        _ => None,
+    })
 }
 
 /// One line of the Goals tab, at most three layers: its title, the value now, and under it amber
@@ -3888,14 +3971,378 @@ fn goal_row(labels: &Labels, line: &GoalLine) -> GoalRowData {
             note: fill(labels.goals_closed, &[&closed_text(labels, why)]).into(),
             ..GoalRowData::default()
         },
+        GoalLine::Records(records) => records_row(labels, records),
+        GoalLine::Record(record) => record_row(labels, record),
     }
 }
 
 fn group_title(labels: &Labels, group: Group) -> &'static str {
     match group {
         Group::NoLongerOffered => labels.goals_group_orphans,
+        Group::RecordsUndeclared => labels.goals_group_records_undeclared,
         Group::OtherTargets => labels.goals_group_other_targets,
         Group::NotTargetable => labels.goals_group_closed,
+    }
+}
+
+/// A records entry (Workflow #455 RR4b): its title, else its name (of a name no records entry
+/// declares, the only one it has); how many characters it holds, of how many at most; in amber that
+/// its table is not available here, so none is added; in grey its help, that no entry declares it
+/// any more, and why no character can be added (the entry, or the instance, full). Greyed while its
+/// table does not apply.
+fn records_row(labels: &Labels, line: &RecordsLine) -> GoalRowData {
+    let title = line.title.clone().unwrap_or_else(|| line.name.clone());
+    let total = line.total.to_string();
+    let value = match line.max {
+        Some(max) => fill(labels.goals_records_count, &[&total, &max.to_string()]),
+        None => fill(labels.goals_records_count_plain, &[&total]),
+    };
+    let mut warnings: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(help) = &line.help {
+        notes.push(help.clone());
+    }
+    if line.declared && !line.applies {
+        warnings.push(labels.goals_records_not_applied.to_owned());
+    }
+    if !line.declared {
+        notes.push(labels.goals_records_undeclared.to_owned());
+    }
+    match line.room {
+        Room::EntryFull => notes.push(labels.goals_records_full.to_owned()),
+        Room::AllFull => {
+            notes.push(fill(labels.goals_records_full_all, &[&APPLICATION_RECORDS.to_string()]));
+        }
+        Room::Open | Room::Closed => {}
+    }
+    GoalRowData {
+        kind: GoalRowKind::Entry,
+        title: title.into(),
+        greyed: !line.applies,
+        value: value.into(),
+        warning: warnings.join("\n").into(),
+        note: notes.join("\n").into(),
+        ..GoalRowData::default()
+    }
+}
+
+/// One stored record, under its entry: who, by the character's name or else its key; each lane on
+/// a line of its own, in the order the Runtime gives (`lane_text`); in amber why it counts for
+/// nothing, by its word (`record_problem_text`), and that the character is not held; in grey that
+/// whether it is held is not known (and why), that it is shown by its ids alone, and who set it.
+/// Greyed while it is not applied.
+fn record_row(labels: &Labels, line: &RecordLine) -> GoalRowData {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    if !line.applied {
+        let why = record_problem_text(labels, line.problem.as_ref());
+        warnings.push(fill(labels.goals_record_not_counted, &[&why]));
+    }
+    match &line.held {
+        Some(KeyHeld::NotHeld) => warnings.push(labels.goals_record_not_held.to_owned()),
+        Some(KeyHeld::Unknown(None)) => notes.push(labels.goals_record_held_unknown.to_owned()),
+        Some(KeyHeld::Unknown(Some(why))) => {
+            let why = list_unknown_text(labels, why);
+            notes.push(fill(labels.goals_record_held_unknown_why, &[&why]));
+        }
+        Some(KeyHeld::Held) | None => {}
+    }
+    if line.ids_only {
+        notes.push(labels.goals_record_ids_only.to_owned());
+    }
+    notes.push(set_by_text(labels, line.set));
+    let lanes: Vec<String> = line.lanes.iter().map(|lane| lane_text(labels, lane)).collect();
+    GoalRowData {
+        kind: GoalRowKind::Entry,
+        title: line.name.clone().unwrap_or_else(|| line.key.clone()).into(),
+        greyed: !line.applied,
+        nested: true,
+        value: lanes.join("\n").into(),
+        warning: warnings.join("\n").into(),
+        note: notes.join("\n").into(),
+        ..GoalRowData::default()
+    }
+}
+
+/// Why a record counts for nothing, by the needs' own word: the words of a records entry's for
+/// those a record has, the page's for the others, a word of a newer Runtime by its code (which
+/// the log hears of once, `super::record_problems`), the Runtime's silence as such.
+fn record_problem_text(labels: &Labels, problem: Option<&WriteProblem>) -> String {
+    let Some(problem) = problem else {
+        return labels.goals_unapplied_unstated.to_owned();
+    };
+    let words = match problem {
+        WriteProblem::NameUnknown => labels.goals_record_problem_name_unknown,
+        WriteProblem::NotAnOption => labels.goals_record_problem_not_an_option,
+        WriteProblem::OutOfRange => labels.goals_record_problem_out_of_range,
+        WriteProblem::WrongType => labels.goals_record_problem_wrong_type,
+        WriteProblem::KeyRepeated => labels.goals_record_problem_key_repeated,
+        WriteProblem::Other(word) => return fill(labels.goals_problem_other, &[word.as_str()]),
+        other => problem_words(labels, other).unwrap_or(labels.goals_unapplied_unstated),
+    };
+    words.to_owned()
+}
+
+/// One lane of a record: `<column>[ · <sub>]: <now> → <target>`, the position now being, where
+/// the Runtime gives none, why it is not known (`lane_unknown_text`), or not known; of a lane only
+/// a prerequisite raises, where it raises it to, or that it raises it; then where a prerequisite
+/// takes it beyond its target, and each condition met in the game a step of it names.
+fn lane_text(labels: &Labels, lane: &LaneLine) -> String {
+    let name = match &lane.sub {
+        Some(sub) => fill(labels.goals_record_lane_sub, &[&lane.column, sub]),
+        None => lane.column.clone(),
+    };
+    let now = match (&lane.current, &lane.unknown) {
+        (Some(current), _) => current.clone(),
+        (None, Some(unknown)) => lane_unknown_text(labels, unknown),
+        (None, None) => labels.goals_record_now_none.to_owned(),
+    };
+    let mut parts = vec![match (&lane.target, &lane.raised_to) {
+        (Some(target), _) => fill(labels.goals_record_lane, &[&name, &now, target]),
+        (None, Some(raised)) => fill(labels.goals_record_lane_raised, &[&name, &now, raised]),
+        (None, None) => fill(labels.goals_record_lane_raised_only, &[&name, &now]),
+    }];
+    if let (Some(_), Some(raised)) = (&lane.target, &lane.raised_to) {
+        parts.push(fill(labels.goals_record_raised_to, &[raised]));
+    }
+    for condition in &lane.conditions {
+        parts.push(fill(labels.goals_record_condition, &[condition]));
+    }
+    parts.join(labels.goals_record_separator)
+}
+
+/// Why a character's position on a lane is not known, by the walk's note.
+fn lane_unknown_text(labels: &Labels, unknown: &LaneUnknown) -> String {
+    match unknown {
+        LaneUnknown::Progress(None) => labels.goals_record_unknown_progress.to_owned(),
+        LaneUnknown::Progress(Some(why)) => {
+            fill(labels.goals_record_unknown_progress_why, &[&list_unknown_text(labels, why)])
+        }
+        LaneUnknown::RowMissing => labels.goals_record_unknown_row_missing.to_owned(),
+        LaneUnknown::ReadingMissing(Some(reading)) => {
+            fill(labels.goals_record_unknown_reading_missing, &[reading])
+        }
+        LaneUnknown::ReadingMissing(None) => {
+            labels.goals_record_unknown_reading_missing_unnamed.to_owned()
+        }
+        LaneUnknown::PositionUnknown => labels.goals_record_unknown_position.to_owned(),
+        LaneUnknown::Other(code) => fill(labels.goals_why_other, &[code]),
+    }
+}
+
+/// Why a list gives no reading, by its `unknown_reason` word; one of a newer Runtime by its code.
+fn list_unknown_text(labels: &Labels, unknown: &ListUnknown) -> String {
+    match unknown {
+        ListUnknown::Missing => labels.goals_list_unknown_missing.to_owned(),
+        ListUnknown::Expired => labels.goals_list_unknown_expired.to_owned(),
+        ListUnknown::LowConfidence => labels.goals_list_unknown_low_confidence.to_owned(),
+        ListUnknown::TypeMismatch => labels.goals_list_unknown_type_mismatch.to_owned(),
+        ListUnknown::Other(word) => fill(labels.goals_why_other, &[word]),
+    }
+}
+
+/// The picker of a records entry (Workflow #455 RR4b), in words, under the line it is open on
+/// (`at`), from its view: in bold what it does (choose a character, or raise the one chosen to
+/// what); what its read is doing or came to, red when it failed; then either the characters its
+/// search finds (held ones only, but with the switch), each with its class, its held state and
+/// whether it is recorded, and how many more, or that none is found; or, of the character chosen,
+/// each of its lanes with its position now and its choices ("no target", then each position, those
+/// at or before the one now greyed), and in grey what its column requires first; why "save" cannot
+/// be pressed, and whether it can. The inner lists keep the models the window shows, a row at a
+/// time (`kept`).
+fn goal_picker_data(labels: &Labels, view: &PickerView, old: &GoalPickerData) -> GoalPickerData {
+    let title_of = |key: &str| -> String {
+        let option = view.table.as_ref().and_then(|table| table.key(key));
+        option.and_then(|option| option.name.clone()).unwrap_or_else(|| key.to_owned())
+    };
+    let (status, status_failed) = match (&view.said, view.reading) {
+        (Some(said), _) => (pick_said_text(labels, said), true),
+        (None, true) => (labels.goals_picker_reading.to_owned(), false),
+        (None, false) => (String::new(), false),
+    };
+    let mut data = GoalPickerData {
+        at: view.at.as_str().into(),
+        status: status.into(),
+        status_failed,
+        enabled: view.enabled,
+        search_text: view.search.as_str().into(),
+        all: view.all,
+        ..GoalPickerData::default()
+    };
+    data.choosing = view.key.is_none();
+    match (view.key.as_deref(), &view.table) {
+        (None, Some(table)) => {
+            data.title = labels.goals_picker_choose.into();
+            let (found, more) = key_matches(&table.keys, &view.search, view.all);
+            let rows: Vec<GoalPickRow> = found
+                .iter()
+                .filter_map(|at| table.keys.get(*at))
+                .map(|key| {
+                    let mut marks = vec![key.class.clone()];
+                    marks.extend(held_mark(labels, &key.held).map(str::to_owned));
+                    if view.recorded.contains(&key.key) {
+                        marks.push(labels.goals_picker_recorded_mark.to_owned());
+                    }
+                    GoalPickRow {
+                        title: key.name.clone().unwrap_or_else(|| key.key.clone()).into(),
+                        mark: marks.join(labels.goals_picker_mark_separator).into(),
+                        greyed: key.held != KeyHeld::Held,
+                    }
+                })
+                .collect();
+            data.keys_more = if more > 0 {
+                fill(labels.goals_order_more, &[&more.to_string()]).into()
+            } else if rows.is_empty() && view.search.trim().is_empty() && !view.all {
+                labels.goals_picker_none_held.into()
+            } else if rows.is_empty() {
+                labels.goals_picker_no_match.into()
+            } else {
+                SharedString::new()
+            };
+            data.keys = kept(Some(&old.keys), rows);
+        }
+        (None, None) => data.title = labels.goals_picker_choose.into(),
+        (Some(key), Some(table)) => {
+            data.title = fill(labels.goals_picker_for, &[&title_of(key)]).into();
+            let Some(option) = table.key(key) else {
+                data.problem = labels.goals_picker_gone.into();
+                return data;
+            };
+            let mut marks = vec![option.class.clone()];
+            marks.extend(held_mark(labels, &option.held).map(str::to_owned));
+            data.key_title = marks.join(labels.goals_picker_mark_separator).into();
+            let lanes: Vec<GoalLaneChoice> = view
+                .lanes
+                .iter()
+                .enumerate()
+                .map(|(place, lane)| {
+                    let column = &lane.lane.column_name;
+                    let title = match &lane.lane.sub_name {
+                        Some(sub) => fill(labels.goals_record_lane_sub, &[column, sub]),
+                        None => column.clone(),
+                    };
+                    let positions = lane.positions.as_deref().unwrap_or_default();
+                    let now = match (lane.lane.current, &lane.lane.unknown) {
+                        (Some(current), _) => {
+                            let said = positions.iter().find(|position| position.index == current);
+                            let words =
+                                said.map_or_else(|| current.to_string(), |p| p.text.clone());
+                            fill(labels.goals_picker_now, &[&words])
+                        }
+                        (None, Some(unknown)) => {
+                            let why = lane_unknown_text(labels, unknown);
+                            fill(labels.goals_picker_now_unknown, &[&why])
+                        }
+                        (None, None) => String::new(),
+                    };
+                    let mut rows = vec![GoalPickRow {
+                        title: labels.goals_picker_no_target.into(),
+                        mark: SharedString::new(),
+                        greyed: false,
+                    }];
+                    rows.extend(positions.iter().map(|position| GoalPickRow {
+                        title: position.text.as_str().into(),
+                        mark: SharedString::new(),
+                        greyed: at_or_before(position.index, lane.lane.current),
+                    }));
+                    let notes: Vec<String> = lane
+                        .requires
+                        .iter()
+                        .map(|requirement| requires_text(labels, requirement))
+                        .collect();
+                    let old_rows = old.lanes.row_data(place).map(|old| old.rows);
+                    GoalLaneChoice {
+                        title: title.into(),
+                        now: now.into(),
+                        reading: if lane.positions.is_none() {
+                            labels.goals_picker_lane_reading.into()
+                        } else {
+                            SharedString::new()
+                        },
+                        chosen: lane.chosen.map_or(0, |chosen| index(chosen + 1)),
+                        rows: kept(old_rows.as_ref(), rows),
+                        note: notes.join("\n").into(),
+                    }
+                })
+                .collect();
+            let loaded = view.lanes.iter().all(|lane| lane.positions.is_some());
+            let recorded = view.recorded.iter().any(|recorded| recorded == key);
+            data.problem = if view.lanes.is_empty() {
+                labels.goals_picker_no_lanes.into()
+            } else if !recorded && view.room == Room::EntryFull {
+                labels.goals_records_full.into()
+            } else if !recorded && view.room == Room::AllFull {
+                fill(labels.goals_records_full_all, &[&APPLICATION_RECORDS.to_string()]).into()
+            } else if loaded && view.put.is_none() {
+                labels.goals_picker_choose_one.into()
+            } else if view.unchanged {
+                labels.goals_picker_unchanged.into()
+            } else {
+                SharedString::new()
+            };
+            let room = recorded || view.room == Room::Open;
+            data.save_ready = view.enabled && room && view.put.is_some() && !view.unchanged;
+            data.lanes = kept(Some(&old.lanes), lanes);
+        }
+        // "Change" opened before the table is read: the character's title, by its key for now.
+        (Some(key), None) => {
+            data.title = fill(labels.goals_picker_for, &[&title_of(key)]).into();
+        }
+    }
+    data
+}
+
+/// A character's held state beside it in the picker, in grey; none of one held.
+fn held_mark(labels: &Labels, held: &KeyHeld) -> Option<&'static str> {
+    match held {
+        KeyHeld::Held => None,
+        KeyHeld::NotHeld => Some(labels.goals_picker_not_held_mark),
+        KeyHeld::Unknown(_) => Some(labels.goals_picker_held_unknown_mark),
+    }
+}
+
+/// What a column requires first, in grey under a lane of the picker: another column at a position,
+/// before any step or before a step that arrives at a position; a condition met in the game.
+/// Nothing is held back by it: the Runtime raises what is required itself, and checks no
+/// prerequisite of a record (`contracts/standard-pack-goals.md` 148-151 at aa6765dd).
+fn requires_text(labels: &Labels, requirement: &Requirement) -> String {
+    match requirement {
+        Requirement::Column { column, at_least, from: None } => {
+            fill(labels.goals_picker_requires, &[column, at_least])
+        }
+        Requirement::Column { column, at_least, from: Some(from) } => {
+            fill(labels.goals_picker_requires_from, &[from, column, at_least])
+        }
+        Requirement::Condition(condition) => {
+            fill(labels.goals_picker_requires_condition, &[condition])
+        }
+    }
+}
+
+/// What a picker's read came to that holds nothing to show, in words.
+fn pick_said_text(labels: &Labels, said: &PickSaid) -> String {
+    match said {
+        PickSaid::NotInMemory => labels.goals_picker_not_in_memory.to_owned(),
+        PickSaid::Moved => labels.goals_picker_moved.to_owned(),
+        PickSaid::Refused(problem) => {
+            let words = problem_words(labels, problem).map_or_else(
+                || match problem {
+                    WriteProblem::Other(word) => fill(labels.goals_problem_other, &[word]),
+                    _ => String::new(),
+                },
+                str::to_owned,
+            );
+            fill(labels.goals_picker_refused, &[&words])
+        }
+        PickSaid::Unsupported(_) => labels.goals_picker_unsupported.to_owned(),
+        PickSaid::Failed(failure) => {
+            fill(labels.goals_picker_failed, &[&failure_codes_text(failure)])
+        }
+        PickSaid::NoThread(error) => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            fill(labels.goals_picker_no_thread, &[&why])
+        }
+        PickSaid::Panicked => labels.goals_picker_panicked.to_owned(),
     }
 }
 
