@@ -1418,7 +1418,9 @@ constraint that makes it 0 (an LP fact).
     `step` (`projection`, `interval`, `selection`, `max_min`, `check`), HiGHS's text of its second answer (`raw_text`)
     and that HiGHS ran it twice (`tries`). Where the solve holds no such point (a pool fixed at 0, unbounded both ways,
     which no LP's solution reached, until the next LP's solution), it is `lp_solve_failed` (status 2) with the same
-    three. No tolerance is widened and no pass is left out of the assessment: each blocks as before.
+    three. No tolerance is widened and no pass is left out of the assessment: each blocks as before. The certificate's
+    LPs ("The certificate") are solved on D* too, but are none of these: a failure of one is read as its item 8 reads
+    it, refusing the certificate so that the pass is solved, and never blocks (#430 C-2a-2, 11-28).
   - Every other program takes HiGHS's infeasible as its answer, with no second try, as before: the model's own S3
     (the **Infeasible** line above), S1 and S2, the least losses, a price re-solve, the dual's least cost and the
     probes.
