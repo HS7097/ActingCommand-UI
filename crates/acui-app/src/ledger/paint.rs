@@ -992,6 +992,11 @@ fn notice_short(labels: &Labels, notice: &RuntimeNotice) -> &'static str {
         RuntimeNotice::EntryAwaitingPerson { .. } => labels.notice_entry_awaiting_person,
         RuntimeNotice::EntryRecoveryFailed { .. } => labels.notice_entry_recovery_failed,
         RuntimeNotice::EntryTaskSetAside { .. } => labels.notice_entry_task_set_aside,
+        RuntimeNotice::TaskFailureSetAside { .. } => labels.notice_task_failure_set_aside,
+        RuntimeNotice::FactsReclaimed => labels.notice_facts_reclaimed,
+        RuntimeNotice::CommitShort => labels.notice_commit_short,
+        RuntimeNotice::CommitUnknown { .. } => labels.notice_commit_unknown,
+        RuntimeNotice::CommitReady => labels.notice_commit_ready,
     }
 }
 
@@ -1031,6 +1036,15 @@ fn notice_lines(labels: &Labels, notice: &RuntimeNotice) -> Vec<FieldLine> {
         RuntimeNotice::EntryTaskSetAside { cause } => {
             (labels.notice_entry_task_set_aside_detail, cause.as_deref())
         }
+        RuntimeNotice::TaskFailureSetAside { cause } => {
+            (labels.notice_task_failure_set_aside_detail, cause.as_deref())
+        }
+        RuntimeNotice::FactsReclaimed => (labels.notice_facts_reclaimed_detail, None),
+        RuntimeNotice::CommitShort => (labels.notice_commit_short_detail, None),
+        RuntimeNotice::CommitUnknown { cause } => {
+            (labels.notice_commit_unknown_detail, cause.as_deref())
+        }
+        RuntimeNotice::CommitReady => (labels.notice_commit_ready_detail, None),
     };
     let mut lines = vec![field(labels, "pause_outcome", detail.to_owned(), notice.code())];
     if let Some(code) = cause {
