@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 
 use acui_source::workbench::pack::{self, PackState, PackStates};
 use acui_source::workbench::{
-    ActivityKind, DispatchStage, InstanceLive, TaskRow, TasksEntry, TasksRead,
+    ActivityKind, DispatchStage, InstanceLive, RecordNotes, TaskRow, TasksEntry, TasksRead,
 };
 use acui_source::ClientFailure;
 
@@ -140,6 +140,9 @@ pub struct PackRow {
     /// most `ALSO_MOST`, and whether there were more.
     pub also: Vec<TaskSaid>,
     pub more: bool,
+    /// What the instance's goal records did to its candidates (Runtime 0.12.95), from their
+    /// reasons; none without candidate rows.
+    pub records: RecordNotes,
     /// The Runtime derives it irreversible.
     pub irreversible: bool,
     /// Its entry of the display part of its game root's `pack-catalog.json` (`ui.json` before
@@ -372,6 +375,7 @@ fn pack_rows(listing: &Listing<'_>, entry: &TasksEntry) -> (Vec<PackRow>, Vec<Ta
                 .as_ref()
                 .filter(|(of, _)| *of == Some(package.as_str()))
                 .map(|(_, said)| said);
+            let records = RecordNotes::of(&tasks);
             let (said, also, more) = match running.or(chosen) {
                 Some(said) => (said.clone(), Vec::new(), false),
                 // Only the switches' view names it.
@@ -387,6 +391,7 @@ fn pack_rows(listing: &Listing<'_>, entry: &TasksEntry) -> (Vec<PackRow>, Vec<Ta
                 said,
                 also,
                 more,
+                records,
                 switch,
             }
         })

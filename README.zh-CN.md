@@ -8,10 +8,10 @@
 
 ## 现状
 
-写于 2026-11-28，对应最新的 **UI v0.12.35**。
+写于 2026-11-28，对应最新的 **UI v0.12.36**。
 
-- **发布。** 最新的是 UI v0.12.35，在本仓 [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 页：`acui-windows-<sha>.zip` 与 `SHA256SUMS`。zip 里有 `acui.exe`（监控台）、`acsetup.exe`（安装向导）、`LICENSE`、`README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。
-- **搭配。** v0.12.35 基于 Runtime v0.12.95 构建，声明 `actingd-config` [5, 32]、`ledger` [3, 10]、`runtime-client` [12, 14] 与 `runtime-outcomes` [1, 1]，可与 Runtime v0.12.73 到 v0.12.95 搭配，配不了 v0.12.72 及更早的。Runtime 从 v0.12.86 起写账本修订 10，UI v0.12.33 及更早的版本离线读不了。能否搭配按双方声明的接口判断，不看版本号。0.11 系列不再维护。
+- **发布。** 最新的是 UI v0.12.36，在本仓 [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 页：`acui-windows-<sha>.zip` 与 `SHA256SUMS`。zip 里有 `acui.exe`（监控台）、`acsetup.exe`（安装向导）、`LICENSE`、`README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。
+- **搭配。** v0.12.36 基于 Runtime v0.12.95 构建，声明 `actingd-config` [5, 32]、`ledger` [3, 10]、`runtime-client` [12, 14] 与 `runtime-outcomes` [1, 1]，可与 Runtime v0.12.73 到 v0.12.96 搭配，配不了 v0.12.72 及更早的。Runtime 从 v0.12.86 起写账本修订 10，UI v0.12.33 及更早的版本离线读不了。能否搭配按双方声明的接口判断，不看版本号。0.11 系列不再维护。
 - **监控台现在能做的。** 看账本：实例卡、时间线、详情三栏；主页右栏有「实时画面」「日常任务」「目标」三个页签。经 Runtime 的 `ui` 通道，它还能暂停与恢复调度（顶栏的「全部暂停」「全部开始执勤」，以及「暂停这个实例的调度」）、在「目标」页设定目标，并启动 Runtime 或请求它关闭。界面有中文和英文，字号三档，主题两种。
 - **安装向导现在能做的。** `acsetup` 从一份安装集，把 Runtime、工具和监控台装进一个新文件夹，并把 MuMu 模拟器里、或用 USB 连着的安卓手机上登录好的游戏接上；它不联网，不下载任何东西。手机能连接、能看画面，在手机上跑任务要等后续版本。安装集要另外拼（`tools/make_install_set.py`），目前没有公开发布的安装集。
 - **还没有的。** 监控台里没有实例配置窗口，「添加实例」按钮是灰的；添加实例用 Runtime Tools 里的 `actinglab instance add`。

@@ -1670,9 +1670,11 @@ pub enum DispatchStage {
 
 /// One candidate row, a decision that was not selected. `why` is the code of its last reason,
 /// which the words shown are chosen by, never shown itself; so are `gap` and `hold`, as of an
-/// instance's row ([`InstanceExplain`]). `wake` is the row's own. Its other reason codes, its
-/// since and its expected runtime stay here: the list shows no count and no number of the
-/// scheduler's.
+/// instance's row ([`InstanceExplain`]). `wake` is the row's own. `reasons` are its reason codes
+/// in order, the last ones (at most 32), ending with `why`'s (contract
+/// `runtime/schedule_explanation.rs` 67-78 at 1f86956d): the list says those of the goal records
+/// ([`RecordNotes`]) and counts the rest. Its since and its expected runtime stay here: the list
+/// shows no number of the scheduler's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRow {
     pub task_id: String,
@@ -1682,6 +1684,95 @@ pub struct TaskRow {
     pub gap: Option<String>,
     pub hold: Option<String>,
     pub wake: Option<u64>,
+    pub reasons: Vec<String>,
+}
+
+/// What the stored goal records of an instance (`goals.json`'s `records` entries, whom to raise
+/// and to which grade) did to one candidate, as its reasons say (Runtime 0.12.95, Workflow #455
+/// RR3; policy `codes.rs` and `contracts/resource-targets.md`, "Needs computed from the records",
+/// at 1f86956d). A candidate covered by a pool the records need carries `goal_records_need` after
+/// its own reasons, and every candidate of the instance carries the notes of what was left out;
+/// none of them is ever a row's `why`, which the score's and the selection's own reasons follow.
+/// The words say the kind only: the reasons answered here are codes, without their numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordNote {
+    /// `goal_records_need`: weighted up, a recorded character lacks what the task produces.
+    Need,
+    /// `goal_records_not_applied`: a stored record the game root in force does not take.
+    NotApplied,
+    /// `goal_records_not_held`: a recorded character the account does not hold.
+    NotHeld,
+    /// `goal_records_progress_unknown`: a progress list gives no reading.
+    ProgressUnknown,
+    /// `goal_records_row_missing`: a progress list holds no row of the character yet.
+    RowMissing,
+    /// `goal_records_reading_missing`: the list's row lacks the reading column the tables name,
+    /// which only the resource side mends.
+    ReadingMissing,
+    /// `goal_records_position_unknown`: the readings match no grade of the tables.
+    PositionUnknown,
+    /// `goal_records_holding_unknown`: the holding of a material with a recipe is not known, so
+    /// what it is made from is not counted.
+    HoldingUnknown,
+    /// `goal_records_item_unweighed`: a material with no pool, shown and weighing nothing.
+    ItemUnweighed,
+    /// `goal_records_condition`: a prerequisite that is a condition met in the game.
+    Condition,
+    /// `goal_records_not_stacked`: the instance's goals are a v1 policy, which the needs do not
+    /// stack on.
+    NotStacked,
+}
+
+impl RecordNote {
+    /// The note of a reason code, `None` for one that is no goal records reason.
+    pub fn of(code: &str) -> Option<Self> {
+        Some(match code {
+            "goal_records_need" => Self::Need,
+            "goal_records_not_applied" => Self::NotApplied,
+            "goal_records_not_held" => Self::NotHeld,
+            "goal_records_progress_unknown" => Self::ProgressUnknown,
+            "goal_records_row_missing" => Self::RowMissing,
+            "goal_records_reading_missing" => Self::ReadingMissing,
+            "goal_records_position_unknown" => Self::PositionUnknown,
+            "goal_records_holding_unknown" => Self::HoldingUnknown,
+            "goal_records_item_unweighed" => Self::ItemUnweighed,
+            "goal_records_condition" => Self::Condition,
+            "goal_records_not_stacked" => Self::NotStacked,
+            _ => return None,
+        })
+    }
+}
+
+/// What the goal records did to a package's candidates: each note once, in the order the rows
+/// first give it, and how many other reason codes they hold besides each row's `why` (counted
+/// once each), which the list counts and does not say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecordNotes {
+    pub notes: Vec<RecordNote>,
+    pub others: usize,
+}
+
+impl RecordNotes {
+    /// The notes of `rows`, the candidate rows of one package.
+    pub fn of(rows: &[&TaskRow]) -> Self {
+        let mut notes = Vec::new();
+        let mut others: Vec<&str> = Vec::new();
+        for row in rows {
+            for code in &row.reasons {
+                match RecordNote::of(code) {
+                    Some(note) if !notes.contains(&note) => notes.push(note),
+                    Some(_) => {}
+                    None => {
+                        let why = rows.iter().any(|other| other.why == *code);
+                        if !why && !others.contains(&code.as_str()) {
+                            others.push(code.as_str());
+                        }
+                    }
+                }
+            }
+        }
+        Self { notes, others: others.len() }
+    }
 }
 
 /// What one answered `StartReport` says of the settings changed while a Runtime ran, as far as
@@ -2518,6 +2609,7 @@ fn tasks_entry(entry: &ScheduleExplanationInstance) -> TasksEntry {
             gap: reason_value(&row.why, BENEFIT_GAP),
             hold: reason_value(&row.why, POOL_LINE_HOLD),
             wake: row.next_wake_unix_ms,
+            reasons: row.reasons.iter().map(|code| code.as_str().to_owned()).collect(),
         })
         .collect();
     let cut_short =
@@ -3127,5 +3219,70 @@ mod tests {
         ] {
             assert_eq!(lab_record_started(reason), None, "{reason}");
         }
+    }
+
+    /// A candidate row whose reasons are `reasons`, its `why` the last of them, as the Runtime
+    /// gives it.
+    fn row(task: &str, reasons: &[&str]) -> super::TaskRow {
+        super::TaskRow {
+            task_id: task.to_owned(),
+            due: true,
+            why: reasons.last().copied().unwrap_or_default().to_owned(),
+            gap: None,
+            hold: None,
+            wake: None,
+            reasons: reasons.iter().map(|code| (*code).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn goal_records_reasons_are_said_once_each_and_the_rest_counted() {
+        use super::{RecordNote, RecordNotes};
+        for (code, note) in [
+            ("goal_records_need", RecordNote::Need),
+            ("goal_records_not_applied", RecordNote::NotApplied),
+            ("goal_records_not_held", RecordNote::NotHeld),
+            ("goal_records_progress_unknown", RecordNote::ProgressUnknown),
+            ("goal_records_row_missing", RecordNote::RowMissing),
+            ("goal_records_reading_missing", RecordNote::ReadingMissing),
+            ("goal_records_position_unknown", RecordNote::PositionUnknown),
+            ("goal_records_holding_unknown", RecordNote::HoldingUnknown),
+            ("goal_records_item_unweighed", RecordNote::ItemUnweighed),
+            ("goal_records_condition", RecordNote::Condition),
+            ("goal_records_not_stacked", RecordNote::NotStacked),
+        ] {
+            assert_eq!(RecordNote::of(code), Some(note), "{code}");
+        }
+        assert_eq!(RecordNote::of("goal_records"), None);
+        assert_eq!(RecordNote::of("goal_value_rule_missing"), None);
+
+        // Two rows of one package: the needs on both, a note on one, each said once in the order
+        // given; the rows' whys not counted, the other codes once each.
+        let first = row(
+            "neutral.first",
+            &[
+                "task_eligible",
+                "resource_target_applied",
+                "goal_records_need",
+                "goal_records_progress_unknown",
+                "score_promoted",
+                "instance_already_selected",
+            ],
+        );
+        let second = row(
+            "neutral.second",
+            &["task_eligible", "goal_records_need", "score_deferred"],
+        );
+        assert_eq!(
+            RecordNotes::of(&[&first, &second]),
+            RecordNotes {
+                notes: vec![RecordNote::Need, RecordNote::ProgressUnknown],
+                others: 3,
+            }
+        );
+        // Rows the records did nothing to: no note, and no other code beside the why.
+        let plain = row("neutral.plain", &["trigger_false"]);
+        assert_eq!(RecordNotes::of(&[&plain]), RecordNotes::default());
+        assert_eq!(RecordNotes::of(&[]), RecordNotes::default());
     }
 }

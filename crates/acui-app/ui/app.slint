@@ -147,7 +147,8 @@ export enum TaskTone { plain, accent, warning }
 
 // One line of the account's daily task list (UI-3f1), in words: a group's title alone; or a task
 // package's name, whether it is irreversible and whether it is risky, why it runs or not now in
-// its colour, the other reasons of its tasks, and its summary. Under the account's own line, a
+// its colour, the other reasons of its tasks, what the instance's goal records did to its tasks
+// (`records`, Runtime 0.12.95), and its summary. Under the account's own line, a
 // task without a package: its id for a name, and why. A package's switch (UI-3f2): the package a
 // press names (never shown), whether the switch shows, ticked while the Runtime schedules it, and
 // whether it can be pressed; in grey under the name where its state comes from, or that it has no
@@ -161,6 +162,7 @@ export struct TaskRowData {
     said: string,
     tone: TaskTone,
     also: string,
+    records: string,
     summary: string,
     package: string,
     switch-shown: bool,
@@ -2414,6 +2416,14 @@ component TaskLineView {
         }
         if root.line.also != "": Text {
             text: root.line.also;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.line.records != "": Text {
+            text: root.line.records;
             font-size: Scale.grey-font;
             color: Look.text-caption;
             wrap: word-wrap;
