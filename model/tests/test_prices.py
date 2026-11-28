@@ -311,11 +311,11 @@ def test_an_accepted_provisional_price_is_exported_until_what_it_binds_changes(t
     assert prices["estimates"] == [{
         "rule": "pt.b", "value": "3", "estimate": ESTIMATE_B, "components": ["act.b"], "assessed": True, "skipped": None,
     }]
-    assert untimed(prices["impact"]) == [{
+    assert untimed(prices["impact"]) == [{  # #430 C-2a-2a: act.b runs at its limit, so C1 refuses each pass
         "rules": ["pt.b"], "unknowns": [],
         "passes": [
-            {"at": {"pt.b": "low"}, "values": {"pt.b": "2"}, "by": "solved"},
-            {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}, "by": "solved"},
+            {"at": {"pt.b": "low"}, "values": {"pt.b": "2"}, "by": "solved", "refused_by": "c1"},
+            {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}, "by": "solved", "refused_by": "c1"},
         ],
         "prices": {}, "flips": [],
     }]
@@ -388,11 +388,11 @@ def test_the_assessment_moves_an_estimate_to_its_ends_and_an_acceptance_must_lis
         "impact": {"low": "1", "high": "2"}, "flips": ["act.p", "act.q"],
     }
     assert picked(found["res.v"], "impact", "flips") == {"impact": {"low": "1", "high": "1"}, "flips": ["act.p", "act.q"]}
-    assert untimed(delivered(folder)["impact"]) == [{
+    assert untimed(delivered(folder)["impact"]) == [{  # #430 C-2a-2a: act.q's column fails C1 with no LP
         "rules": ["pt.k"], "unknowns": [],
         "passes": [
-            {"at": {"pt.k": "low"}, "values": {"pt.k": "1/2"}, "by": "solved"},
-            {"at": {"pt.k": "high"}, "values": {"pt.k": "2"}, "by": "solved"},
+            {"at": {"pt.k": "low"}, "values": {"pt.k": "1/2"}, "by": "solved", "refused_by": "c1"},
+            {"at": {"pt.k": "high"}, "values": {"pt.k": "2"}, "by": "solved", "refused_by": "c1"},
         ],
         "prices": {"res.s": {"low": "1", "high": "2"}}, "flips": ["act.p", "act.q"],
     }]
@@ -463,11 +463,11 @@ def test_an_estimate_of_variants_is_moved_to_each_variant(tmp_path, acmodel):
         "joint": {"value": "1/20", "interval": "1/20", "by": "exact", "withheld": None},
         "impact": {"low": "1/30", "high": "1/10"}, "flips": [],
     }
-    assert untimed(delivered(folder)["impact"]) == [{
+    assert untimed(delivered(folder)["impact"]) == [{  # #430 C-2a-2a: x* runs act.buy, so C1 refuses each pass
         "rules": ["pt.price"], "unknowns": ["unk.offer"],
         "passes": [
-            {"at": {"unk.offer": "cheap"}, "values": {"pt.price": "10"}, "by": "solved"},
-            {"at": {"unk.offer": "dear"}, "values": {"pt.price": "30"}, "by": "solved"},
+            {"at": {"unk.offer": "cheap"}, "values": {"pt.price": "10"}, "by": "solved", "refused_by": "c1"},
+            {"at": {"unk.offer": "dear"}, "values": {"pt.price": "30"}, "by": "solved", "refused_by": "c1"},
         ],
         "prices": {"res.c": {"low": "1/30", "high": "1/10"}}, "flips": [],
     }]
