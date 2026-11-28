@@ -88,6 +88,11 @@ REUSE_REFUSED = "reuse_refused"
 # the steady state's (`acmodel verify passes`).
 STEADY_STATE_MISMATCH = "steady_state_mismatch"
 CERTIFICATE_MISMATCH = "certificate_mismatch"
+# #430 METHOD-C C-3a (contracts/formats.md, "Stopping and resuming"; registered with the contract, as
+# CERTIFICATE_MISMATCH was before its code): `export prices --checkpoint` stopped at a checkpoint, or found a checkpoint
+# folder that is another assessment's. Nothing reports them yet.
+ASSESSMENT_STOPPED = "assessment_stopped"
+CHECKPOINT_REFUSED = "checkpoint_refused"
 # #464 W1, the model's writer of the schedule's values: `export values` and the value bindings of `bindings check|apply`.
 VALUE_NOT_POSITIVE = "value_not_positive"  # a value that rounds below 1 (a value of 0 is no value)
 ORIGIN_MISSING = "origin_missing"  # bindings check: a bound value's rule has no fixed_value_origin (apply writes "model")
@@ -226,6 +231,8 @@ EXIT_STATUS = {
     REUSE_REFUSED: 5,
     STEADY_STATE_MISMATCH: 6,
     CERTIFICATE_MISMATCH: 6,
+    ASSESSMENT_STOPPED: 4,
+    CHECKPOINT_REFUSED: 5,
     VALUE_NOT_POSITIVE: 5,
     ORIGIN_MISSING: 6,
     ORIGIN_INVALID: 6,

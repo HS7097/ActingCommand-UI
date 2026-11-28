@@ -2060,7 +2060,10 @@ no checkpoint is checked, the host layer is not called, and an export that stops
    are, before any pass. Each member that differs is one `checkpoint_refused` (exit 5; `member` as `reuse_refused`
    names it, such as `versions.rules`, `evaluator.config.lp.grain` or `shared.economy:steady`, or `model_id`,
    `certify` or `steady`; `expected` the checkpoint's value and `found` this run's; `ref` its pointer in
-   `checkpoint.json`), and nothing is computed further or written. A checkpoint is never partly taken back: another
+   `checkpoint.json`), and nothing is computed further or written; the files of `passes/` are then not read, so these
+   are the run's only errors of the checkpoint. A `checkpoint.json` that cannot be read as `acmodel.checkpoint.v1`
+   (strictly, as an input file is read: "Reading JSON") is `model_file_invalid` (`format` `acmodel.checkpoint.v1`, at
+   the file), and nothing is compared, computed or written. A checkpoint is never partly taken back: another
    assessment, or the same one after any change of the model, the tool (an edit of a source file, even of a comment,
    or another checkout) or a configuration key of the digest, needs another folder. A folder without `checkpoint.json`
    starts a checkpoint: the run writes it and computes every pass.
@@ -2079,7 +2082,9 @@ no checkpoint is checked, the host layer is not called, and an export that stops
    activities. Otherwise it is `model_file_invalid` (`format` `acmodel.checkpoint.pass.v1`, at the file, `ref` the
    member), and nothing is computed or written: a file is never passed over, nor its pass computed again in its place.
    A file of `passes/` that is no pass of the assessment and no temporary file is `checkpoint_refused` (`member`
-   `passes`, `expected` its name, `found` `none`). Each problem is one error. Then each pass that has a file is taken
+   `passes`, `expected` its name, `found` `none`). Each problem is one error: first each such file's
+   `checkpoint_refused`, by name, then each pass file's `model_file_invalid`, in the order of the passes, so the exit
+   status (that of the first error) does not depend on how the folder lists its files. Then each pass that has a file is taken
    back as the run that computed it recorded it: its `entry` goes into prices.json as it is (its `by`, `refused_by` and
    `timing_ms` too; "Timing"), and its `vector` into the ranges and flips of its group and of the assessment, as a
    pass computed now would. Every other pass is computed, in that order, and its file written as it ends.
@@ -2089,7 +2094,11 @@ no checkpoint is checked, the host layer is not called, and an export that stops
    `versions`, `evaluator` and `certify` are compared where the folder has a `checkpoint.json`, it checks the host gate
    as a batch starts (`cli.md`, "The gate"): the available memory below `host.memory.start_min_mib`, the committed
    memory above `host.memory.committed_start_max_mib` where it is set, a quiet window, the pause file. One that holds
-   ends it with exit 4, each reason one `host_gate_paused`, and the steady state is not computed. A checkpoint is then
+   ends it with exit 4, each reason one `host_gate_paused`, and the steady state is not computed. It looks for `STOP`
+   there too (as at a checkpoint, below): when it is in the folder, the run ends with exit 4 before its steady state,
+   `assessment_stopped` (`reason` `stop_file`; `done`, how many pass files `passes/` holds, not yet read; `total` left
+   out, as the passes are listed only once the steady state is computed) and then each `host_gate_paused` that holds,
+   so a `STOP` left in the folder costs no steady state. A checkpoint is then
    the point before each pass that the run computes; nothing stops a pass that has begun. There the run stops when
    `STOP` is in the folder (only whether it is there is looked at: a look that fails other than by its absence is
    `host_reading_failed`, `stop_file`), or when the gate holds as at a checkpoint inside a batch: the available memory
