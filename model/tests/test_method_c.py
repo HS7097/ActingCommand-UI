@@ -74,6 +74,13 @@ FLIPS_GROUP = {
     ],
     "prices": {"res.s": {"low": "1", "high": "2"}}, "flips": ["act.p", "act.q"],
 }
+# #430 METHOD-C C-2a-2a: the same group as an assessment with `impact.certify` true (the default) writes it: each pass
+# also says what refused it, `c1` (J is act.q's column; at pt.k = 1 act.p and act.q are as good, so x* runs act.q or its
+# dual slack at y* is 0, and C1 fails with no LP), and both are solved.
+FLIPS_GROUP_REFUSED = {**FLIPS_GROUP, "passes": [{**each, "refused_by": "c1"} for each in FLIPS_GROUP["passes"]]}
+# What the configuration holds for an export with `impact.certify` false: every pass is solved, and none has
+# `refused_by` (contracts/cli.md, "Configuration").
+UNCERTIFIED = {"schema_version": "acmodel.config.v1", "impact": {"certify": False}}
 
 
 def before_compute(graph: Graph, solve_name: str) -> Any:
@@ -293,12 +300,14 @@ def test_the_cache_keeps_what_it_kept_and_the_economy_version_is_12(tmp_path, ec
     assert EVALUATORS["economy"].version == 12
 
 
-def test_an_export_writes_what_it_wrote_before(tmp_path, acmodel, monkeypatch):
+def test_an_export_writes_what_it_wrote_before(tmp_path, acmodel, monkeypatch, write_config):
     """flips_fixture exported now and as before this slice (`as_before`): the same files; every price's provenance file
     byte for byte, and prices.json too once each pass's `timing_ms` is taken out, the group the one worked out by hand.
-    What the steady state holds beside its value is in none of them."""
+    What the steady state holds beside its value is in none of them. Both export with `impact.certify` false (#430
+    METHOD-C C-2a-2a): the steady state as before holds nothing for the certificate to read."""
     folder = flips_fixture(tmp_path)
     out = base(folder) / "out"
+    write_config(UNCERTIFIED)
 
     status, doc = export(acmodel, folder)
     now = snapshot(out)
@@ -569,7 +578,7 @@ def test_a_steady_state_the_cache_gives_is_computed_again_once_without_it_and_th
         event for event in during if event == ("kept", "economy") or (event[0] == "cached" and event[1][0] == "economy")
     ]
     assert economy_in_the_cache == []
-    assert untimed(found.groups) == untimed(fresh.groups) == [FLIPS_GROUP]
+    assert untimed(found.groups) == untimed(fresh.groups) == [FLIPS_GROUP_REFUSED]
     assert (found.ranges, found.flips, found.assessed, found.skipped) == (
         fresh.ranges, fresh.flips, fresh.assessed, fresh.skipped
     )
@@ -631,7 +640,7 @@ def test_a_cached_steady_state_computed_again_alike_is_exported_as_one_computed_
     assert events == ["steady", "served", "steady", "vector", "vector"]
     again = snapshot(out)
     found = json.loads(again["prices.json"])
-    assert untimed(found["impact"]) == [FLIPS_GROUP]
+    assert untimed(found["impact"]) == [FLIPS_GROUP_REFUSED]
     assert policy.delivered(untimed_doc(found)) == policy.delivered(untimed_doc(json.loads(plain["prices.json"])))
     assert sorted(again) == sorted(plain)
     for name in plain:

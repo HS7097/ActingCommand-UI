@@ -113,6 +113,18 @@ activities' execution columns whose coefficients differ, only in balance rows, o
 the two differ elsewhere. `steady_again` computes the steady state again without the cache, for an assessment whose
 steady state the cache gave (`core.impact`).
 
+**The certificate** (#430 METHOD-C C-2a-2a; contracts/formats.md, "The certificate", items 1 to 10; `certify`). It reads
+what the steady state handed on (`Held`, its model too) and a pass's program built and not solved, and proves the pass
+or names what refused it (`refused_by`): its program (J, `compare_programs`), then C1 and C2 (each column of J's dual
+slack, with the steady state's and the pass's coefficients, above 0 on all of D*), C3 (no J activity in K or entering
+it) and C4 (P and A the steady state's and the static walk), in that order, the first that fails deciding. Its LPs are
+on D*'s complementary-slackness form only, solved from scratch by a solver of its own on a clock of one stage
+(`CERTIFICATE`: the pass's `lps.certificate`), never warm, never seeded and with no exact point of #430, and read a
+certified optimum or HiGHS's unbounded alone. A proven pass's vector is the steady state's, and a J activity's value is
+computed at it with the pass's amounts. It keeps nothing anywhere: no node's value, the cache nor a file holds any of
+it. A solved vector also holds, beside its value, the activities whose `most` or range it could not verify
+(`Economy.unverified`).
+
 **The re-solves at ±grain** (PRICE-2d, `_Solver.regrain`). One grain more or less of a resource's income moves only right
 sides of S3's program, so each re-solve starts from S3: S3's basis proves it where it stays primal feasible
 (`exact.shifted`, `exact.ranging`); else HiGHS's instance of S3 gets only the moved row ends and goes on from S3's
@@ -303,7 +315,11 @@ class Economy:
     compared. #430 C-2a: a vector or a steady state computed now also holds what HiGHS ran in each stage (`lps`, by
     stage, `LP_COUNTS`) and the whole node's time (`total`, whole milliseconds from the start of the call that computed
     it to its value), and a steady state its stages' times (`timing`, by `STEADY_STAGES`); none of them is part of the
-    value, encoded or compared either."""
+    value, encoded or compared either. #430 METHOD-C C-2a-2a: a vector computed now also holds, beside its value, the
+    activities whose `most` or range probe it could not verify, each with those probes (`unverified`, by id; empty
+    when it verified every one; `_Solver.vector`): such an activity is left out of its K, so a solved vector may differ
+    from the exact one there (contracts/formats.md, "The certificate", item 10). It is no part of the value either:
+    `encode` leaves it out, a value the cache gives has none, and it is not compared."""
 
     data: dict[str, Any] | None = None
     status: str = CONFIRMED
@@ -315,6 +331,7 @@ class Economy:
     held: Held | None = field(default=None, compare=False, repr=False)
     lps: dict[str, dict[str, int]] | None = field(default=None, compare=False, repr=False)
     total: int | None = field(default=None, compare=False)
+    unverified: dict[str, tuple[str, ...]] | None = field(default=None, compare=False, repr=False)
 
     @property
     def blocked(self) -> bool:
@@ -1663,6 +1680,358 @@ def compare_programs(steady: _Program, moved: _Program) -> Compared:
     return Compared(tuple(sorted(columns)))
 
 
+# The certificate (#430 METHOD-C C-2a-2a; contracts/formats.md, "The certificate", items 1 to 10) --------------------
+
+# What refused a pass (`refused_by`, item 9), in the order the certificate takes its conditions: the pass's program
+# differs elsewhere than item 1 allows (`program`); a condition that does not hold (`c1` to `c4`); and an LP of the
+# certificate that is not certified or fails (`lp_unverified`, item 8).
+PROGRAM, C1, C2, C3, C4, LP_UNVERIFIED = "program", "c1", "c2", "c3", "c4", "lp_unverified"
+CONDITIONS = (PROGRAM, C1, C2, C3, C4, LP_UNVERIFIED)
+# The certificate's own clock, of one stage: what HiGHS ran for it is a pass's `lps.certificate` ("Timing").
+CERTIFICATE = "certificate"
+CERTIFICATE_STAGES = (CERTIFICATE,)
+
+
+@dataclass(frozen=True)
+class Certificate:
+    """What the certificate found of one pass (`certify`): the condition that refused it (`refused_by`, one of
+    `CONDITIONS`; None for a proven pass) and what HiGHS ran for it (`lps`, by `CERTIFICATE_STAGES`: the pass's
+    `lps.certificate`, its own LPs and their second tries). A proven pass also holds its vector (item 7): each pool's
+    coordinate (`prices`, the steady state's) and each activity's value at it (`values`: the steady state's, but a J
+    activity's, at the pass's amounts, None for one that moves out of or into a store); a refused one holds neither."""
+
+    refused_by: str | None
+    lps: dict[str, dict[str, int]]
+    prices: dict[str, Fraction] | None = None
+    values: dict[str, Fraction | None] | None = None
+
+
+def certify(held: Held, built: Built, settings: EconomySettings, answers: dict[Key, str | None]) -> Certificate:
+    """The certificate of one pass (contracts/formats.md, "The certificate", items 1 to 10): `held` is what the steady
+    state's own computation found (`Held`), `built` the pass's program, built from its graph and not solved
+    (`build_program`; a blocked one is the pass's refusal, which the caller gives, item 8), and `answers` C1's answer
+    of each column of J decided so far in this assessment, by column (None where C1 holds), which this fills in.
+
+    Its conditions are taken in order (item 9): the program (item 1, `compare_programs`), then C1, C2, C3 and C4, each
+    over J's columns or activities in order; the first that does not hold, or whose LP is not certified or fails,
+    refuses the pass, and nothing after it is decided. A pass whose J is empty is proven with no LP. Every LP is one on
+    D*'s complementary-slackness form (`held.restricted`), solved by a solver of the steady state's model with this
+    clock alone (`_Solver`, `CERTIFICATE_STAGES`), from scratch: never warm, never seeded, and with no exact point of
+    #430 (`witness`), so HiGHS's infeasible is a failure as any other (item 8). So whether a pass is proven, and what
+    refused it, reads this pass and the steady state alone, never the passes before it (C1's answers are the steady
+    state's). Nothing warns and nothing is kept: a proven pass's vector is the steady state's (item 7), and no probe of
+    the pass is run (item 10)."""
+    clock = _Clock(CERTIFICATE_STAGES)
+    solver = _Solver(held.model, settings, clock)
+    certifier = _Certifier(held, built, solver, answers)
+    refused = certifier.refused()
+    solver.lap(CERTIFICATE)
+    if refused is not None:
+        return Certificate(refused, clock.lps())
+    return Certificate(None, clock.lps(), dict(held.vector), certifier.values())
+
+
+def _dual_rows(program: _Program, duals: dict[Key, dict[Key, Fraction]], columns: tuple[Key, ...]) -> dict[Key, _Row]:
+    """The dual rows of `columns` of `program`, each as `_dual` builds it (`_Dual.by_column`), with `duals` the dual of
+    each of the program's rows by its key (`_Dual.duals`). For a pass's program, `duals` is the steady state's: item 1
+    leaves the two programs the same rows and columns, so their dual variables are one, the right side of a column's
+    dual row (-c_j) is the steady state's, and only its coefficients are the pass's (C2)."""
+    zero, one = Fraction(0), Fraction(1)
+    found: dict[Key, dict[Key, Fraction]] = {key: {} for key in columns}
+    for row in program.rows:
+        for key, coefficient in row.coefficients.items():
+            if key in found:
+                for dual, sign in duals[row.key].items():
+                    _add(found[key], dual, sign * coefficient)
+    rows: dict[Key, _Row] = {}
+    for key in columns:
+        coefficients = {dual: -amount for dual, amount in found[key].items()}
+        if program.variables[key][1] is not None:
+            coefficients[("w", _token(key), 0)] = -one
+        cost_j = -program.objective.get(key, zero)
+        rows[key] = _Row(("dual", _token(key), 0), _nonzero(coefficients), "le", cost_j, None)
+    return rows
+
+
+class _Certifier:
+    """The conditions of the certificate for one pass (`certify`): `held` the steady state's, `built` the pass's program
+    and model, `solver` the certificate's own (its clock counts every LP here), `answers` C1's answers so far."""
+
+    def __init__(self, held: Held, built: Built, solver: _Solver, answers: dict[Key, str | None]) -> None:
+        if built.model is None or built.program is None:
+            raise ValueError("the certificate reads a pass's program, built: a blocked one is the pass's refusal")
+        self.held, self.built, self.solver, self.answers = held, built, solver, answers
+        self.compared = compare_programs(held.program, built.program)
+        self.pools: dict[str, dict[Key, Fraction]] = {}
+
+    def refused(self) -> str | None:
+        """Item 9: the first condition that refuses the pass, or None when it is proven. A program that differs
+        elsewhere is `program`. An empty J takes no LP (item 1): C1, C2 and C3 have nothing to decide, and C4 compares
+        the pass's P and A with the steady state's all the same, since a rule the pass moves may change what is
+        protected without reaching a coefficient of S3's program."""
+        columns = self.compared.columns
+        if columns is None:
+            return PROGRAM
+        if not columns:
+            return self.c4(columns)
+        for condition in (self.c1, self.c2, self.c3, self.c4):
+            found = condition(columns)
+            if found is not None:
+                return found
+        return None
+
+    def greatest(self, function: dict[Key, Fraction]) -> _Solution | _Unverified:
+        """The greatest of a linear function on D*, an LP on its complementary-slackness form (`held.restricted`, item
+        8): a certified optimum or HiGHS's unbounded, else `_Unverified` (not certified, the pivot cap included; HiGHS's
+        infeasible; `lp_solve_failed` or `lp_numeric_check_failed`, which `probe` catches). Solved from scratch, never
+        warm or seeded, with no `witness`."""
+        program = _Program(*self.held.restricted, _nonzero(dict(function)))
+        return self.solver.certain(self.solver.probe(program, CERTIFICATE, unbounded=True), CERTIFICATE)
+
+    def above_zero(self, row: _Row, condition: str) -> str | None:
+        """Whether the least of a column's dual slack on D* (its dual row's right side less its left side) is above 0:
+        None when it is; `condition` when it is not (the greatest left side reaches the right side) or HiGHS finds the
+        greatest left side unbounded (item 2: "a least that HiGHS finds unbounded fails too, though D* allows none");
+        `lp_unverified` when the LP is not certified or fails."""
+        found = self.greatest(row.coefficients)
+        if isinstance(found, _Unverified):
+            return LP_UNVERIFIED
+        if found.status == "unbounded" or row.rhs - found.value <= 0:
+            return condition
+        return None
+
+    def c1(self, columns: tuple[Key, ...]) -> str | None:
+        """Item 2, C1, for each column of J in order: its dual slack with the steady state's coefficients is above 0
+        on all of D*. C1 reads the steady state alone, so a column is decided once per run of the assessment
+        (`answers`), by the first pass that comes to it, which counts its LP; a later pass whose J holds it reads that
+        answer and counts none (item 2). A pass refused at an earlier column of its J decides no later one (item 9)."""
+        for column in columns:
+            if column not in self.answers:
+                self.answers[column] = self.never_run(column)
+            if self.answers[column] is not None:
+                return self.answers[column]
+        return None
+
+    def never_run(self, column: Key) -> str | None:
+        """C1 of one column: x* runs it (tight on all of D*), or its slack at y* is 0 (`_never`): `c1`, with no LP;
+        else the least of its slack on D*, an LP (`above_zero`)."""
+        held = self.held
+        if held.x[column] > 0 or not _never(held.dual, held.point, [column]):
+            return C1
+        return self.above_zero(held.dual.by_column[column], C1)
+
+    def c2(self, columns: tuple[Key, ...]) -> str | None:
+        """Item 3, C2, for each column of J in order: its dual slack with the pass's coefficients (`_dual_rows`) is
+        above 0 on all of D*, an LP per column and pass."""
+        rows = _dual_rows(self.built.program, self.held.dual.duals, columns)
+        for column in columns:
+            found = self.above_zero(rows[column], C2)
+            if found is not None:
+                return found
+        return None
+
+    def pool(self, resource: str) -> dict[Key, Fraction]:
+        """A pool's coordinate on D* as a function of the dual: the mean over the cycle of its balance rows' duals, as
+        `_Solver.joint` builds it."""
+        if resource not in self.pools:
+            steps, mean = self.held.model.steps, {}
+            for step in range(steps):
+                for key, sign in self.held.dual.duals[("balance", resource, step)].items():
+                    _add(mean, key, sign / steps)
+            self.pools[resource] = _nonzero(mean)
+        return self.pools[resource]
+
+    def balance_only(self, activity: str, in_j: set[Key]) -> bool:
+        """Item 4's way without an LP ("one whose columns are all in J and lie in balance rows only, in the pass's
+        program"): every step's execution column of the activity is in J, none has an upper bound or a term of the
+        objective, and in the pass's program each lies in balance rows only. Its value on D* is then minus the mean of
+        those columns' dual slacks with the pass's coefficients, which C2 has kept above 0 on all of D*: below 0
+        everywhere, so it never enters K. An activity with a column outside J is not one: C2 decides the columns of J
+        alone."""
+        program = self.built.program
+        mine = {("x", activity, step) for step in range(self.built.model.steps)}
+        if not mine <= in_j or any(program.variables[key][1] is not None or program.objective.get(key) for key in mine):
+            return False
+        return all(row.key[0] == "balance" for row in program.rows if not mine.isdisjoint(row.coefficients))
+
+    def c3(self, columns: tuple[Key, ...]) -> str | None:
+        """Item 4, C3, for each J activity by id: it is not in the steady state's K, and it would not enter K with the
+        pass's coefficients: its value on D* (each pool it brings in or takes, at the pass's net amounts, at the pool's
+        coordinate) does not reach 0 from a finite least value below 0 and no higher. No LP for an activity that moves
+        out of or into a store (never in K) or one whose columns lie in balance rows only (`balance_only`); otherwise
+        the greatest of its value on D* is an LP (unbounded, above or below 0: it holds), and only when that is 0 its
+        least one more (finite and below 0: `c3`). These are K's own terms (`_Solver.joint`)."""
+        held, model, in_j = self.held, self.built.model, set(columns)
+        for activity in self.compared.activities:
+            if ACTIVITY_VALUE + activity in held.coordinates:
+                return C3
+            if model.touches_store(activity) or self.balance_only(activity, in_j):
+                continue
+            value: dict[Key, Fraction] = {}
+            for resource in model.resources:
+                amount = model.net.get((activity, resource))
+                if amount:
+                    for key, coefficient in self.pool(resource).items():
+                        _add(value, key, amount * coefficient)
+            greatest = self.greatest(value)
+            if isinstance(greatest, _Unverified):
+                return LP_UNVERIFIED
+            if greatest.status == "unbounded" or greatest.value != 0:
+                continue
+            least = self.greatest({key: -coefficient for key, coefficient in value.items()})
+            if isinstance(least, _Unverified):
+                return LP_UNVERIFIED
+            if least.status != "unbounded" and -least.value < 0:
+                return C3
+        return None
+
+    def c4(self, columns: tuple[Key, ...]) -> str | None:
+        """Item 5, C4: when A has no term, the steady state's and the pass's alike, it holds; otherwise the pass's P and
+        A (term by term) are the steady state's, no J activity is in P and the walk holds (`walk`). No LP: a pass whose
+        walk fails is solved. The pass's A is read too: a rule the pass moves may make an activity a protected
+        acquisition, or give one a term, where the steady state had none, and S1 would then run what C1 shows no
+        optimum of S3 runs, so the pass solved may be `objective_tier_conflict` where the steady state is not."""
+        held, model = self.held, self.built.model
+        moved = acquisition(model)
+        if not held.acquisition and not moved:
+            return None
+        protected = tuple(record["activity"] for record in acquirers(model) if protects(record))
+        if protected != held.protected or moved != held.acquisition:
+            return C4
+        if not set(self.compared.activities).isdisjoint(protected):
+            return C4
+        return None if self.walk(columns) else C4
+
+    def walk(self, columns: tuple[Key, ...]) -> bool:
+        """Item 5's walk, static: the structure of the two models only (`held.model`, the steady state's, and the
+        pass's), every step at once, and no LP.
+
+        - An entity in one of whose rows (its balance rows, overflow bounds and regen stops) a column of a J activity
+          differs is short where that activity brings in net less of it at the steady state's coefficients than at the
+          pass's, long where more, and both where its net is the same (another of its rows differs).
+        - Every taker of a short entity is stopped: an activity whose net amount on it is below 0 or that moves out of
+          it, a goal sink of it, a demand row that costs it. A stopped activity makes short each entity it brings in
+          more of than it takes and each its moves bring in, long each it takes more of than it brings in and each its
+          moves take from, and both each it brings in and takes alike; a stopped demand row makes long each other
+          entity it costs (a goal sink takes its own entity alone). Until nothing more is stopped.
+        - It holds when no activity of P and no demand row whose `main` is not 0 is stopped, no stopped activity is
+          counted by an income cap, and each short or long entity can hold more (`holds_more`).
+        Where the contract's words fit either model (an activity's net amount, what it brings in or takes, its moves),
+        both models are read: an activity that is a taker, or brings in or takes an entity, in either is so here. This
+        only stops more and lists more short or long entities than the other readings, so it only refuses more."""
+        steady, moved, zero = self.held.model, self.built.model, Fraction(0)
+        models = (steady, moved)
+        short: set[str] = set()
+        long: set[str] = set()
+        todo: list[str] = []
+
+        def shorten(entity: str) -> None:
+            if entity not in short:
+                short.add(entity)
+                todo.append(entity)
+
+        in_j = set(columns)
+        stopped_at = {cap: resource for resource, (_, cap, _) in steady.stops.items()}
+        rows = _keyed(self.built.program)
+        differs: set[tuple[str, str]] = set()
+        for row in self.held.program.rows:
+            if row.key[0] not in J_ROWS:
+                continue
+            other = rows[row.key].coefficients
+            for column in in_j.intersection(row.coefficients.keys() | other.keys()):
+                if row.coefficients.get(column, zero) != other.get(column, zero):
+                    differs.add((column[1], stopped_at[row.key[1]] if row.key[0] == "stop" else row.key[1]))
+        for activity, entity in sorted(differs):
+            before, after = steady.net.get((activity, entity), zero), moved.net.get((activity, entity), zero)
+            if before <= after:
+                shorten(entity)
+            if before >= after:
+                long.add(entity)
+        takers: dict[str, set[str]] = {}
+        brings: dict[str, set[str]] = {}
+        takes: dict[str, set[str]] = {}
+        for model in models:
+            for (activity, entity), amount in model.net.items():
+                if amount < 0:
+                    takers.setdefault(entity, set()).add(activity)
+                    takes.setdefault(activity, set()).add(entity)
+                elif amount > 0:
+                    brings.setdefault(activity, set()).add(entity)
+                elif model.income.get((activity, entity), zero) > 0:  # it brings in and takes alike
+                    brings.setdefault(activity, set()).add(entity)
+                    takes.setdefault(activity, set()).add(entity)
+            for _, activity, source, target in model.moves:
+                takers.setdefault(source, set()).add(activity)
+                takes.setdefault(activity, set()).add(source)
+                brings.setdefault(activity, set()).add(target)
+        stopped: set[str] = set()
+        demands: set[str] = set()
+        while todo:
+            entity = todo.pop()
+            for activity in sorted(takers.get(entity, set()) - stopped):
+                stopped.add(activity)
+                for brought in sorted(brings.get(activity, ())):
+                    shorten(brought)
+                long.update(takes.get(activity, ()))
+            for model in models:
+                for row in model.demand:
+                    costs = [resource for resource, _ in row.costs]
+                    if row.key not in demands and entity in costs:
+                        demands.add(row.key)
+                        long.update(resource for resource in costs if resource != entity)
+        if not stopped.isdisjoint(self.held.protected):
+            return False
+        if any(row.main != 0 for model in models for row in model.demand if row.key in demands):
+            return False
+        counted = {activity for model in models for _, _, members, _, _ in model.incomes for activity in members}
+        if not stopped.isdisjoint(counted):
+            return False
+        return all(self.holds_more(entity, entity in short) for entity in sorted(short | long))
+
+    def holds_more(self, entity: str, short: bool) -> bool:
+        """Item 5, an entity that can hold more, in both models, of the three kinds the contract lists and no other:
+        one with no hard cap, storage cap, regen stop or read cap; one with a hard cap and no other; or one with a
+        storage cap or a regen stop that nothing but its own regen brings in (no activity's income and no move into it,
+        and no regen but the stop's, or but the store's one). A short entity (or one that is both) must also have no
+        regen that brings less than 0 in a step. Any other fails: a store or regen stop that an activity or a move fills
+        too, a read cap, more than one cap."""
+        for model in (self.held.model, self.built.model):
+            read = any(resource == entity for _, resource, _, _ in model.soft)
+            caps = (entity in model.hard) + (entity in model.storage) + (entity in model.stops)
+            if read or caps > 1:
+                return False
+            regens = [(rule, incomes) for rule, target, incomes in model.regens if target == entity]
+            if entity in model.storage or entity in model.stops:
+                filled = any(amount > 0 for (_, target), amount in model.income.items() if target == entity)
+                if filled or any(target == entity for _, _, _, target in model.moves):
+                    return False
+                names = [rule for rule, _ in regens]
+                if entity in model.stops and names != [model.stops[entity][0]]:
+                    return False
+                if entity in model.storage and len(names) > 1:
+                    return False
+            if short and any(amount < 0 for _, incomes in regens for amount in incomes):
+                return False
+        return True
+
+    def values(self) -> dict[str, Fraction | None]:
+        """Item 7, a proven pass's activity values: the steady state's at its vector, but a J activity's, computed at
+        that vector with the pass's net amounts as `_Solver.joint` computes one (None for one that moves out of or into
+        a store)."""
+        vector, model = self.held.vector, self.built.model
+        found = dict(self.held.values)
+        for activity in self.compared.activities:
+            if model.touches_store(activity):
+                found[activity] = None
+                continue
+            found[activity] = sum(
+                (amount * vector[entity] for (name, entity), amount in model.net.items()
+                 if name == activity and entity in vector),
+                Fraction(0),
+            )
+        return found
+
+
 # The dual (PRICE-2b-1; #424 ACM-PRICE addendum 2.1 §2.2 step 2) -------------------------------------------------
 
 
@@ -2604,7 +2973,10 @@ class Held:
     - `optimal`: S3's optimal face, in its complementary-slackness form with y* (`_Tiers.optimal`, `_optimal_face`);
     - `protected`: P, the protected acquisitions by id (`acquirers`, `protects`); `acquisition`, A's terms
       (`acquisition`; none when A has no term); `acquired`, A* (0 then); and `value`, V0, S3's optimum;
-    - `coordinates`, `vector` and `values`: K, the joint vector and each activity's value at it (`_Chosen`)."""
+    - `coordinates`, `vector` and `values`: K, the joint vector and each activity's value at it (`_Chosen`);
+    - `model`: the model S3's program was built from (`_Model`, the solver's own, #430 METHOD-C C-2a-2a): the
+      certificate's walk (C4) compares its structure with the pass's, and the certificate's own LPs are solved by a
+      solver of it (`certify`). Held, like the rest, it is never compared and never in a value."""
 
     program: _Program
     x: dict[Key, Fraction]
@@ -2619,6 +2991,7 @@ class Held:
     coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]]
     vector: dict[str, Fraction]
     values: dict[str, Fraction | None]
+    model: _Model
 
 
 class _Solver:
@@ -2645,6 +3018,10 @@ class _Solver:
         # hands the impact assessment (`Held`, `handed`); None until they run. Neither is output; nothing reads them here
         self.chosen: _Chosen | None = None
         self.held: Held | None = None
+        # #430 METHOD-C C-2a-2a: the activities whose `most` or range this pass's vector could not verify, each with
+        # those probes (`vector`), which `compute` hands on beside the vector's value and never in it; None until then.
+        # Not named `unverified`: that is the method that words an unverified probe's warning.
+        self.left_unverified: dict[str, tuple[str, ...]] | None = None
 
     def lap(self, stage: str) -> None:
         """The end of a stage of the vector or of the steady state (PASS-TIMING, #430 C-2a; `_Clock.lap`); nothing
@@ -3790,8 +4167,9 @@ class _Solver:
     def handed(self, tiers: _Tiers, on_face: tuple[dict[Key, Any], tuple[_Row, ...]]) -> Held:
         """What the steady state hands the impact assessment (#430 METHOD-C, `Held`): the objects `steady` computed
         with, as they are: its three solves (`tiers`), D* in its complementary-slackness form (`on_face`, the one
-        `steady` computes once for every LP on D*) and what `joint` chose (`chosen`). Nothing is computed again; P is
-        read off the acquisitions `tiers` already judged (`protects`)."""
+        `steady` computes once for every LP on D*), what `joint` chose (`chosen`) and the model the solver reads
+        (`model`, C-2a-2a: already read, so not read again). Nothing is computed again; P is read off the acquisitions
+        `tiers` already judged (`protects`)."""
         chosen = self.chosen
         if chosen is None:  # `joint` runs before this, always
             raise ValueError("the steady state hands on what the selection chose before it ran")
@@ -3799,7 +4177,7 @@ class _Solver:
             program=tiers.program, x=tiers.base.x, dual=tiers.dual, point=tiers.point, restricted=on_face,
             optimal=tiers.optimal, protected=tuple(record["activity"] for record in tiers.records if protects(record)),
             acquisition=tiers.terms, acquired=tiers.acquired, value=tiers.base.value,
-            coordinates=chosen.coordinates, vector=chosen.vector, values=chosen.values,
+            coordinates=chosen.coordinates, vector=chosen.vector, values=chosen.values, model=self.model,
         )
 
     def projections(
@@ -3845,7 +4223,12 @@ class _Solver:
 
         PASS-TIMING: the tie probes are not run (`tiers`, `tie_probes`): a tie is a warning and a gap of the coverage
         section, which the vector has neither of, and nothing here reads `tiers.ties` or `tiers.unverified`; so every
-        coordinate is what it was with them. Each stage ends on the solver's clock (`lap`, `STAGES`)."""
+        coordinate is what it was with them. Each stage ends on the solver's clock (`lap`, `STAGES`).
+
+        #430 METHOD-C C-2a-2a: the activities whose probes `joint` could not verify here, each with those probes (its
+        `unverified`, by id; the vector computes no forcing cost, so they are `most` and `range` only), are kept on the
+        solver (`left_unverified`), which `compute` hands on beside the value (`Economy.unverified`): the value is the
+        same whatever they are, and nothing here reads them."""
         tiers = self.tiers(tie_probes=False)
         on_face = _restricted(tiers.dual, tiers.program, tiers.base.x)
         self.lap("dual")
@@ -3858,6 +4241,10 @@ class _Solver:
         data = {
             "prices": {resource: entry["value"] for resource, entry in joint["prices"].items()},
             "activities": {activity: entry["value"] for activity, entry in joint["activities"].items()},
+        }
+        self.left_unverified = {
+            activity: tuple(entry["unverified"])
+            for activity, entry in joint["activities"].items() if entry["unverified"]
         }
         self.lap("check")
         return data, []
@@ -3989,7 +4376,9 @@ def compute(graph: Graph, solve: str) -> Economy:
     except Failure as failure:
         return Economy(blocked_by=graph.register(failure.errors))
     if solve == VECTOR:  # one pass of the impact assessment: nothing but the vector (`core.impact`), and its timing
-        return Economy(data, status, False, (), reads=tuple(reader.reads), **_timed(clock))
+        return Economy(
+            data, status, False, (), reads=tuple(reader.reads), unverified=solver.left_unverified, **_timed(clock)
+        )
     if solve == QUICK:
         # Its status says what it is, never the worst of what it read: no reader takes it for a steady state's. The
         # coverage is the steady state's as far as these solves know it (`coverage.NEEDS_LATER_STAGES`).

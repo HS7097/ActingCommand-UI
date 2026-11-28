@@ -46,9 +46,10 @@ SKIPPED_FOLDER = "__pycache__"
 # The configuration keys that never change what a computation that finishes computes, each with why (contracts/cli.md,
 # "Cache", "The evaluator digest", lists them too): where files are; the cache; the host caps and the gate (whether,
 # when and how fast the work runs); the time and the memory a process may take and the restarts a pool may make (past
-# them a computation fails, it never computes otherwise); the verify sample; the two chunk sizes. A limit that a
-# computation meets the same way each time (`expr.max_bits`, `random.max_transitions`, `search.screen_max_rows`) is
-# never here: past it the computation is refused, so a reuse must be refused where the assessment would be.
+# them a computation fails, it never computes otherwise); the verify sample; the two chunk sizes; and whether a pass is
+# offered to the certificate (#430 METHOD-C, `impact.certify`). A limit that a computation meets the same way each time
+# (`expr.max_bits`, `random.max_transitions`, `search.screen_max_rows`) is never here: past it the computation is
+# refused, so a reuse must be refused where the assessment would be.
 NEUTRAL = {
     "cache.max_bytes": "the size cap of the cache: an evicted value is computed again, the same; export prices computes "
                        "without the cache",
@@ -78,6 +79,10 @@ NEUTRAL = {
     "host.pause_file": "the gate: the file whose presence holds it; a local path",
     "host.pause_poll_ms": "the gate: how often a waiting gate checks again",
     "host.quiet_windows": "the gate: the hours without compute",
+    "impact.certify": "whether a pass is proven by the certificate or solved (#430 METHOD-C): a proven pass's vector "
+                      "is, by the proof, the one solving it finds exactly, so an assessment that finishes computes the "
+                      "same groups either way but for each pass's by, refused_by and timing_ms, which no binds reads, "
+                      "and --reuse-assessment takes an assessment over across it",
     "paths.actinglab": "the validator of export tables: it accepts or refuses a table and never changes one; export "
                        "prices does not run it; a local path",
     "paths.datasets": "where the copies of the external datasets are: each is the file named by the sha256 its data file "

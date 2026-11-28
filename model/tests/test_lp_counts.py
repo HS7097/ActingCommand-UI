@@ -231,13 +231,16 @@ def test_each_pass_says_how_its_vector_was_found_and_the_timing_holds_the_lps_of
         pytest.param(lambda folder: priced(cyclic_fixture(folder)), id="cyclic"),
     ],
 )
-def test_each_stages_runs_are_highs_runs_of_that_stage(tmp_path, acmodel, monkeypatch, fixture):
+def test_each_stages_runs_are_highs_runs_of_that_stage(tmp_path, acmodel, monkeypatch, write_config, fixture):
     """Every HiGHS run of an LP is recorded here as it happens, and each end of a stage (`Recorded`). flips_fixture (two
     passes, pt.k at 1/2 and at 2), `tie_beside_estimate` (S1 and S2, and act.train's tie probes in the steady state) and
     cyclic_fixture (seven steps; r's hard cap: each end of its projection is an LP on D*, and its re-solves at ±grain
     start from S3's instance). Each stage's `runs` in `steady_timing_ms` and in each solved pass's `timing_ms`, in
-    order, is the number of runs recorded in that stage on that clock; `certificate` is 0; every run fell in a stage."""
+    order, is the number of runs recorded in that stage on that clock; `certificate` is 0; every run fell in a stage.
+    With `impact.certify` false (#430 METHOD-C C-2a-2a), every pass is solved: this counts the solves alone, and
+    test_certificate.py counts the certificate's LPs."""
     folder = fixture(tmp_path)
+    write_config({"schema_version": "acmodel.config.v1", "impact": {"certify": False}})
     recorded = Recorded(monkeypatch)
 
     status, doc = export(acmodel, folder)
@@ -488,7 +491,8 @@ def _not_an_integer(doc: dict[str, Any]) -> None:
 
 
 def _refused_by_in_one(doc: dict[str, Any]) -> None:
-    _pass(doc, 0)["refused_by"] = "c1"
+    # #430 C-2a-2a: an export with `impact.certify` true (the default) writes it in every pass: the second's taken out
+    _pass(doc, 1).pop("refused_by")
 
 
 def _refused_by_unknown(doc: dict[str, Any]) -> None:

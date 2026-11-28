@@ -9,6 +9,8 @@ host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.se
 `Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`, the
 generic search's (the other keys under `search`) are `SearchSettings`, and the validator of the exports is
 `paths.actinglab` (no default: an export that needs it refuses without it) and `export.validator_timeout_ms`.
+`impact.certify` (#430 METHOD-C), whether the impact assessment offers a pass to the certificate before it solves it, is
+`Config.impact_certify`, which `export prices` hands `core.impact` (a boolean, `true` by default).
 
 `keys()` names every key by its dotted name, from `_MEMBERS`, the table every member read is checked against (and the
 objects of keys among its members, `NESTED`); `FIELDS` says where `Config` holds each, `value()` reads it. The evaluator
@@ -46,6 +48,8 @@ DEFAULT_BLAS_THREADS = 1
 DEFAULT_EXPR_MAX_BITS = 127
 DEFAULT_CACHE_MAX_BYTES = 2 * 1024**3
 DEFAULT_VALIDATOR_TIMEOUT_MS = 120_000
+# `impact.certify` (#430 METHOD-C; contracts/cli.md, "Configuration"): a pass is offered to the certificate by default.
+DEFAULT_IMPACT_CERTIFY = True
 
 _MEMBERS = {
     "schema_version": None,
@@ -66,6 +70,7 @@ _MEMBERS = {
     "economy": {"plan_horizon", "max_cycle_steps"},
     "export": {"validator_timeout_ms"},
     "watch": watch_settings.MEMBERS,
+    "impact": {"certify"},
 }
 # The members of `_MEMBERS` that are objects of keys themselves, each read by its own module: (section, member) to
 # their keys.
@@ -228,6 +233,9 @@ class Config:
     actinglab: Path | None  # `paths.actinglab`: the Runtime's validator of the exports; None when not configured
     validator_timeout_ms: int  # `export.validator_timeout_ms`
     watch: watch_settings.WatchSettings  # the keys under `watch` (acmodel.watch.settings)
+    # `impact.certify` (#430 METHOD-C): whether the impact assessment offers each pass that moves something to the
+    # certificate before it solves it (`core.impact`); it never changes what a pass's vector is
+    impact_certify: bool = DEFAULT_IMPACT_CERTIFY
 
 
 # Where `Config` holds each configuration key (`keys`), by its dotted name: the attributes from `Config` down. It names
@@ -261,6 +269,7 @@ FIELDS: dict[str, tuple[str, ...]] = {
     **{f"search.{key}": ("search", key) for key in sorted(SEARCH_RANGES)},
     "export.validator_timeout_ms": ("validator_timeout_ms",),
     **{f"watch.{key}": ("watch", key) for key in sorted(watch_settings.MEMBERS)},
+    "impact.certify": ("impact_certify",),
 }
 
 
@@ -404,6 +413,9 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     timeout_ms = _section(doc, "export", path).get("validator_timeout_ms", DEFAULT_VALIDATOR_TIMEOUT_MS)
     if type(timeout_ms) is not int or timeout_ms < 1:
         raise _invalid("value_invalid", path, _pointer("export", "validator_timeout_ms"))
+    certify = _section(doc, "impact", path).get("certify", DEFAULT_IMPACT_CERTIFY)
+    if type(certify) is not bool:
+        raise _invalid("value_invalid", path, _pointer("impact", "certify"))
 
     def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
         return _invalid(reason, path, _pointer(*parts), **values)
@@ -429,6 +441,7 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         actinglab=_absolute(paths, "actinglab", None, path),
         validator_timeout_ms=timeout_ms,
         watch=watch_settings.read(_section(doc, "watch", path), invalid),
+        impact_certify=certify,
     )
     _outside_runtime(cfg, path)
     return cfg

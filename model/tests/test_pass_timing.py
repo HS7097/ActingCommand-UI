@@ -144,11 +144,13 @@ def tie_beside_estimate(folder: Path) -> Path:
     return priced(extended(shared_fixture(folder, "10", most="10"), entities, rules, readings={"fact.b": 0}))
 
 
+# #430 METHOD-C C-2a-2a: with `impact.certify` true (the default) each pass also says what refused it: act.b runs its
+# limit's whole count, so x* runs its column and C1 fails with no LP (`c1`).
 B_GROUP = {
     "rules": ["pt.b"], "unknowns": [],
     "passes": [
-        {"at": {"pt.b": "low"}, "values": {"pt.b": "2"}, "by": "solved"},
-        {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}, "by": "solved"},
+        {"at": {"pt.b": "low"}, "values": {"pt.b": "2"}, "by": "solved", "refused_by": "c1"},
+        {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}, "by": "solved", "refused_by": "c1"},
     ],
     "prices": {}, "flips": [],
 }
