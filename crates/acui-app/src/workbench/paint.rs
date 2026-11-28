@@ -26,8 +26,8 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::goal_records::{
-    at_or_before, key_matches, KeyHeld, LaneLine, LaneUnknown, ListUnknown, RecordLine,
-    RecordsLine, Requirement, Room, APPLICATION_RECORDS,
+    at_or_before, current_text, key_matches, KeyHeld, LaneLine, LaneUnknown, ListUnknown,
+    RecordLine, RecordsLine, Requirement, Room, APPLICATION_RECORDS,
 };
 use acui_source::workbench::goals::{
     amount as goal_amount, largest, newer_than_this_console, number as goal_number,
@@ -3681,6 +3681,13 @@ fn loses_text(labels: &Labels, loses: &Loses) -> String {
             };
             fill(template, &[&carried])
         }
+        // Workflow #455 RR4b: a records entry cleared by its name.
+        Loses::Records { unreadable: true, .. } => {
+            labels.goals_confirm_records_unreadable.to_owned()
+        }
+        Loses::Records { count, unreadable: false } => {
+            fill(labels.goals_confirm_records_clear, &[&count.to_string()])
+        }
         Loses::SameName { removed: Removed::Other(held), carried } => {
             let held = match held {
                 Some((pool, amount)) => {
@@ -3987,9 +3994,11 @@ fn group_title(labels: &Labels, group: Group) -> &'static str {
 
 /// A records entry (Workflow #455 RR4b): its title, else its name (of a name no records entry
 /// declares, the only one it has); how many characters it holds, of how many at most; in amber that
-/// its table is not available here, so none is added; in grey its help, that no entry declares it
-/// any more, and why no character can be added (the entry, or the instance, full). Greyed while its
-/// table does not apply.
+/// its table is not available here, so none is added, and of a declared entry no set of its array
+/// passes any more, why (more than it keeps now; records that no longer fit its table) and that
+/// its clear starts it again; in grey its help, that no entry declares it any more, and why no
+/// character can be added (the entry, or the instance, full). Greyed while its table does not
+/// apply.
 fn records_row(labels: &Labels, line: &RecordsLine) -> GoalRowData {
     let title = line.title.clone().unwrap_or_else(|| line.name.clone());
     let total = line.total.to_string();
@@ -4007,6 +4016,18 @@ fn records_row(labels: &Labels, line: &RecordsLine) -> GoalRowData {
     }
     if !line.declared {
         notes.push(labels.goals_records_undeclared.to_owned());
+    }
+    // A declared entry no set of its whole array passes any more: why, and that its clear starts
+    // it again (`goal_records::clear_offered`).
+    if line.stuck() {
+        let over = line.max.filter(|max| u64::from(line.total) > *max);
+        if let Some(max) = over {
+            warnings.push(fill(labels.goals_records_stuck_over, &[&max.to_string()]));
+        }
+        if line.unapplied > 0 && line.applies {
+            let count = line.unapplied.to_string();
+            warnings.push(fill(labels.goals_records_stuck_unapplied, &[&count]));
+        }
     }
     match line.room {
         Room::EntryFull => notes.push(labels.goals_records_full.to_owned()),
@@ -4222,11 +4243,11 @@ fn goal_picker_data(labels: &Labels, view: &PickerView, old: &GoalPickerData) ->
                         None => column.clone(),
                     };
                     let positions = lane.positions.as_deref().unwrap_or_default();
-                    let now = match (lane.lane.current, &lane.lane.unknown) {
+                    let now = match (&lane.lane.current, &lane.lane.unknown) {
+                        // As its ladder says it once read, else by its numbers.
                         (Some(current), _) => {
-                            let said = positions.iter().find(|position| position.index == current);
-                            let words =
-                                said.map_or_else(|| current.to_string(), |p| p.text.clone());
+                            let tongue = labels.tongue.outcome_tongue();
+                            let words = current_text(current, lane.positions.as_deref(), tongue);
                             fill(labels.goals_picker_now, &[&words])
                         }
                         (None, Some(unknown)) => {
@@ -4243,7 +4264,7 @@ fn goal_picker_data(labels: &Labels, view: &PickerView, old: &GoalPickerData) ->
                     rows.extend(positions.iter().map(|position| GoalPickRow {
                         title: position.text.as_str().into(),
                         mark: SharedString::new(),
-                        greyed: at_or_before(position.index, lane.lane.current),
+                        greyed: at_or_before(position.index, lane.lane.current_index()),
                     }));
                     let notes: Vec<String> = lane
                         .requires

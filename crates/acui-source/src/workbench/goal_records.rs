@@ -37,8 +37,13 @@
 //! last (`contracts/standard-pack-goals.md` 139-165 at aa6765dd). Its `to` is made of the picker's
 //! choices ([`to_of`]), each lane starting at its record's target, else at the ladder's last
 //! position ([`default_target`]). The names under which the stored records hold no declared entry,
-//! and every declared entry while the stored record does not read, are cleared by name
-//! (`runtime-interface.md` 754-786).
+//! every declared entry while the stored record does not read, and a declared entry no `set` of
+//! its whole array can pass any more, are cleared by name (`runtime-interface.md` 754-786;
+//! [`clear_offered`]), after one question of what that removes.
+//!
+//! A picker reads under the tables' sha256 of what it read last; an answer under other tables
+//! moves it to those, a bounded number of times ([`pick_tables`]), so that no read is made again
+//! for nothing.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -54,8 +59,8 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::{Map, Value};
 
 use super::goals::{
-    in_language, set_by, GoalAct, GoalChange, GoalLine, GoalWrite, GoalsPage, SetBy, WriteProblem,
-    EDIT_IO,
+    in_language, set_by, GoalAct, GoalChange, GoalLine, GoalWrite, GoalsPage, Loses, Press, SetBy,
+    WriteProblem, EDIT_IO,
 };
 use super::{configure_config, pack};
 use crate::{runtime_connection, ClientFailure, RUNTIME_RESULT_UNEXPECTED};
@@ -121,6 +126,42 @@ pub enum AfterRefusal {
     KeepCached,
     /// Any other refusal, or none: a failure, said with its codes.
     Fail,
+}
+
+/// How many times the tables a picker reads may move under it after it opens before it gives up
+/// ([`pick_tables`]).
+pub const PICK_MOVES: u8 = 2;
+
+/// What a picker does with a part it read whole that answered under other tables than it reads
+/// under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickTables {
+    /// The tables it reads under: kept as theirs.
+    Same,
+    /// Other tables: those it read under moved. What is kept under their sha256 is let go of, the
+    /// picker reads under the answer's from now on (its table's options first, read anew), its
+    /// choices start anew, and the move is counted.
+    Moved,
+    /// Other tables once more after [`PICK_MOVES`] moves: it reads no more until it is opened
+    /// anew, which it says, so that tables that keep moving under it cost no read after read.
+    GiveUp,
+}
+
+/// What a picker that reads under the tables' sha256 `reading`, its tables having moved `moves`
+/// times since it opened, does with a part it read under `answered`, the one place that decides
+/// it. A page of no cursor is answered under the tables of the moment, whatever they were
+/// (`runtime-interface.md` 867-878 at aa6765dd: only a cursor is refused for a moved
+/// declaration), so a part of one page read after the tables changed answers under the new ones:
+/// were it kept under them while the picker still looked under the old, it would be read again
+/// and again.
+pub fn pick_tables(reading: Option<&str>, answered: Option<&str>, moves: u8) -> PickTables {
+    if reading == answered {
+        PickTables::Same
+    } else if moves >= PICK_MOVES {
+        PickTables::GiveUp
+    } else {
+        PickTables::Moved
+    }
 }
 
 /// What a refusal of `code` of a page with a cursor leads to, `restarted` whether this read began
@@ -498,14 +539,22 @@ pub struct RecordsLine {
     pub stored: Vec<StoredRecord>,
     pub room: Room,
     pub unreadable: bool,
+    /// How many of its records the needs do not apply.
+    pub unapplied: usize,
+    /// A clear of its name is offered here ([`clear_offered`]).
+    pub clear: bool,
 }
 
 impl RecordsLine {
-    /// Whether a clear of its name is offered: an entry no records entry declares, which a `set`
-    /// does not reach; and every declared one while the stored record does not read, which only a
-    /// clear ends (`runtime-interface.md` 754-786 at aa6765dd).
+    /// Whether a clear of its name is offered ([`clear_offered`]).
     pub fn clearable(&self) -> bool {
-        !self.declared || self.unreadable
+        self.clear
+    }
+
+    /// It is declared and reads, and a clear is offered all the same: no `set` of its whole array
+    /// can pass any more (a record not applied, or more records than `max_records`).
+    pub fn stuck(&self) -> bool {
+        self.declared && !self.unreadable && self.clear
     }
 
     /// Its stored record of `key`, when it has one.
@@ -537,6 +586,24 @@ pub enum Room {
     /// It takes none here: not declared, its table not applied, or the stored record unreadable,
     /// each said otherwise.
     Closed,
+}
+
+/// Whether a clear of a records entry's name is offered here, the one place that decides it: of a
+/// name no records entry declares, which no `set` reaches; of every entry while the stored record
+/// does not read, which only a clear ends (`runtime-interface.md` 776-780 at aa6765dd); and of a
+/// declared entry no `set` of its whole array can pass any more, so that changing or removing one
+/// of its records here is refused too: one of its records the needs do not apply (`unapplied`: a
+/// key its table no longer holds, a grade no longer on its ladder), or more records (`total`) than
+/// its `max_records` (`max`, lowered by an update of the pack) (the Runtime judges every record of
+/// the array sent, the count first: runtime-host `goals.rs` 392-437 at aa6765dd).
+pub fn clear_offered(
+    declared: bool,
+    unreadable: bool,
+    total: u64,
+    max: Option<u64>,
+    unapplied: usize,
+) -> bool {
+    !declared || unreadable || unapplied > 0 || max.is_some_and(|max| total > max)
 }
 
 /// Whether a character can be added to an entry that is `declared`, whose table `applies`, while
@@ -734,6 +801,8 @@ pub fn shown(loaded: &RecordsLoaded, tongue: Tongue) -> RecordsShown {
                         stored: Vec::new(),
                         room: Room::Closed,
                         unreadable,
+                        unapplied: 0,
+                        clear: false,
                     },
                     after: after_entry.clone(),
                     records: Vec::new(),
@@ -811,9 +880,12 @@ pub fn shown(loaded: &RecordsLoaded, tongue: Tongue) -> RecordsShown {
     }
     let all: u64 = blocks.iter().map(|block| u64::from(block.line.total)).sum();
     for block in &mut blocks {
+        let unapplied = block.records.iter().filter(|record| !record.applied).count();
         let line = &mut block.line;
         let total = u64::from(line.total);
         line.room = room(line.declared, line.applies, unreadable, total, line.max, all);
+        line.unapplied = unapplied;
+        line.clear = clear_offered(line.declared, unreadable, total, line.max, unapplied);
     }
     let (declared, undeclared): (Vec<RecordsBlock>, Vec<RecordsBlock>) =
         blocks.into_iter().partition(|block| block.line.declared);
@@ -984,21 +1056,26 @@ pub fn at_or_before(index: u16, current: Option<u16>) -> bool {
 /// lines (`Put`, its record replaced in place or added where the entry has room, never a `to` that
 /// names nothing or the one stored already); a record removed (`Remove`, on its line); a clear of
 /// an entry's name where it is offered ([`RecordsLine::clearable`]). Only of an entry declared and
-/// applied, while the stored record reads, but for the clear. It never asks first: every one of
-/// them can be set back here.
-pub(super) fn records_press(page: &GoalsPage, line: &GoalLine, act: &GoalAct) -> Option<GoalWrite> {
+/// applied, while the stored record reads, but for the clear. A save, a change and a removal ask
+/// nothing, every one of them being set back here; a clear asks first, saying how many records it
+/// removes (the Runtime's count, `records_total`), whose characters and targets are entered anew
+/// to be raised again, or that the stored record, which does not read, is lost
+/// ([`Loses::Records`]).
+pub(super) fn records_press(page: &GoalsPage, line: &GoalLine, act: &GoalAct) -> Option<Press> {
+    let goes = |write: GoalWrite| Press { write, asks: None };
     match (line, act) {
-        (GoalLine::Records(block), GoalAct::Put { key, to }) => put(block, key, to),
-        (GoalLine::Records(block), GoalAct::Clear) if block.clearable() => {
-            Some(GoalWrite { name: block.name.clone(), change: GoalChange::Clear })
-        }
+        (GoalLine::Records(block), GoalAct::Put { key, to }) => put(block, key, to).map(goes),
+        (GoalLine::Records(block), GoalAct::Clear) if block.clearable() => Some(Press {
+            write: GoalWrite { name: block.name.clone(), change: GoalChange::Clear },
+            asks: Some(Loses::Records { count: block.total, unreadable: block.unreadable }),
+        }),
         (GoalLine::Record(record), GoalAct::Put { key, to }) if record.changeable => {
-            put(block_of(page, &record.entry)?, key, to)
+            put(block_of(page, &record.entry)?, key, to).map(goes)
         }
         (GoalLine::Record(record), GoalAct::Remove) if record.changeable => {
             let block = block_of(page, &record.entry)?;
             let records = records_after(&block.stored, &RecordChange::Remove(record.key.clone()))?;
-            Some(set(&block.name, &records))
+            Some(goes(set(&block.name, &records)))
         }
         _ => None,
     }
@@ -1153,8 +1230,8 @@ pub struct KeyOption {
     words: Vec<String>,
 }
 
-/// One ladder a key has: its column and sub by id and by name, its size, the key's position now by
-/// its index (for a key held) or why it is not known, and the ladder it walks there.
+/// One ladder a key has: its column and sub by id and by name, its size, the key's position now
+/// (for a key held) or why it is not known, and the ladder it walks there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyLaneOption {
     pub column: String,
@@ -1162,9 +1239,40 @@ pub struct KeyLaneOption {
     pub column_name: String,
     pub sub_name: Option<String>,
     pub positions: u16,
-    pub current: Option<u16>,
+    pub current: Option<CurrentPosition>,
     pub unknown: Option<LaneUnknown>,
     pub ladder: Ladder,
+}
+
+/// A key's position now on a ladder, as the options give it: its index among the ladder's
+/// positions, and its numbers, which the options say no words of (`GoalKeyPosition`): the
+/// ladder's positions say it, once read, else its numbers do ([`position_text`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentPosition {
+    pub index: u16,
+    pub position: Vec<i64>,
+}
+
+impl KeyLaneOption {
+    /// The index of the key's position now, when it is known.
+    pub fn current_index(&self) -> Option<u16> {
+        self.current.as_ref().map(|current| current.index)
+    }
+}
+
+/// How the position now `current` of a lane is shown in the picker: as its ladder's `positions`
+/// say the position of its index, once they are read; else, before they are read or when their
+/// read failed, by its own numbers ([`position_text`]), never by its index.
+pub fn current_text(
+    current: &CurrentPosition,
+    positions: Option<&[PositionOption]>,
+    tongue: Tongue,
+) -> String {
+    let read = positions.into_iter().flatten().find(|position| position.index == current.index);
+    match read {
+        Some(position) => position.text.clone(),
+        None => position_text(&current.position, None, tongue),
+    }
 }
 
 /// The table of `rows`, the part `options` of an entry whose table is `table`, in `tongue`: the
@@ -1265,7 +1373,10 @@ pub fn table_options(rows: &[GoalPageRow], table: &str, tongue: Tongue) -> Table
                                 .map_or_else(|| sub.clone(), |(_, name)| name.clone())
                         }),
                         positions: lane.positions,
-                        current: lane.current.as_ref().map(|current| current.index),
+                        current: lane.current.as_ref().map(|current| CurrentPosition {
+                            index: current.index,
+                            position: current.position.clone(),
+                        }),
                         unknown: lane.unknown.as_ref().map(LaneUnknown::of),
                         ladder: Ladder { table: table.to_owned(), of },
                     }
@@ -1348,11 +1459,12 @@ impl PositionsLoaded {
 #[cfg(test)]
 mod tests {
     use super::{
-        after_refusal, at_or_before, default_target, holds_part, key_matches, lane_target, placed,
-        pointed_record, position_text, record_key, records_after, records_json, records_key, room,
-        shown, table_options, to_of, AfterRefusal, KeyHeld, LadderOf, LaneTarget, LaneUnknown,
-        ListUnknown, RecordChange, RecordsLoaded, Requirement, Room, Slot, StoredRecord,
-        APPLICATION_RECORDS, KEYS_SHOWN,
+        after_refusal, at_or_before, clear_offered, current_text, default_target, holds_part,
+        key_matches, lane_target, pick_tables, placed, pointed_record, position_text, record_key,
+        records_after, records_json, records_key, room, shown, table_options, to_of,
+        AfterRefusal, CurrentPosition, KeyHeld, LadderOf, LaneTarget, LaneUnknown, ListUnknown,
+        PickTables, PositionOption, RecordChange, RecordsLoaded, Requirement, Room, Slot,
+        StoredRecord, APPLICATION_RECORDS, KEYS_SHOWN, PICK_MOVES,
     };
     use crate::workbench::goals::WriteProblem;
     use acui_rows::outcome::Tongue;
@@ -1758,6 +1870,9 @@ mod tests {
         assert_eq!(block.line.table.as_deref(), Some("heroes"));
         // Three records over the application, two of at most three in the entry.
         assert_eq!(block.line.room, Room::Open);
+        // Its second record not applied: no set of the array passes, so its clear is offered.
+        assert_eq!(block.line.unapplied, 1);
+        assert!(block.line.clearable() && block.line.stuck());
         assert_eq!(
             block.line.stored,
             vec![
@@ -1922,7 +2037,13 @@ mod tests {
         assert_eq!(hero.name.as_deref(), Some("First hero"));
         assert_eq!(hero.class, "Class six");
         assert_eq!(hero.lanes[0].column_name, "Phase");
-        assert_eq!(hero.lanes[0].current, Some(1));
+        // Its position now with its numbers, which no positions read say yet.
+        assert_eq!(
+            hero.lanes[0].current,
+            Some(CurrentPosition { index: 1, position: vec![1] })
+        );
+        assert_eq!(hero.lanes[0].current_index(), Some(1));
+        assert_eq!(hero.lanes[1].current, None);
         // A class's ladder for a column of its class, the key's own for the others.
         assert_eq!(
             hero.lanes[0].ladder.of,
@@ -1963,5 +2084,85 @@ mod tests {
         let many: Vec<_> = (0..KEYS_SHOWN + 5).map(|_| table.keys[0].clone()).collect();
         let (found, more) = key_matches(&many, "", false);
         assert_eq!((found.len(), more), (KEYS_SHOWN, 5));
+    }
+
+    #[test]
+    fn an_answer_under_other_tables_moves_the_picker_a_bounded_number_of_times() {
+        let (old, new) = (Some("sha256:old"), Some("sha256:new"));
+        assert_eq!(pick_tables(old, old, 0), PickTables::Same);
+        // The same tables are kept as theirs however often the tables moved before.
+        assert_eq!(pick_tables(new, new, PICK_MOVES), PickTables::Same);
+        assert_eq!(pick_tables(old, new, 0), PickTables::Moved);
+        assert_eq!(pick_tables(old, new, PICK_MOVES - 1), PickTables::Moved);
+        assert_eq!(pick_tables(old, new, PICK_MOVES), PickTables::GiveUp);
+        // Tables that no longer, or newly, answer an sha256 moved too.
+        assert_eq!(pick_tables(old, None, 0), PickTables::Moved);
+        assert_eq!(pick_tables(None, new, 0), PickTables::Moved);
+        assert_eq!(pick_tables(None, None, 0), PickTables::Same);
+    }
+
+    #[test]
+    fn a_declared_entry_offers_its_clear_once_no_set_of_its_array_can_pass() {
+        // Undeclared, or the stored record unreadable: always.
+        assert!(clear_offered(false, false, 1, None, 0));
+        assert!(clear_offered(true, true, 0, Some(3), 0));
+        // Declared and readable: only when a record does not apply or there are too many.
+        assert!(!clear_offered(true, false, 3, Some(3), 0));
+        assert!(!clear_offered(true, false, 0, Some(3), 0));
+        assert!(clear_offered(true, false, 2, Some(3), 1));
+        assert!(clear_offered(true, false, 4, Some(3), 0));
+        // Of the page: two records whose keys the table no longer holds, and an entry whose
+        // `max_records` dropped below what it holds.
+        let record = |entry: &str, key: &str, applied: bool| {
+            let mut row = json!({
+                "row": "record",
+                "entry": entry,
+                "key": key,
+                "to": {"phase": [1]},
+                "set": set(),
+                "applied": applied,
+                "lanes": [],
+            });
+            if !applied {
+                row["problem"] = json!("not_an_option");
+            }
+            row
+        };
+        let read = loaded(
+            Some(GoalPageRecordsState::Read),
+            vec![
+                entry("raise", None, true, 2, 3),
+                record("raise", "hero_a", false),
+                record("raise", "hero_b", false),
+                entry("more", Some("raise"), true, 3, 2),
+                record("more", "hero_c", true),
+                record("more", "hero_d", true),
+                record("more", "hero_e", true),
+                entry("fine", Some("more"), true, 1, 3),
+                record("fine", "hero_f", true),
+            ],
+        );
+        let shown = shown(&read, Tongue::En);
+        let line = |at: usize| &shown.declared[at].line;
+        assert_eq!((line(0).unapplied, line(0).stuck()), (2, true));
+        assert_eq!((line(1).unapplied, line(1).stuck()), (0, true));
+        assert_eq!(line(1).room, Room::EntryFull);
+        assert!(!line(2).clearable() && !line(2).stuck());
+    }
+
+    #[test]
+    fn a_position_now_is_said_by_its_ladder_once_read_else_by_its_numbers() {
+        let now = CurrentPosition { index: 1, position: vec![1, 1] };
+        // Not read yet, or not among those read: its numbers, never its index.
+        assert_eq!(current_text(&now, None, Tongue::En), "1·1");
+        let said = |index: u16, position: Vec<i64>, text: &str| PositionOption {
+            index,
+            position,
+            text: text.to_owned(),
+        };
+        let other = [said(0, vec![0, 1], "Phase 0")];
+        assert_eq!(current_text(&now, Some(&other[..]), Tongue::En), "1·1");
+        let read = [said(0, vec![0, 1], "Phase 0"), said(1, vec![1, 1], "Phase 1")];
+        assert_eq!(current_text(&now, Some(&read[..]), Tongue::En), "Phase 1");
     }
 }

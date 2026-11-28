@@ -53,7 +53,8 @@
 //! Workflow #455 RR4b, the records entries (whom to raise, to which grade): their lines are the
 //! page's, placed by `acui_source::workbench::goals::page_with`, and a press on them writes what
 //! `acui_source::workbench::goal_records::records_press` says, the entry's whole array, naming the
-//! records read's version; none asks first. "Remove" is pressed on a record's line. "Add a
+//! records read's version; none asks first but a clear of an entry's name, which asks as any
+//! question does. "Remove" is pressed on a record's line. "Add a
 //! character" on an entry's line, and "change" on a record's, open its picker under that line
 //! (`Picker`, kept per account as what is typed is): the table's options are read then, and the
 //! positions of each ladder of the character chosen then, each on a thread of its own
@@ -70,9 +71,9 @@ use std::path::PathBuf;
 
 use acui_rows::outcome::Tongue;
 use acui_source::workbench::goal_records::{
-    default_target, pointed_record, read_options, read_positions, to_of, Came, KeyLaneOption,
-    Ladder, LaneTarget, OptionsLoaded, PartAnswer, PositionOption, PositionsLoaded, RecordsLine,
-    Requirement, Room, TableOptions, RECORDS_KEY, RECORD_KEY,
+    default_target, pick_tables, pointed_record, read_options, read_positions, to_of, Came,
+    KeyLaneOption, Ladder, LaneTarget, OptionsLoaded, PartAnswer, PickTables, PositionOption,
+    PositionsLoaded, RecordsLine, Requirement, Room, TableOptions, RECORDS_KEY, RECORD_KEY,
 };
 use acui_source::workbench::goals::{
     edit, pointed_key, GoalAct, GoalChange, GoalWrite, GoalsPage, Loses, OrderEdit, Press,
@@ -209,8 +210,8 @@ struct Slot {
 /// reads under, the records read's until its options say theirs; what is typed in its search field
 /// and whether it lists every character or only those held; the character chosen, if any; and the
 /// choice of each of that character's lanes by its place: absent, its default (`default_target`);
-/// none, no target; else the place of a position on the lane's ladder. It writes nothing until
-/// "save".
+/// none, no target; else the place of a position on the lane's ladder; and how many times the
+/// tables moved under it since it opened (`pick_tables`). It writes nothing until "save".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Picker {
     pub at: String,
@@ -221,6 +222,7 @@ pub struct Picker {
     pub all: bool,
     pub key: Option<String>,
     pub choices: BTreeMap<usize, Option<usize>>,
+    pub moves: u8,
 }
 
 /// A press that asks to be confirmed: what it writes, the press itself, reckoned again as it is
@@ -1030,6 +1032,51 @@ impl Picks {
         self.positions.retain(|(_, kept), _| kept.as_deref() != Some(sha));
     }
 
+    /// Whether an answer read under the tables' sha256 `answered` is kept, as [`pick_tables`]
+    /// judges it for `picker`, the open picker of the read's entry (none: kept, as of its own
+    /// tables). Of the tables it reads under, kept. Of others, those it read under moved: what is
+    /// kept under their sha256 is let go of, the picker reads under the answer's from now on (its
+    /// table's options are read anew first, and a character the new table no longer holds is said
+    /// to be gone), its lanes' choices start anew, being of the old table's lanes, the move is
+    /// counted, and the answer is kept. Once too often, not kept: the picker then says the table
+    /// changed as it was read, and reads no more until it is opened anew. The log's lines go in
+    /// `lines`.
+    fn under_tables(
+        &mut self,
+        picker: Option<&mut Picker>,
+        answered: &Option<String>,
+        lines: &mut Vec<String>,
+    ) -> bool {
+        let Some(picker) = picker else {
+            return true;
+        };
+        match pick_tables(picker.sha.as_deref(), answered.as_deref(), picker.moves) {
+            PickTables::Same => true,
+            PickTables::Moved => {
+                if let Some(old) = &picker.sha {
+                    self.drop_moved(old);
+                }
+                lines.push(format!(
+                    "the goal tables the picker of {} reads moved from {:?} to {answered:?} as it \
+                     read them: what was kept under the old is let go, and it reads under the new",
+                    picker.entry, picker.sha
+                ));
+                picker.sha = answered.clone();
+                picker.choices.clear();
+                picker.moves = picker.moves.saturating_add(1);
+                true
+            }
+            PickTables::GiveUp => {
+                lines.push(format!(
+                    "the goal tables the picker of {} reads moved once more ({:?} to \
+                     {answered:?}): it reads no more until it is opened anew",
+                    picker.entry, picker.sha
+                ));
+                false
+            }
+        }
+    }
+
     /// A read of `job` of the picker of `entry` of `alias`, now out.
     fn issue(&mut self, alias: &str, entry: &str, job: PickJob) -> PickRequest {
         self.issued += 1;
@@ -1086,10 +1133,15 @@ impl Picks {
     }
 
     /// What the read under `ticket` came to: kept when it answered, each under the sha256 its
-    /// tables were read under (the options' becoming the picker's), and everything kept under a
-    /// sha256 the declaration moved from let go of; else said for its account's picker. The
-    /// request it answers, none when it is not the one out (a restart let it go), and the log's
-    /// lines of it. `picker` is the picker of the request's account, while it is open.
+    /// tables were read under, and everything kept under a sha256 the declaration moved from let
+    /// go of; else said for its account's picker. An answer under other tables than the open
+    /// picker of its entry reads under is judged by [`pick_tables`] (`under_tables`): the tables
+    /// moved, and the picker reads under the answer's from now on, or it gives up. So every read
+    /// lands as something [`Picks::next`] finds under the picker's sha256, as the picker's move to
+    /// other tables (at most `PICK_MOVES` times), or as something said, after which it reads no
+    /// more: none is ever made again for nothing. The request it answers, none when it is not the
+    /// one out (a restart let it go), and the log's lines of it. `picker` is the picker of the
+    /// request's account, while it is open.
     pub(super) fn take(
         &mut self,
         ticket: u64,
@@ -1097,6 +1149,7 @@ impl Picks {
         picker: Option<&mut Picker>,
     ) -> Option<(PickRequest, Vec<String>)> {
         let request = self.landed(ticket)?;
+        let mut picker = picker.filter(|picker| picker.entry == request.entry);
         let mut lines = Vec::new();
         let mut said: Option<PickSaid> = None;
         let mut dropped: Vec<String> = Vec::new();
@@ -1106,12 +1159,12 @@ impl Picks {
                 match answer.came {
                     Came::Read(loaded) => {
                         let sha = loaded.tables_sha256().map(str::to_owned);
-                        let picker = picker.filter(|picker| picker.entry == request.entry);
-                        if let Some(picker) = picker {
-                            picker.sha = sha.clone();
+                        if self.under_tables(picker.as_deref_mut(), &sha, &mut lines) {
+                            let key = (request.alias.clone(), request.entry.clone(), sha);
+                            self.options.insert(key, loaded);
+                        } else {
+                            said = Some(PickSaid::Moved);
                         }
-                        let key = (request.alias.clone(), request.entry.clone(), sha);
-                        self.options.insert(key, loaded);
                     }
                     came => {
                         lines.extend(refused_at(&came));
@@ -1125,7 +1178,11 @@ impl Picks {
                     match answer.came {
                         Came::Read(loaded) => {
                             let sha = loaded.tables_sha256().map(str::to_owned);
-                            self.positions.insert((ladder, sha), loaded);
+                            if self.under_tables(picker.as_deref_mut(), &sha, &mut lines) {
+                                self.positions.insert((ladder, sha), loaded);
+                            } else if said.is_none() {
+                                said = Some(PickSaid::Moved);
+                            }
                         }
                         came => {
                             lines.extend(refused_at(&came));

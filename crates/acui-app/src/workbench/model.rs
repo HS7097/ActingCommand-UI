@@ -1511,6 +1511,7 @@ impl Model {
             all: false,
             key,
             choices: BTreeMap::new(),
+            moves: 0,
         };
         self.goal_writes.set_picker(&alias, Some(picker));
         self.goal_pick_next()

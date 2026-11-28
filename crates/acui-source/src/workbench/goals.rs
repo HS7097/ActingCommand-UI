@@ -161,8 +161,8 @@
 //! ([`GoalLine::Records`]) and its records' ([`GoalLine::Record`]) right after the entry its
 //! `after_entry` names, and the records of names no entry declares in a group of their own before
 //! the other targets ([`Group::RecordsUndeclared`]). A write of them is decided on the page
-//! ([`press_on`]), names the records read's version ([`GoalsPage::version_of`]) and never asks
-//! first.
+//! ([`press_on`]) and names the records read's version ([`GoalsPage::version_of`]); only a clear
+//! of an entry's name asks first, saying what it removes ([`Loses::Records`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -2497,17 +2497,20 @@ pub enum Loses {
     /// entry's goal; and what the goal on the entry's own pool, set elsewhere, carries that one
     /// set here does not, when it carries any.
     SameName { removed: Removed, carried: Option<Carried> },
+    /// Workflow #455 RR4b: the records of a records entry cleared by its name: how many the
+    /// Runtime counts under it (`records_total`), whose characters and targets are entered anew to
+    /// be raised again; or, while the stored record does not read (`unreadable`), all it holds,
+    /// which is rewritten empty (`contracts/runtime-interface.md` 776-780 at aa6765dd).
+    Records { count: u16, unreadable: bool },
 }
 
 /// What a press `act` on the line `key` of `page` writes: of a records entry's line or a record's,
-/// what [`goal_records::records_press`] says, which never asks first (each of them can be set back
-/// here, and the line of the entry the press needs is on the page); of any other, [`press`].
+/// what [`goal_records::records_press`] says, which asks first only before a clear (the line of the
+/// entry the press needs is on the page); of any other, [`press`].
 pub fn press_on(page: &GoalsPage, key: &str, act: &GoalAct) -> Option<Press> {
     let line = page.line(key)?;
     match line {
-        GoalLine::Records(_) | GoalLine::Record(_) => {
-            goal_records::records_press(page, line, act).map(|write| Press { write, asks: None })
-        }
+        GoalLine::Records(_) | GoalLine::Record(_) => goal_records::records_press(page, line, act),
         _ => press(line, act),
     }
 }
@@ -6939,14 +6942,16 @@ mod tests {
             None
         );
         assert_eq!(press_on(&page, "records:raise", &put("hero_y", json!({}))), None);
-        // A declared entry that reads is not cleared by name; an undeclared one is, and its
-        // records are neither changed nor removed.
+        // A declared entry whose records all apply is not cleared by name; an undeclared one is,
+        // asked first with how many records it removes, and its records are neither changed nor
+        // removed.
         assert_eq!(press_on(&page, "records:raise", &GoalAct::Clear), None);
-        assert_eq!(sent(press_on(&page, "records:old", &GoalAct::Clear)), (
-            "old".to_owned(),
-            Value::Null,
-            false,
-        ));
+        let clear = press_on(&page, "records:old", &GoalAct::Clear);
+        assert_eq!(
+            clear.as_ref().and_then(|press| press.asks.clone()),
+            Some(Loses::Records { count: 1, unreadable: false })
+        );
+        assert_eq!(sent(clear), ("old".to_owned(), Value::Null, true));
         assert_eq!(press_on(&page, "record:old:hero_c", &GoalAct::Remove), None);
         assert_eq!(press_on(&page, "records:old", &put("hero_c", json!({"phase": [1]}))), None);
         // The records read's version, not the view's.
@@ -6969,6 +6974,61 @@ mod tests {
         assert_eq!(
             sent(press_on(&page, "records:raise", &put("hero_a", json!({"phase": [1]})))),
             ("raise".to_owned(), json!([{"key": "hero_a", "to": {"phase": [1]}}]), false)
+        );
+    }
+
+    /// Workflow #455 RR4b: a declared entry two of whose records no longer apply (removing either
+    /// would send the other, refused), or that holds more than its `max_records` now (every set
+    /// refused), is cleared by its name, asked first with how many records that removes; and while
+    /// the stored record does not read, every declared entry is, asked first that what it holds is
+    /// lost.
+    #[test]
+    fn a_stuck_or_unreadable_entry_is_cleared_after_one_question_of_what_it_removes() {
+        let view = view(state("accepted"), json!([]), json!({}), no_targets());
+        let gone = |key: &str| {
+            json!({
+                "row": "record",
+                "entry": "raise",
+                "key": key,
+                "to": {"phase": [1]},
+                "set": set("ui", None),
+                "applied": false,
+                "problem": "not_an_option",
+                "lanes": [],
+            })
+        };
+        let stuck =
+            records(vec![records_entry("raise", None, 2, 3), gone("hero_a"), gone("hero_b")]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&stuck));
+        let clear = press_on(&page, "records:raise", &GoalAct::Clear);
+        assert_eq!(
+            clear.as_ref().and_then(|press| press.asks.clone()),
+            Some(Loses::Records { count: 2, unreadable: false })
+        );
+        assert_eq!(sent(clear), ("raise".to_owned(), Value::Null, true));
+        // More records than the entry keeps now.
+        let over = records(vec![
+            records_entry("raise", None, 2, 1),
+            record_row("raise", "hero_a", json!({"phase": [2]})),
+            record_row("raise", "hero_b", json!({"phase": [1]})),
+        ]);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&over));
+        assert_eq!(
+            press_on(&page, "records:raise", &GoalAct::Clear).and_then(|press| press.asks),
+            Some(Loses::Records { count: 2, unreadable: false })
+        );
+        // The stored record unreadable.
+        let rows = vec![records_entry("raise", None, 0, 3)]
+            .into_iter()
+            .map(|row| serde_json::from_value(row).expect("a row the pinned contract reads"))
+            .collect();
+        let unreadable =
+            RecordsLoaded::of_rows(9, Some(GoalPageRecordsState::Unreadable), rows);
+        let page = page_with(&view, Tongue::En, &|_| None, Some(&unreadable));
+        assert!(page.records_unreadable);
+        assert_eq!(
+            press_on(&page, "records:raise", &GoalAct::Clear).and_then(|press| press.asks),
+            Some(Loses::Records { count: 0, unreadable: true })
         );
     }
 }

@@ -1669,6 +1669,15 @@ pub struct Labels {
     pub goals_records_add: &'static str,
     pub goals_records_change: &'static str,
     pub goals_records_remove: &'static str,
+    /// In amber, of a declared entry no set of its whole array passes any more: it holds more than
+    /// it keeps now (that bound); some of its records no longer fit its table (how many); each
+    /// with that clearing it starts it again. The question a clear of an entry asks first: it
+    /// removes how many records, entered anew to be raised again (count); it rewrites a stored
+    /// record that does not read as empty.
+    pub goals_records_stuck_over: &'static str,
+    pub goals_records_stuck_unapplied: &'static str,
+    pub goals_confirm_records_clear: &'static str,
+    pub goals_confirm_records_unreadable: &'static str,
     /// A record: in amber that it counts for nothing (why), each why a record has (its entry's
     /// table not available, the character no longer in the table, a grade no longer on its ladder,
     /// a record of another form, a character recorded earlier), and that the character is not
@@ -3337,6 +3346,10 @@ pub const ZH: Labels = Labels {
     goals_records_add: "加一个角色",
     goals_records_change: "修改",
     goals_records_remove: "移除",
+    goals_records_stuck_over: "这一项记的角色比它现在能记的多（最多 {} 个），改不了；清掉这一项就能重新开始记",
+    goals_records_stuck_unapplied: "这一项有 {} 条记录已经对不上游戏的表，逐条修改或移除可能改不成；清掉这一项就能重新开始记",
+    goals_confirm_records_clear: "清掉以后，这一项记着的 {} 个角色连同它们的目标都会删掉，要练的话得在这里重新加。确定清掉吗？",
+    goals_confirm_records_unreadable: "清掉会把这个实例存着、却读不了的要练角色重写成空的，里面原有的都会丢掉。确定清掉吗？",
     goals_record_not_counted: "不算数：{}",
     goals_record_problem_name_unknown: "这一项的表现在用不了",
     goals_record_problem_not_an_option: "表里已经没有这个角色",
@@ -4834,6 +4847,10 @@ pub const EN: Labels = Labels {
     goals_records_add: "Add a Character",
     goals_records_change: "Change",
     goals_records_remove: "Remove",
+    goals_records_stuck_over: "This entry holds more characters than it keeps now (at most {}), so it cannot be changed; clearing it starts it again",
+    goals_records_stuck_unapplied: "{} of these records no longer fit the game's table, so changing or removing them one by one may be refused; clearing this entry starts it again",
+    goals_confirm_records_clear: "Clearing removes the {} characters recorded here with their targets; to raise them again, add them here anew. Clear it?",
+    goals_confirm_records_unreadable: "Clearing rewrites this instance's stored characters to raise, which cannot be read, as empty: whatever they held is lost. Clear it?",
     goals_record_not_counted: "Counts for nothing: {}",
     goals_record_problem_name_unknown: "its entry's table is not available now",
     goals_record_problem_not_an_option: "the table no longer has this character",
