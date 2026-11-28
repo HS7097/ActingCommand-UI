@@ -43,9 +43,11 @@ evaluator digest and, once the steady state is computed, its shared tree's diges
 `reuse_refused`, one error per member that differs, and nothing is written. Each pool's `flips` and `impact`, each
 estimate's `assessed` and `skipped`, and the groups (`impact`) come from it; everything else is computed as without the
 option, and prices.json records where they came from (`reused_assessment`). Without that member it is the full export's
-file byte for byte, but for each pass's `by` and `timing_ms` (PASS-TIMING, #430 METHOD-C, `core.impact`), which, taken
-over with its group, are the earlier run's, and for `steady_timing_ms`, which is this run's own. A pass taken over must
-have a `by` and a `timing_ms` of the shape `export prices` writes (`readers.check_assessment`, #430 C-2a).
+file byte for byte, but for each pass's `by`, `refused_by` and `timing_ms` (PASS-TIMING, #430 METHOD-C, `core.impact`),
+which, taken over with its group, are the earlier run's, and for `steady_timing_ms`, which is this run's own. A pass
+taken over must have a `by` and a `timing_ms` of the shape `export prices` writes (`readers.check_assessment`, #430
+C-2a). `impact.certify` (#430 METHOD-C C-2a-2a: whether the assessment offers each pass to the certificate, `build`'s
+`certify`) is no key of the evaluator digest: an assessment taken over may have been computed with it either way.
 
 **Timing** (PASS-TIMING; #430 C-2a). Each pass of the groups records how long it took and what HiGHS ran for it
 (`timing_ms`, `core.impact`), and the steady state records its own (`steady_timing_ms`: its sixteen stages' times, what
@@ -228,10 +230,11 @@ class _Found:
 
 def _assessed(
     run: Run, steady: flow.Economy, reach: dict[str, set[str]], gaps: set[str], missing: set[str], lacking: list[str],
-    touching: dict[str, set[str]],
+    touching: dict[str, set[str]], certify: bool = True,
 ) -> _Found:
-    """The impact assessment (`core.impact`) of the steady state, as the export shows it."""
-    assessment = impact.assess(run.graph, steady, reach, gaps, missing)
+    """The impact assessment (`core.impact`) of the steady state, as the export shows it; `certify` is
+    `impact.certify` (#430 METHOD-C C-2a-2a)."""
+    assessment = impact.assess(run.graph, steady, reach, gaps, missing, certify)
     pools = steady.data["coverage"]["pools"]
     shown: dict[str, dict[str, str] | None] = {}
     for pool in pools:
@@ -319,13 +322,14 @@ def _taken(earlier: Earlier, shared: dict[str, str], pools: list[str], reach: di
 
 
 def build(
-    run: Run, recorded: dict[str, Any], earlier: Earlier | None = None
+    run: Run, recorded: dict[str, Any], earlier: Earlier | None = None, certify: bool = True
 ) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """The files of the export, by their path relative to the model folder and in the order they are written
     (`prices.json` last), what the envelope's `data` adds, the warnings, and the steady state's tree document, which the
     price documents name by its digest and which is kept under the state root only (PRICE-4a2). `recorded` is the
     evaluator digest prices.json records (PRICE-REUSE); with `earlier`, the impact assessment is taken over from it
-    (`_taken`) instead of computed. A refusal raises `Failure`."""
+    (`_taken`) instead of computed; `certify` is `impact.certify`, which the assessment computed here reads (#430
+    METHOD-C C-2a-2a). A refusal raises `Failure`."""
     exports, checker = run.exports, run.checker
     if "prices" not in exports.doc:  # the game's price unit is needed, and has no default
         raise Failure(refusal("member_missing", exports.path, EXPORTS.name, "/prices", key="prices"))
@@ -344,7 +348,7 @@ def build(
         for entity in static.takes.get(activity, set()) | static.brings.get(activity, set()):
             touching.setdefault(entity, set()).add(activity)
     if earlier is None:
-        assessment = _assessed(run, steady, reach, gaps, missing, lacking, touching)
+        assessment = _assessed(run, steady, reach, gaps, missing, lacking, touching, certify)
     pools = sorted(coverage["pools"])
     tree = steady_tree(run)
     shared = {tree["root"]: tree_digest(tree)}
@@ -488,7 +492,7 @@ def export_prices(
         refused = differences(earlier, versions(run.checker, run.folder), recorded)
         if refused:
             raise Failure(*refused)
-    files, data, warnings, tree = build(run, recorded, earlier)
+    files, data, warnings, tree = build(run, recorded, earlier, settings.impact_certify)
     sha = tree_digest(tree)
     kept, wrote = keep_tree(state_root, run.head["model_id"], tree, sha)  # first: a price document names it
     written = [str(kept)] if wrote else []

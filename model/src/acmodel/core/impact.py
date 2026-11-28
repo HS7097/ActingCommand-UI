@@ -21,20 +21,31 @@ price moves and which activities change sign. `export prices` reads it for the a
   the lowest `low` and the highest `high`. Each moved value is rounded as the derive rounds its value.
 - **A pass** is the vector of the steady state (`flow.VECTOR`) with the group's derives at those values and every other
   rule at its point value; a rule that reads a moved one moves with it (`graph.Moved`). A pass whose values are all the
-  point values is the steady state's own vector and is not solved again. The vector runs no tie probe (PASS-TIMING): it
-  reads no tie, so its coordinates are those it had with them (`flow._Solver.vector`).
+  point values is the steady state's own vector and is not solved again; with `impact.certify` true (`assess`,
+  `certify`), any other pass is offered to the certificate first (#430 METHOD-C C-2a-2a, `flow.certify`), and one it
+  proves is not solved again either. The vector runs no tie probe (PASS-TIMING): it reads no tie, so its coordinates are
+  those it had with them (`flow._Solver.vector`).
 - **How its vector was found** (`by`, #430 METHOD-C; contracts/formats.md, "A pass"): `solved`, in the pass's own graph
   (also when the vector node's value came from the cache); `steady_state`, the steady state's own, not solved again; and
-  `certified`, by the certificate, which C-2a-2 runs (none is written yet).
+  `certified`, by the certificate, not solved: each pool's coordinate is the steady state's, and so is each activity's
+  value but a J activity's, computed at that vector with the pass's amounts.
+- **What refused it** (`refused_by`, #430 METHOD-C C-2a-2a; contracts/formats.md, "The certificate", item 9). With
+  `impact.certify` true, each pass records it: for a solved pass the first condition of the certificate that refused it
+  (`flow.CONDITIONS`: `program`, `c1`, `c2`, `c3`, `c4` or `lp_unverified`), null for a `certified` or `steady_state`
+  one; with it false, the certificate does not run, every pass that moves something is solved and none has the member.
+  The pass's program is built from its graph first, and a blocked one is the pass's refusal (`impact_blocked`), as a
+  blocked vector is; a pass it does not prove is then solved in the same graph. The certificate decides C1 of each
+  column once per assessment (`_Assessor.answers`): a pass whose J holds a column decided before reads that answer.
 - **Timing** (PASS-TIMING; #430 C-2a). Each pass records how long it took and what HiGHS ran for it (`timing_ms`):
   `stages`, each stage's whole milliseconds by `flow.STAGES` (`Economy.timing`; null unless solved); `lps`, by each of
-  those stages and `certificate` (the certificate's own LPs, 0 until C-2a-2), its runs, its second tries of the two
-  kinds and the time of the runs and of their exact work (`flow.LP_COUNTS`; `Economy.lps`; all 0 for `steady_state`);
-  and `total`, the whole pass's (`_Assessor.vector`); all on `flow.CLOCK`. A pass whose vector came from the cache,
-  which keeps no timing, has none: `timing_ms` is null. The member `source` that PASS-TIMING wrote is gone: `by` says
-  what it said. The timing is shown in each pass and, for the steady state, in prices.json's `steady_timing_ms`
-  (`export.prices`): the vector node's value, the provenance documents, the shared tree, `estimates`, `counts` and every
-  other member hold none of it, so no `binds` moves with it.
+  those stages and `certificate` (the certificate's own LPs and their second tries, `flow.Certificate.lps`: an LP of
+  C1 in the pass that solved it), its runs, its second tries of the two kinds and the time of the runs and of their
+  exact work (`flow.LP_COUNTS`; `Economy.lps`; all 0 for `steady_state`; a `certified` pass's in `certificate` alone);
+  and `total`, the whole pass's, the certificate's time included (`_Assessor.vector`); all on `flow.CLOCK`. A pass
+  whose vector came from the cache, which keeps no timing, has none: `timing_ms` is null. The member `source` that
+  PASS-TIMING wrote is gone: `by` says what it said. The timing is shown in each pass and, for the steady state, in
+  prices.json's `steady_timing_ms` (`export.prices`): the vector node's value, the provenance documents, the shared
+  tree, `estimates`, `counts` and every other member hold none of it, so no `binds` moves with it.
 - **What it finds**: each pool's price range over the steady state and every pass, and the activities whose class flips:
   the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in every pass.
   The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that moves out
@@ -44,7 +55,9 @@ price moves and which activities change sign. `export prices` reads it for the a
   block it, each needed by it): nothing is approximated.
 - **What the certificate reads** (#430 METHOD-C C-1; contracts/formats.md, "The certificate"). The assessment takes what
   the steady state's own computation found that the certificate reads (`flow.Held`, `flow.Economy.held`), in memory
-  only, and keeps it (`_Assessor.held`); a pass that moves a value is still solved as above, so no vector changes.
+  only, and keeps it (`_Assessor.held`); the certificate reads it with each pass's program (C-2a-2a, `flow.certify`),
+  and a pass it proves takes its vector from it. By the proof that vector is the one solving the pass finds, so with
+  `impact.certify` either way the groups are the same but for each pass's `by`, `refused_by` and `timing_ms`.
 - **A steady state from the cache** (item 11). The cache keeps none of it (`flow.encode`), so an assessment whose steady
   state came from the cache computes it again once, at its start, before any pass, without the cache
   (`flow.steady_again`). Its value as the cache keeps it (`Graph.encode`, canonical JSON) must be the cached one's byte
@@ -82,11 +95,14 @@ if TYPE_CHECKING:
 GAP, MISSING = "structural_gap", "estimate_missing"
 LOW, HIGH = "low", "high"
 # #430 METHOD-C: how a pass's vector was found (`by`, module docstring): solved in the pass's own graph; proven by the
-# certificate without solving (C-2a-2; never written yet); or the steady state's own, not solved again.
+# certificate without solving (C-2a-2a, `flow.certify`); or the steady state's own, not solved again.
 BY, SOLVED, CERTIFIED, STEADY_STATE = "by", "solved", "certified", "steady_state"
+# #430 METHOD-C C-2a-2a: what refused a solved pass (`refused_by`, with `impact.certify` true only), one of the six
+# conditions of the certificate (`flow.CONDITIONS`, the words `model.readers.REFUSED_BY` reads back)
+REFUSED_BY, CONDITIONS = "refused_by", flow.CONDITIONS
 # PASS-TIMING, #430 C-2a: a pass's timing (`timing_ms`: `stages`, `lps`, `total`), and the member of its `lps` that
 # holds the certificate's own LPs beside the vector's stages (`PASS_LPS`, every member of a pass's `lps`).
-TIMING, CERTIFICATE = "timing_ms", "certificate"
+TIMING, CERTIFICATE = "timing_ms", flow.CERTIFICATE
 PASS_LPS = (*flow.STAGES, CERTIFICATE)
 
 
@@ -177,8 +193,13 @@ class _Assessor:
             for activity, entry in joint["activities"].items()
         }
         # #430 METHOD-C: what the certificate reads, from the steady state's own computation (module docstring, "What
-        # the certificate reads"; `_again` makes sure it is there). Kept, and read by nothing yet: every pass is solved.
+        # the certificate reads"; `_again` makes sure it is there), which the certificate reads with each pass's program
         self.held: flow.Held | None = steady.held
+        # #430 METHOD-C C-2a-2a: whether each pass that moves something is offered to the certificate (`impact.certify`,
+        # which `assess` sets), and C1's answer of each column of J decided so far, by column (None where it holds):
+        # C1 reads the steady state alone, so each column is decided once per assessment (`flow.certify`)
+        self.certify = True
+        self.answers: dict[flow.Key, str | None] = {}
 
     def refuse(self, entry: Entry, label: str, blocked_by: frozenset[int], *, reason: str = "impact_blocked") -> Failure:
         """`export_refused` (`impact_blocked`) of an estimated derive, at its estimate, and the errors that block it."""
@@ -270,14 +291,34 @@ class _Assessor:
 
     def vector(
         self, group: list[_Estimate], label: str, values: dict[str, Any], base: dict
-    ) -> tuple[dict, dict, str, dict[str, Any] | None]:
-        """The vector of one pass: each pool's coordinate and each activity's value; how it was found (`by`); and its
-        `timing_ms` (module docstring), which nothing here reads."""
+    ) -> tuple[dict, dict, str, str | None, dict[str, Any] | None]:
+        """The vector of one pass: each pool's coordinate and each activity's value; how it was found (`by`); what
+        refused it (`refused_by`, None but for a pass the certificate refused); and its `timing_ms` (module docstring),
+        which nothing here reads.
+
+        With `certify` (#430 METHOD-C C-2a-2a), a pass that moves something has its program built from its graph first
+        (`flow.build_program`; a blocked one is the pass's refusal, `impact_blocked`) and offered to the certificate
+        (`flow.certify`): a pass it proves is `certified`, its vector the certificate's; any other is solved in the same
+        graph, whose rules moved are not computed again, and records the condition that refused it, also when its vector
+        came from the cache. Without `certify` the certificate does not run."""
         started = flow.CLOCK()
         if all(item.point is not None and values[item.entry.id] == item.point for item in group):
             # the steady state's own vector: nothing solved, so no stage and no LP
-            return self.prices, self.values, STEADY_STATE, _timing(None, flow.no_lps(flow.STAGES), started)
+            timing = _timing(None, flow.no_lps(flow.STAGES), flow.no_lps(flow.CERTIFICATE_STAGES), started)
+            return self.prices, self.values, STEADY_STATE, None, timing
         graph = Moved(self.graph, base, values)
+        refused_by: str | None = None
+        certificate = flow.no_lps(flow.CERTIFICATE_STAGES)
+        if self.certify:
+            built = flow.build_program(graph)
+            if built.blocked:
+                raise self.refuse(group[0].entry, label, built.blocked_by)
+            found = flow.certify(self.held, built, graph.economy, self.answers)
+            certificate = found.lps
+            if found.refused_by is None:
+                timing = _timing(None, flow.no_lps(flow.STAGES), certificate, started)
+                return found.prices, found.values, CERTIFIED, None, timing
+            refused_by = found.refused_by
         solve([flow.VECTOR_NODE], graph.compute, graph.results)
         result = graph.results[flow.VECTOR_NODE]
         if result.blocked:
@@ -287,16 +328,18 @@ class _Assessor:
             activity: None if value is None else Fraction(value) for activity, value in result.data["activities"].items()
         }
         if result.timing is None or result.lps is None:  # a value the cache gave: it keeps no timing
-            return prices, values_at, SOLVED, None
-        return prices, values_at, SOLVED, _timing(result.timing, result.lps, started)
+            return prices, values_at, SOLVED, refused_by, None
+        return prices, values_at, SOLVED, refused_by, _timing(result.timing, result.lps, certificate, started)
 
 
-def _timing(stages: dict[str, int] | None, lps: dict[str, dict[str, int]], started: int) -> dict[str, Any]:
+def _timing(
+    stages: dict[str, int] | None, lps: dict[str, dict[str, int]], certificate: dict[str, dict[str, int]], started: int
+) -> dict[str, Any]:
     """A pass's `timing_ms` (module docstring): its stages' times (None unless solved), what HiGHS ran in each stage of
-    the vector (`lps`) with the certificate's own LPs (none: 0 until C-2a-2) and the whole pass's time, from `started`
-    on `flow.CLOCK`, in whole milliseconds rounded down."""
+    the vector (`lps`) with the certificate's own LPs (`certificate`, by `flow.CERTIFICATE_STAGES`: all 0 where it did
+    not run) and the whole pass's time, from `started` on `flow.CLOCK`, in whole milliseconds rounded down."""
     total = (flow.CLOCK() - started) // flow.NANOSECONDS_PER_MS
-    counted = {**{stage: dict(lps[stage]) for stage in flow.STAGES}, **flow.no_lps((CERTIFICATE,))}
+    counted = {**{stage: dict(lps[stage]) for stage in flow.STAGES}, CERTIFICATE: dict(certificate[CERTIFICATE])}
     return {"stages": None if stages is None else dict(stages), "lps": counted, "total": total}
 
 
@@ -320,13 +363,17 @@ def _again(graph: Graph, steady: flow.Economy) -> flow.Economy:
 
 
 def assess(
-    graph: Graph, steady: flow.Economy, reach: dict[str, set[str]], gaps: set[str], missing: set[str]
+    graph: Graph, steady: flow.Economy, reach: dict[str, set[str]], gaps: set[str], missing: set[str],
+    certify: bool = True,
 ) -> Assessment:
     """The impact assessment (module docstring) of the steady state `steady` of `graph`. `reach` is what `reached`
     gives, `gaps` the components that are structural gaps and `missing` those that hold a provisional derive without an
-    estimate. A steady state the cache gave is computed again first, before anything else (`_again`)."""
+    estimate; `certify` is `impact.certify` (#430 METHOD-C C-2a-2a: whether each pass that moves something is offered
+    to the certificate, and so whether every pass records `refused_by`). A steady state the cache gave is computed again
+    first, before anything else (`_again`)."""
     steady = _again(graph, steady)
     assessor = _Assessor(graph, steady)
+    assessor.certify = certify
     checker = graph.checker
     skipped: dict[str, str] = {}
     estimates: list[_Estimate] = []
@@ -354,17 +401,20 @@ def assess(
         passes = []
         for where, values in assessor.passes(group):
             label = ",".join(f"{name}={point}" for name, point in sorted(where.items()))
-            prices, at_values, by, timing = assessor.vector(group, label, values, base)
+            prices, at_values, by, refused_by, timing = assessor.vector(group, label, values, base)
             for pool, price in prices.items():
                 low, high = group_ranges[pool]
                 group_ranges[pool] = (min(low, price), max(high, price))
             for activity, value in at_values.items():
                 if value is not None and activity in group_signs:
                     group_signs[activity].add(_sign(value))
-            passes.append({
-                "at": dict(sorted(where.items())), "values": {d: _text(v) for d, v in sorted(values.items())},
-                BY: by, TIMING: timing,
-            })
+            shown_pass: dict[str, Any] = {
+                "at": dict(sorted(where.items())), "values": {d: _text(v) for d, v in sorted(values.items())}, BY: by,
+            }
+            if certify:  # item 9: every pass then says what refused it, null for a certified or steady_state one
+                shown_pass[REFUSED_BY] = refused_by
+            shown_pass[TIMING] = timing
+            passes.append(shown_pass)
         moved = {pool: pair for pool, pair in group_ranges.items() if pair[0] != pair[1]}
         flipped = sorted(activity for activity, found in group_signs.items() if len(found) > 1)
         for pool, (low, high) in group_ranges.items():

@@ -129,6 +129,11 @@ class Evaluator:
 # #430 C-2a: `economy` stays 12. The vector and the steady state now count what HiGHS ran in each stage and the steady
 # state times its stages too (`flow.Economy.lps`, `timing`, `total`), beside the value and never in it: `flow.encode`
 # keeps none of it, so what each node keeps is what it was, and every node computes what it did.
+# #430 METHOD-C C-2a-2a: `economy` stays 12. The certificate reads in memory only what the steady state's own
+# computation found (`flow.Held`, its model too) and keeps nothing; a pass it proves computes no node at all, and one it
+# does not prove computes its vector as before. `impact.certify` is in no cache key, and what a vector now holds beside
+# its value (`flow.Economy.unverified`, the activities whose probes it could not verify) is, like `timing` and `lps`,
+# never encoded: what each node keeps is what it was, and every node computes what it did.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(12, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
