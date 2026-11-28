@@ -3012,8 +3012,10 @@ class _Solver:
         self.chosen: _Chosen | None = None
         self.held: Held | None = None
         # #430 METHOD-C C-2a-2a: the activities whose `most` or range this pass's vector could not verify, each with
-        # those probes (`vector`), which `compute` hands on beside the vector's value and never in it; None until then
-        self.unverified: dict[str, tuple[str, ...]] | None = None
+        # those probes (`vector`), which `compute` hands on beside the vector's value and never in it; None until then.
+        # Not named `unverified`: that is the method that words an unverified probe's warning, which `joint` and the
+        # ties call (the first build's tests crashed where this attribute hid it).
+        self.left_unverified: dict[str, tuple[str, ...]] | None = None
 
     def lap(self, stage: str) -> None:
         """The end of a stage of the vector or of the steady state (PASS-TIMING, #430 C-2a; `_Clock.lap`); nothing
@@ -4219,8 +4221,8 @@ class _Solver:
 
         #430 METHOD-C C-2a-2a: the activities whose probes `joint` could not verify here, each with those probes (its
         `unverified`, by id; the vector computes no forcing cost, so they are `most` and `range` only), are kept on the
-        solver (`unverified`), which `compute` hands on beside the value (`Economy.unverified`): the value is the same
-        whatever they are, and nothing here reads them."""
+        solver (`left_unverified`), which `compute` hands on beside the value (`Economy.unverified`): the value is the
+        same whatever they are, and nothing here reads them."""
         tiers = self.tiers(tie_probes=False)
         on_face = _restricted(tiers.dual, tiers.program, tiers.base.x)
         self.lap("dual")
@@ -4234,7 +4236,7 @@ class _Solver:
             "prices": {resource: entry["value"] for resource, entry in joint["prices"].items()},
             "activities": {activity: entry["value"] for activity, entry in joint["activities"].items()},
         }
-        self.unverified = {
+        self.left_unverified = {
             activity: tuple(entry["unverified"])
             for activity, entry in joint["activities"].items() if entry["unverified"]
         }
@@ -4369,7 +4371,7 @@ def compute(graph: Graph, solve: str) -> Economy:
         return Economy(blocked_by=graph.register(failure.errors))
     if solve == VECTOR:  # one pass of the impact assessment: nothing but the vector (`core.impact`), and its timing
         return Economy(
-            data, status, False, (), reads=tuple(reader.reads), unverified=solver.unverified, **_timed(clock)
+            data, status, False, (), reads=tuple(reader.reads), unverified=solver.left_unverified, **_timed(clock)
         )
     if solve == QUICK:
         # Its status says what it is, never the worst of what it read: no reader takes it for a steady state's. The
