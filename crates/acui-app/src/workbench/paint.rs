@@ -39,8 +39,9 @@ use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, QuietShown};
 use acui_source::workbench::stop::{stop_time, Origin as RunOrigin, Refusal, Reset, StopTime};
 use acui_source::workbench::{
-    Obstacle, PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
-    SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL,
+    Obstacle, PresetMember, PresetSetting, RecordNote, RecordNotes, RefusalWhy, ReportedName,
+    SettingName, SettingSource, SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT,
+    CONSOLE_PAUSE_ALL,
     INSTANCE_ADDED_PAUSE_REASON, MODE_FULL, MODE_OBSERVE, MODE_PACE, SETUP_FIRST_START,
 };
 use acui_source::{resumed_device, ClientFailure, PauseStage, ResumedDevice};
@@ -4318,6 +4319,7 @@ fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
         }
         fill(labels.tasks_also, &[&others.join(labels.tasks_also_join)])
     };
+    let records = records_text(labels, &row.records);
     let summary = {
         let model = ui.model.borrow();
         model.pack_summary(&row.package_id, labels.tongue).map(str::to_owned)
@@ -4330,6 +4332,7 @@ fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
         said: said.into(),
         tone,
         also: also.into(),
+        records: records.into(),
         summary: summary.unwrap_or_else(|| labels.tasks_no_summary.to_owned()).into(),
         package: row.package_id.as_str().into(),
         switch_shown,
@@ -4340,6 +4343,37 @@ fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
         switch_failed,
         switch_warning,
     }
+}
+
+/// What the instance's goal records did to a package's candidates (Runtime 0.12.95), one sentence
+/// of each kind in the order the rows give them, then how many other reasons there are, which are
+/// not said; nothing when the records did nothing to them. The codes are never shown.
+fn records_text(labels: &Labels, records: &RecordNotes) -> String {
+    if records.notes.is_empty() {
+        return String::new();
+    }
+    let said: Vec<&str> = records
+        .notes
+        .iter()
+        .map(|note| match note {
+            RecordNote::Need => labels.tasks_record_need,
+            RecordNote::NotApplied => labels.tasks_record_not_applied,
+            RecordNote::NotHeld => labels.tasks_record_not_held,
+            RecordNote::ProgressUnknown => labels.tasks_record_progress_unknown,
+            RecordNote::RowMissing => labels.tasks_record_row_missing,
+            RecordNote::ReadingMissing => labels.tasks_record_reading_missing,
+            RecordNote::PositionUnknown => labels.tasks_record_position_unknown,
+            RecordNote::HoldingUnknown => labels.tasks_record_holding_unknown,
+            RecordNote::ItemUnweighed => labels.tasks_record_item_unweighed,
+            RecordNote::Condition => labels.tasks_record_condition,
+            RecordNote::NotStacked => labels.tasks_record_not_stacked,
+        })
+        .collect();
+    let mut text = fill(labels.tasks_records, &[&said.join(labels.tasks_also_join)]);
+    if records.others > 0 {
+        text.push_str(&fill(labels.tasks_records_others, &[&records.others.to_string()]));
+    }
+    text
 }
 
 /// A package the list shows without a switch, to the log the first time only: the view does not
