@@ -1779,16 +1779,22 @@ uncertainty of the estimates is assessed here.
      proven with no LP.
   2. **C1** (no optimum runs J). For each column j of J, the least of its dual slack s_j = (Aᵀy + w − c)_j over D*, with
      the steady state's coefficients, is above 0. A column that x* runs is tight on all of D* and fails at once, so does
-     one whose slack at y* is 0; any other is an exact LP on D*. C1 reads the steady state alone, so each column is
-     decided once per assessment and every pass that has it in J reads that answer.
+     one whose slack at y* is 0; any other is an exact LP on D*. A least that HiGHS finds unbounded fails too, though D*
+     allows none: every slack is at least 0 on it (#430 C-2a-2, 11-28). C1 reads the steady state alone, so each run of
+     the assessment decides each column once, at its first pass that has the column in J, which counts that LP in its
+     `lps` (`certificate`, "Timing"); every later pass that has it reads that answer and counts none for it (#430
+     C-2a-2, 11-28). A run that resumes from a checkpoint ("Stopping and resuming") decides again the columns its own
+     passes need (#430 C-3a): the answer is the same, the LP being exact, but which pass counts it depends on where the
+     run resumed, in `timing_ms` alone.
   3. **C2** (no optimum runs J after the move). For each column j of J, the least of its dual slack over D*, with the
      pass's coefficients, is above 0: an exact LP on D* per column and pass.
   4. **C3** (K stays K). No J activity is in the steady state's K, and none would enter it with the pass's coefficients:
      its value on D* (what it produces less what it consumes, at the pools' coordinates) does not reach 0 from a finite
      least value below 0 and no higher. No LP is needed for an activity that moves out of or into a store (never in K),
-     nor for one whose columns lie in balance rows only: its value is then minus the mean of its columns' dual slacks
-     over the steps, which C2 keeps below 0 on all of D*. Otherwise the greatest of its value on D* is an exact LP, and
-     its least one more when the greatest is 0.
+     nor for one whose columns are all in J and lie in balance rows only, in the pass's program: its value is then
+     minus the mean of its columns' dual slacks over the steps, which C2 keeps below 0 on all of D*. C2 decides the
+     columns of J alone, so an activity with a column outside J takes no such way (#430 C-2a-2, 11-28). Otherwise the
+     greatest of its value on D* is an exact LP, and its least one more when the greatest is 0.
   5. **C4** (no tier conflict). When A has no term, it holds. Otherwise P and A (term by term) must be the steady
      state's, no J activity is in P, and the walk below must hold; then A*' = A* and V*' = V0' = V0, so the pass has no
      `objective_tier_conflict`, and S1 and S2 are not solved. A pass whose walk fails is solved (re-solving S1, and S2
@@ -1894,16 +1900,18 @@ uncertainty of the estimates is assessed here.
   program built and compared, and the certificate's LPs; for `steady_state`, the comparison of its values with the
   point values. `timing_ms` is null where no time of the pass is there to give: a pass whose vector came from the
   cache, which keeps no timing (`by` `solved`: only a solve gives a vector node). A pass's graph computes without the
-  cache, so an export writes none today. A pass that an assessment resuming from a checkpoint takes back (C-3,
+  cache, so an export writes none today. A pass that an assessment resuming from a checkpoint takes back (C-3a,
   "Stopping and resuming") is no such pass: it comes back with the `by`, `refused_by`, vector and `timing_ms` of the
-  run that computed it, as they are, as `--reuse-assessment` takes a group over ("Taking an assessment over"); how
-  they are kept and taken back is C-3's contract. The member `source` that PASS-TIMING wrote is gone, with no reading
+  run that computed it, as they are, as `--reuse-assessment` takes a group over ("Taking an assessment over"), from
+  its file in the checkpoint folder. The member `source` that PASS-TIMING wrote is gone, with no reading
   of it kept (#430, 11-12): `by` says what it said. The timing is in two places, each pass's `timing_ms` and the
   steady state's `steady_timing_ms` (below): no pass reads it, and neither a node's value (the vector's, the steady
   state's, so nor the cache), the price provenance files (so no `binds`), the shared tree, `estimates`, `counts` nor
   any other member of prices.json holds any of it. No node's value changes with it, so the `economy` kind's evaluator
   version stays 12 (#430 C-2a; `cache/keys.py`). Two exports of the same inputs by the same tool, libraries and
-  configuration differ in it alone; with `impact.certify` set otherwise, in it, `by` and `refused_by` alone.
+  configuration differ in it alone; with `impact.certify` set otherwise, in it, `by` and `refused_by` alone. An export
+  that resumed from a checkpoint is one of them: its passes taken back keep the timing of the run that computed them,
+  and each run counts C1's LPs on its own passes ("The certificate", item 2).
 - **The steady state's timing** (#430 C-2a). `export prices` computes its steady state without the cache, on the same
   clock, and records it as a solved pass records its own: `steady_timing_ms`, `{stages, lps, total}`, or null. Its
   `stages` are the vector's twelve and the four the vector skips, in the order the steady state runs them:
@@ -1920,9 +1928,9 @@ uncertainty of the estimates is assessed here.
   cross-checks too, and its `ranges` every range the judgements read. `lps` holds the same members for each of them
   (no `certificate`). `total` is the steady state's node, from its start to its value. It is null only where the
   steady state the export reads holds no timing; an export computes it in the run, and one that came from the cache
-  is computed again ("The certificate", item 11), so it always has one. An export that takes its assessment over
-  records its own steady state's. `acmodel economy` shows none of it: its `data` and the run's outputs are the value,
-  which the cache keeps and which holds no timing.
+  is computed again ("The certificate", item 11), so it always has one. An export that takes its assessment over, or
+  resumes it from a checkpoint, records its own steady state's. `acmodel economy` shows none of it: its `data` and the
+  run's outputs are the value, which the cache keeps and which holds no timing.
 - **What it finds:** each pool's price range over the steady state and every pass (`impact`); and the activities whose
   class flips: the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in
   every pass. The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that
@@ -2000,24 +2008,111 @@ back to the full one. The folder is only read; it may be the model's own `out`, 
 with the errors that block it; so are the assessment's (above). Then nothing is written. The warnings `estimate_missing`,
 `acceptance_stale` and `acceptance_incomplete` never change the exit status. The files have sorted keys, a two-space indent,
 UTF-8 and LF line ends; a write that fails is `export_write_failed` (the shared tree is written first, so a failure there
-writes nothing into the model folder); nothing is deleted. `data` holds `path`, `model_id`, `state`, `unit_milli`,
+writes nothing into the model folder); with `--checkpoint`, the checkpoint folder, which is not in the model folder, is
+written as the passes end, and the shared tree and the model folder only once the assessment is whole ("Stopping and
+resuming"); nothing is deleted. `data` holds `path`, `model_id`, `state`, `unit_milli`,
 `counts`, `shared` (by root, `sha256` and the state root's `file`) and `written` (the shared tree's file only when it was
 written now), and with `--reuse-assessment` `reused_assessment`: the earlier prices.json's `file` and what this one
-records of it.
+records of it; with `--checkpoint`, `checkpoint`: `folder`, `passes` (how many the assessment has), and `taken_back` and
+`computed` (how many of them this run took back and computed).
 
 **What it costs.** One steady state, then, for each pass that moves something, the certificate or one vector. The
-certificate builds the pass's program without solving it and solves LPs on D* only: C1 once per column of J per
-assessment, C2 once per column of J per pass, and C3 at most two per J activity that needs them. A proven pass pays that
-alone. A pass it does not prove pays it and then its vector, which solves as much of the steady state as the vector
-needs, so a model whose open components read many estimates that the certificate does not prove pays roughly that many
-times. An export that takes its assessment over pays the steady state alone; an assessment whose steady state came from
-the cache pays it twice ("The certificate"). What each pass paid is its `timing_ms`, and the steady state its
-`steady_timing_ms`: each stage's time, and the LPs HiGHS ran there and how long they took (#430 C-2a); how a pass's
-vector was found, its `by`.
+certificate builds the pass's program without solving it and solves LPs on D* only: C1 once per column of J per run of
+the assessment, C2 once per column of J per pass, and C3 at most two per J activity that needs them. A proven pass pays
+that alone. A pass it does not prove pays it and then its vector, which solves as much of the steady state as the
+vector needs, so a model whose open components read many estimates that the certificate does not prove pays roughly
+that many times. An export that takes its assessment over pays the steady state alone; an assessment whose steady state
+came from the cache pays it twice ("The certificate"); a run that resumes from a checkpoint pays its own steady state
+again, then the passes it does not take back ("Stopping and resuming"). What each pass paid is its `timing_ms`, and the
+steady state its `steady_timing_ms`: each stage's time, and the LPs HiGHS ran there and how long they took (#430 C-2a);
+how a pass's vector was found, its `by`.
 
-**Stopping and resuming** (#430 METHOD-C C-3). An assessment must be able to stop at a checkpoint between passes and go
-on pass by pass; how, and what it keeps, is C-3's contract. A pass it takes back comes back as the run that computed it
-recorded it, with its `by`, `refused_by`, vector and `timing_ms`, as `--reuse-assessment` takes a group over ("Timing").
+**Stopping and resuming** (#430 METHOD-C C-3a; `--checkpoint <folder>`). An assessment of many passes may take longer
+than the host runs between two planned restarts, and an export that does not finish keeps nothing of its passes. With
+`--checkpoint`, the assessment keeps each pass in a checkpoint folder as the pass ends, stops at a checkpoint between two
+passes when it is asked to or the host gate holds, and a later run of the same command takes back the passes that an
+earlier run of the same assessment finished and computes only the others. Without the option nothing of this is done:
+no checkpoint is checked, the host layer is not called, and an export that stops has computed its passes for nothing.
+1. **The folder** is the one the option names, never looked for, and made when it is not there; its place is under the
+   state root (`paths.state_root`), never in a repository or the model folder, whose `out/` is delivered. It is checked
+   as every folder a command writes into (`cli.md`, "Never in a Runtime install root"). The option is never given with
+   `--reuse-assessment`, which computes no pass (`usage_invalid`, `argument_unexpected`, `argument` `--checkpoint`).
+   The folder holds:
+   - `checkpoint.json` (`acmodel.checkpoint.v1`), the assessment's identity (item 2), written once, by the run that
+     starts the checkpoint, when its steady state and tree are computed and before its first pass;
+   - `passes/<sha256>.json` (`acmodel.checkpoint.pass.v1`), one file per pass (item 3), written as the pass ends and
+     named by the sha256 of the canonical JSON of `[<its group's derives, sorted>, <its name>]`, its name as
+     `export prices` names a pass (`export_refused`, `value`; "`acmodel verify passes`", the passes named);
+   - `STOP`, which a person puts there to stop the assessment at its next checkpoint (item 5).
+
+   Each file is written as a temporary file beside it (`<file>.<random>.tmp`), then renamed over its name, with the
+   bytes of the export's files (sorted keys, a two-space indent, UTF-8, LF); one that cannot be written is
+   `export_write_failed`, and the files written before it stay. A temporary file that a stopped or killed run left is
+   skipped, and never removed. The tool deletes nothing in the folder, `STOP` included.
+2. **The identity** (`checkpoint.json`) is what makes a pass of one run the same pass of another, member by member:
+   `model_id`; `versions` (`rules`, `data`, `tool`); `evaluator`, the evaluator digest as prices.json records it
+   (`cli.md`, "The evaluator digest": the tool's source files, its libraries and every configuration key that may
+   change a result); `certify`, the value of `impact.certify`, which the digest leaves out but which decides each
+   pass's `by` and `refused_by`; `shared`, each shared tree's digest by root; and `steady`, the sha256 of the steady
+   state's value as the cache keeps it, in canonical JSON (`flow.encode`; "The certificate", item 11), which never
+   depends on Python's string-hash randomisation. `model_id`, `versions`, `evaluator` and `certify` are compared after
+   the model is run and before the steady state is computed, `shared` and `steady` once the steady state and its tree
+   are, before any pass. Each member that differs is one `checkpoint_refused` (exit 5; `member` as `reuse_refused`
+   names it, such as `versions.rules`, `evaluator.config.lp.grain` or `shared.economy:steady`, or `model_id`,
+   `certify` or `steady`; `expected` the checkpoint's value and `found` this run's; `ref` its pointer in
+   `checkpoint.json`), and nothing is computed further or written. A checkpoint is never partly taken back: another
+   assessment, or the same one after any change of the model, the tool (an edit of a source file, even of a comment,
+   or another checkout) or a configuration key of the digest, needs another folder. A folder without `checkpoint.json`
+   starts a checkpoint: the run writes it and computes every pass.
+3. **A pass's file** holds `schema_version`; `identity`, the sha256 of the bytes of `checkpoint.json`; `rules`, its
+   group's derives, sorted; `pass`, its name; `entry`, the pass as prices.json lists it among its group's `passes`
+   (`at`, `values`, `by`, `refused_by` with `impact.certify` true, and `timing_ms`), as the run that computed it wrote
+   it; and `vector`, which prices.json does not hold and from which the group's ranges and flips are found: `prices`,
+   each pool's coordinate, and `activities`, each activity's value at the vector (null for one that moves out of or
+   into a store), by id, each an exact rational as its text.
+4. **Taking passes back.** Once the identity is checked, or written, the assessment lists its passes in the order
+   prices.json lists them (its groups, and each group's passes), and, before any pass is computed, reads the file of
+   each pass that has one, strictly, as an input file is read ("Reading JSON"). Each must be its pass's file in this
+   checkpoint: its `identity` is this `checkpoint.json`'s; its `rules`, `pass`, `entry.at` and `entry.values` are this
+   run's for the pass; its `entry` has the shape of a pass taken over ("Taking an assessment over", step 3), with a
+   `refused_by` exactly when `certify` is true; and its `vector` holds exactly the joint vector's pools and
+   activities. Otherwise it is `model_file_invalid` (`format` `acmodel.checkpoint.pass.v1`, at the file, `ref` the
+   member), and nothing is computed or written: a file is never passed over, nor its pass computed again in its place.
+   A file of `passes/` that is no pass of the assessment and no temporary file is `checkpoint_refused` (`member`
+   `passes`, `expected` its name, `found` `none`). Each problem is one error. Then each pass that has a file is taken
+   back as the run that computed it recorded it: its `entry` goes into prices.json as it is (its `by`, `refused_by` and
+   `timing_ms` too; "Timing"), and its `vector` into the ranges and flips of its group and of the assessment, as a
+   pass computed now would. Every other pass is computed, in that order, and its file written as it ends.
+5. **The host, and stopping.** With the option, the export first takes the host caps of its process, as `watch` takes
+   them (`cli.md`, "Host caps": below-normal priority and the Job), so on another platform than Windows it is
+   `host_priority_not_applied` (`platform_unsupported`, exit 4). Before its steady state, and after `model_id`,
+   `versions`, `evaluator` and `certify` are compared where the folder has a `checkpoint.json`, it checks the host gate
+   as a batch starts (`cli.md`, "The gate"): the available memory below `host.memory.start_min_mib`, the committed
+   memory above `host.memory.committed_start_max_mib` where it is set, a quiet window, the pause file. One that holds
+   ends it with exit 4, each reason one `host_gate_paused`, and the steady state is not computed. A checkpoint is then
+   the point before each pass that the run computes; nothing stops a pass that has begun. There the run stops when
+   `STOP` is in the folder (only whether it is there is looked at: a look that fails other than by its absence is
+   `host_reading_failed`, `stop_file`), or when the gate holds as at a checkpoint inside a batch: the available memory
+   below `host.memory.pause_below_mib`, the committed memory above `host.memory.committed_pause_above_mib` where it is
+   set, a quiet window, the pause file. The CPU load is left out, here and at the start: the priority and the Job's CPU
+   cap already make the work give way, and a stop waits for a person to run the command again. When one holds, no pass
+   is started, and the run ends with exit 4: `assessment_stopped` (`folder`; `done`, how many of the assessment's
+   passes the folder holds; `total`, how many it has; `reason`, `stop_file` when `STOP` is there, `gate` otherwise),
+   then each `host_gate_paused` that holds. Every pass computed is in the folder; nothing is written into the model
+   folder, and no shared tree. A quiet window (`host.quiet_windows`; `cli.md`, "Quiet windows") is how a run is told to
+   stop before a planned restart: it stops at its first checkpoint inside the window, so the window begins at least a
+   pass's length before the restart. A run that is killed (the restart, Ctrl+C) loses the pass it was computing, and
+   no other.
+6. **What it writes.** prices.json records nothing of a checkpoint. Once every pass is taken back or computed, it is,
+   but for each pass's `timing_ms` and for `steady_timing_ms` (this run's own steady state's), byte for byte the file
+   an export without the option writes from the same inputs, tool and configuration; its provenance files and shared
+   tree are that export's; and each pass taken back is its file's `entry`, `timing_ms` too. So it may be taken over as
+   any export's (`--reuse-assessment`). The envelope's `data` adds `checkpoint` ("Refusals and writing"), and each
+   pass written is one line of human text on stderr. A refusal or a failure (a blocked pass, a write that fails) ends
+   the run as it ends one without the option, and the files of the passes computed before it stay in the folder.
+7. **What it costs.** A run that resumes pays its own steady state again, then the passes it does not take back, and
+   decides C1 again for the columns those passes need ("The certificate", item 2); one whose folder holds every pass
+   pays its steady state alone.
 
 ### `acmodel verify prices <model> --state <file>`
 
@@ -2067,7 +2162,9 @@ own vector again.
 A name is as `export prices` names a pass (`export_refused`, `value`): each `<id>=<point>` of its `at`, sorted by id,
 joined by `,` (`pt.a.b=low`; `unk.c=v1,unk.d=high`). Ids, points and ends hold neither `,` nor `=`. The name says its
 group too: a `low` and `high` group by its derive, an `of` group by the unknowns it moves, which no other group moves.
-Before the model is run, each of these is one error, and then nothing is run:
+Before the model is run, each of these is one error, and then nothing is run; they are found together and reported at
+once, in the order given, but where both ways are given or neither, that one error is reported alone, as it leaves no
+way to read the names (#430 C-2a-2, 11-28):
 - both ways given, `usage_invalid` (`argument_unexpected`, `argument` `--passes-file`); neither, `usage_invalid`
   (`argument_missing`, `argument` `--pass`);
 - a file that cannot be read, begins with a BOM or is not UTF-8, `model_file_invalid` (`unreadable`, `bom_present`,
@@ -2082,7 +2179,14 @@ has none) is `usage_invalid` (`pass_unknown`, `argument` the name), and no pass 
 `data.passes` holds one entry per pass named, in that order: `pass`, its name; `rules`, its group's derives; `by`, what
 an export with `impact.certify` true records for it; `certified`, whether the certificate proves it; `refused`, null, or
 `{condition, columns, activities}`: the first condition that refused it, as an export records it in `refused_by`
-(`program`, `c1`, `c2`, `c3`, `c4`, `lp_unverified`; "The certificate"), and the columns or activities it names;
+(`program`, `c1`, `c2`, `c3`, `c4`, `lp_unverified`; "The certificate"), and what it names, in the two lists, one of
+them empty (#430 C-2a-2, 11-28): for `c1` and `c2`, the column that fails; for `c3`, the activity that fails; for
+`lp_unverified`, the column of the C1 or C2 LP, or the activity of the C3 LP, that is not certified or fails; for `c4`,
+every J activity; for `program`, the column at which the two programs first differ (a column only one of them has or
+whose bounds differ, a coefficient of it in a row, or its coefficient in the objective; the columns are compared first,
+then the rows, then the objective), or none when they first differ at a row (one that only one of them has, or its
+sense, right side or group). A column is named by its token, the parts of its key joined by `:` (an activity's
+execution column is `x:<activity>:<step>`, its steps counted from 0);
 `matches`, null for a pass not proven, else whether the two vectors agree; `differs`, `{pools, activities}`, each id
 whose value differs with both values (`certified`, `solved`), both empty when they agree; `unverified`, the activities
 the solve left out of K for a probe it could not verify; `timing_ms`, `{certificate, solve}`, the milliseconds each side
@@ -2090,9 +2194,11 @@ took.
 
 A proven pass whose two vectors differ is `certificate_mismatch` (exit 6), one error per pass, once every pass named is
 computed: the proof makes the proven vector the exact one, so a difference is a defect, or that solve's unverified probe
-(look there first: "The certificate", the probes). A pass the certificate does not prove is reported, and no error. A
-blocked steady state or pass is refused as `export prices` refuses it (`export_refused`, exit 5). Nothing is written: no
-`out/`, no provenance file or shared tree, no cache entry.
+(look there first: "The certificate", the probes). `data` is given with these errors as without them (a failed command's
+`data` is `{}` otherwise; `cli.md`, "Envelope"), so each pass's entry shows how its two vectors differ (#430 C-2a-2,
+11-28). A pass the certificate does not prove is reported, and no error. A blocked steady state or pass is refused as
+`export prices` refuses it (`export_refused`, exit 5). Nothing is written: no `out/`, no provenance file or shared tree,
+no cache entry.
 
 ### `acmodel export values <model> --state <file>`
 
