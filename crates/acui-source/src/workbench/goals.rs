@@ -2519,6 +2519,10 @@ pub enum WriteProblem {
     NotCheckedYet,
     RootFailing,
     NoSchedule,
+    /// Runtime 0.12.89 on (#455 TK-1; contract `runtime/goals.rs` 133-137 at 1f86956d): the name
+    /// is a variable only a rule gives (`given_by: "rule"`), which no person sets: a `set` stores
+    /// nothing, and a `clear` answers it when no value is stored under the name.
+    RuleGiven,
     /// A word of a newer Runtime, by itself.
     Other(String),
 }
@@ -2574,6 +2578,7 @@ impl WriteProblem {
             GoalProblem::NotCheckedYet => Self::NotCheckedYet,
             GoalProblem::RootFailing => Self::RootFailing,
             GoalProblem::NoSchedule => Self::NoSchedule,
+            GoalProblem::RuleGiven => Self::RuleGiven,
         }
     }
 }
@@ -5722,7 +5727,7 @@ mod tests {
 
     #[test]
     fn every_word_of_goal_problem_is_read() {
-        assert_eq!(GoalProblem::ALL.len(), 23);
+        assert_eq!(GoalProblem::ALL.len(), 24);
         let words: Vec<WriteProblem> =
             GoalProblem::ALL.iter().map(|problem| WriteProblem::of(problem.as_str())).collect();
         for (problem, word) in words.iter().zip(GoalProblem::ALL) {
@@ -5755,6 +5760,7 @@ mod tests {
             ("not_checked_yet", WriteProblem::NotCheckedYet),
             ("root_failing", WriteProblem::RootFailing),
             ("no_schedule", WriteProblem::NoSchedule),
+            ("rule_given", WriteProblem::RuleGiven),
         ] {
             assert_eq!(WriteProblem::of(word), expected, "{word}");
         }

@@ -3766,6 +3766,7 @@ fn invalid_text(
         WriteProblem::NotCheckedYet => labels.goals_problem_not_checked_yet,
         WriteProblem::RootFailing => labels.goals_problem_root_failing,
         WriteProblem::NoSchedule => labels.goals_problem_no_schedule,
+        WriteProblem::RuleGiven => labels.goals_problem_rule_given,
         WriteProblem::Other(word) => {
             let line = format!("no words for the goal_problem word {word:?}: shown by its code");
             if ui.model.borrow_mut().first_told(&line) {
