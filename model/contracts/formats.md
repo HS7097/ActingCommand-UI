@@ -1777,15 +1777,16 @@ uncertainty of the estimates is assessed here.
      there only in balance rows, overflow bounds and regen stops. J is the set of the columns whose coefficients differ;
      a J activity is an activity with a column in J. A pass whose program differs anywhere else (a cap's, a limit's or a
      regen's value, the members of a limit or an income cap, a move's bound, a goal sink's or a demand row's column, any
-     bound or right side) is solved. A pass whose J is empty (no rule it moves reaches a coefficient of S3's program) is
-     proven with no LP.
+     bound or right side) is solved. A pass whose J is empty (no rule it moves reaches a coefficient of S3's program)
+     takes no LP: C1, C2 and C3 have nothing to decide, and it is proven where C4 holds, whose comparison of P and A
+     is made all the same (item 5; #430 C-2a-2a, the review of 11-28).
   2. **C1** (no optimum runs J). For each column j of J, the least of its dual slack s_j = (Aᵀy + w − c)_j over D*, with
      the steady state's coefficients, is above 0. A column that x* runs is tight on all of D* and fails at once, so does
      one whose slack at y* is 0; any other is an exact LP on D*. A least that HiGHS finds unbounded fails too, though D*
      allows none: every slack is at least 0 on it (#430 C-2a-2, 11-28). C1 reads the steady state alone, so each run of
-     the assessment decides each column once, at its first pass that has the column in J, which counts that LP in its
-     `lps` (`certificate`, "Timing"); every later pass that has it reads that answer and counts none for it (#430
-     C-2a-2, 11-28). A run that resumes from a checkpoint ("Stopping and resuming") decides again the columns its own
+     the assessment decides each column once, at the first pass that comes to it (a pass refused at an earlier column
+     of its J decides no later one, item 9), which counts that LP in its `lps` (`certificate`, "Timing"); every later
+     pass that has it in J reads that answer and counts none for it (#430 C-2a-2, 11-28). A run that resumes from a checkpoint ("Stopping and resuming") decides again the columns its own
      passes need (#430 C-3a): the answer is the same, the LP being exact, but which pass counts it depends on where the
      run resumed, in `timing_ms` alone.
   3. **C2** (no optimum runs J after the move). For each column j of J, the least of its dual slack over D*, with the
@@ -1797,10 +1798,13 @@ uncertainty of the estimates is assessed here.
      minus the mean of its columns' dual slacks over the steps, which C2 keeps below 0 on all of D*. C2 decides the
      columns of J alone, so an activity with a column outside J takes no such way (#430 C-2a-2, 11-28). Otherwise the
      greatest of its value on D* is an exact LP, and its least one more when the greatest is 0.
-  5. **C4** (no tier conflict). When A has no term, it holds. Otherwise P and A (term by term) must be the steady
-     state's, no J activity is in P, and the walk below must hold; then A*' = A* and V*' = V0' = V0, so the pass has no
-     `objective_tier_conflict`, and S1 and S2 are not solved. A pass whose walk fails is solved (re-solving S1, and S2
-     where A* moves, instead of the whole pass is a later slice, C-2b).
+  5. **C4** (no tier conflict). When A has no term, the steady state's and the pass's alike, it holds. The pass's A is
+     read too (#430 C-2a-2a, the review of 11-28): a rule the pass moves may make an activity a protected acquisition,
+     or give a protected one a term, where the steady state had none; S1 would then run what C1 shows no optimum of S3
+     runs, and the pass solved would be `objective_tier_conflict` where the steady state is not. Otherwise P and A
+     (term by term) must be the steady state's, no J activity is in P, and the walk below must hold; then A*' = A*
+     and V*' = V0' = V0, so the pass has no `objective_tier_conflict`, and S1 and S2 are not solved. A pass whose
+     walk fails is solved (re-solving S1, and S2 where A* moves, instead of the whole pass is a later slice, C-2b).
      - *The walk* (static: the program's structure only, every step at once). An entity in one of whose rows a column of
        a J activity differs is *short* where that activity brings in net less of it at the steady state's coefficients
        than at the pass's, *long* where more, and both where its net is the same and another of its rows differs (an
@@ -1818,7 +1822,9 @@ uncertainty of the estimates is assessed here.
        (production is lost at the cap, at most what the regen brings, and with no other income the stock never has to
        pass the cap). A short entity (or one that is both) must also have no regen that brings less than 0 in a step,
        since its takers are all stopped and its stock may then only rise. Any other entity fails the walk: a store or
-       regen stop that an activity or a move fills too, a read cap, more than one cap.
+       regen stop that an activity or a move fills too, a read cap, more than one cap. An income cap is none of these
+       caps: what it counts is the walk's own condition above (no stopped activity is counted by one), and its row is
+       as it was (#430 C-2a-2a, 11-28).
   6. **Why it is exact** (the original proposal's appendix B2). C1: every optimum of S3 has x_J = 0, so x* is feasible
      for the pass and V0' ≥ V0. C2: every point of D* is dual feasible for the pass at the cost V0, so V0' ≤ V0; so
      V0' = V0 and D* ⊆ D*'. A point of D*' that broke an old row of J would give, on its segment to a point of D* (all
