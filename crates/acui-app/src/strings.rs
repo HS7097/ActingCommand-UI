@@ -782,6 +782,19 @@ pub struct Labels {
     pub notice_entry_recovery_failed_detail: &'static str,
     pub notice_entry_task_set_aside: &'static str,
     pub notice_entry_task_set_aside_detail: &'static str,
+    /// Runtime 0.12.100 on: a task kept failing through its longest waits and is set aside for its
+    /// activity window. 0.12.103 on: facts expired for over a week reclaimed for room. 0.12.102 on:
+    /// automatic emulator starts held for memory, the memory not read, and the starts going on.
+    pub notice_task_failure_set_aside: &'static str,
+    pub notice_task_failure_set_aside_detail: &'static str,
+    pub notice_facts_reclaimed: &'static str,
+    pub notice_facts_reclaimed_detail: &'static str,
+    pub notice_commit_short: &'static str,
+    pub notice_commit_short_detail: &'static str,
+    pub notice_commit_unknown: &'static str,
+    pub notice_commit_unknown_detail: &'static str,
+    pub notice_commit_ready: &'static str,
+    pub notice_commit_ready_detail: &'static str,
     /// The same of "pause this account": watched, confirmed late, did not hold, held and was
     /// lifted later by a resume; and still on its way, its runs finishing up or its device being
     /// handed back, once it has been watched for its longest, which is neither confirmed nor
@@ -1224,6 +1237,12 @@ pub struct Labels {
     /// it, so this reading waits for its next wake.
     pub card_why_rule_value_missing: &'static str,
     pub card_why_idle_closed: &'static str,
+    /// Runtime 0.12.100 on: this task keeps failing on the instance and waits before it is tried
+    /// again; it kept failing through its longest waits and is set aside for this period. Runtime
+    /// 0.12.101 on: the instance sleeps until a pool this task uses reaches its trigger line.
+    pub card_why_failure_waiting: &'static str,
+    pub card_why_failure_set_aside: &'static str,
+    pub card_why_asleep_below_line: &'static str,
     pub card_why_reason_missing: &'static str,
     pub card_why_unlisted: &'static str,
     /// The right column's second tab, the account's daily task list (UI-3f1), and what it says
@@ -2588,6 +2607,16 @@ pub const ZH: Labels = Labels {
     notice_entry_recovery_failed_detail: "这个实例的任务进不了入口，Runtime 为它做的一次恢复没成功；带原因码时，它是进不了入口的原因",
     notice_entry_task_set_aside: "一个任务老进不了入口，这个时段先放下",
     notice_entry_task_set_aside_detail: "这个实例上有一个任务，别的任务能跑进去，它却一再进不了入口，已到它的失败门槛；这个时段结束前不再安排它，其他任务照常；修好它的任务包再放上去，就会马上重新安排；带原因码时，它是进不了入口的原因",
+    notice_task_failure_set_aside: "一个任务老是失败，这个时段先放下",
+    notice_task_failure_set_aside_detail: "这个实例上有一个任务，别的任务都跑得成，它却一次次失败，等到最长的间隔也没好，已到它的失败门槛；这个时段结束前不再安排它，其他任务照常；修好它的任务包再放上去、或者重启 Runtime，就会重新安排；带原因码时，它是最后那次失败的原因",
+    notice_facts_reclaimed: "清掉了过期很久的事实",
+    notice_facts_reclaimed_detail: "存事实的地方满了，新来的事实要占位，就把过期超过七天的事实清掉腾地方；没过期的、刚过期的、正在用的都不会动",
+    notice_commit_short: "内存不够，自动开模拟器先等着",
+    notice_commit_short_detail: "电脑可用的内存低于自动开模拟器要留的余量，自动开模拟器先等着，每 5 秒看一次，内存回来就接着开",
+    notice_commit_unknown: "读不到可用内存，自动开模拟器照开",
+    notice_commit_unknown_detail: "读不到电脑可用的内存，自动开模拟器就不看余量照常开，两次之间的间隔照旧；带原因码时，它是读不到的原因",
+    notice_commit_ready: "内存回来了，自动开模拟器接着开",
+    notice_commit_ready_detail: "电脑可用的内存回到了余量以上，之前等着的自动开模拟器接着开",
     account_pause_watching: "还没收到确认，正在看它立住没有…",
     account_pause_late: "确认得晚：这个实例已暂停调度",
     account_pause_not_held: "这次暂停没有立住：现在这个实例没有暂停，可以再按一次",
@@ -2904,6 +2933,9 @@ pub const ZH: Labels = Labels {
     card_why_rule_value_refused: "规则带的值，任务包已经不收了，先不跑",
     card_why_rule_value_missing: "任务包要一个只能由规则给的值，这条规则没带，先不跑",
     card_why_idle_closed: "实例按闲置设置关着，这项读数等它下次醒来再做",
+    card_why_failure_waiting: "这个任务在这台上连着失败，先等一阵再试",
+    card_why_failure_set_aside: "这个任务在这台上一直失败，本时段先放下",
+    card_why_asleep_below_line: "实例睡着，这个任务要用的资源还没回到触发线，到线再叫醒",
     card_why_reason_missing: "原因没写明（程序的问题，已记入日志）",
     card_why_unlisted: "现在不安排",
     tasks_tab: "日常任务",
@@ -4000,6 +4032,16 @@ pub const EN: Labels = Labels {
     notice_entry_recovery_failed_detail: "Tasks on this instance could not get in, and one of the Runtime's recoveries for it did not recover; a cause code, when given, is why they could not get in",
     notice_entry_task_set_aside: "A Task Keeps Failing to Get In, Set Aside for Now",
     notice_entry_task_set_aside_detail: "A task on this instance keeps failing to get in while other tasks get in, and reached its failure threshold; it is not scheduled again before its activity window ends, and the other tasks go on; placing its mended package schedules it again at once; a cause code, when given, is why it could not get in",
+    notice_task_failure_set_aside: "A Task Keeps Failing, Set Aside for Now",
+    notice_task_failure_set_aside_detail: "A task on this instance kept failing through its longest waits while other tasks succeeded, and reached its failure threshold; it is not scheduled again before its activity window ends, and the other tasks go on; placing its mended package, or restarting the Runtime, schedules it again; a cause code, when given, is its last failure",
+    notice_facts_reclaimed: "Long-Expired Facts Cleared",
+    notice_facts_reclaimed_detail: "The fact store was full when new facts needed room, so facts expired for more than seven days were cleared; facts not expired, just expired or still in use are kept",
+    notice_commit_short: "Low Memory, Automatic Emulator Starts Wait",
+    notice_commit_short_detail: "The computer's available memory is below the reserve an automatic emulator start keeps, so automatic starts wait, checking every 5 seconds, and go on once it is back",
+    notice_commit_unknown: "Memory Not Read, Automatic Starts Go On",
+    notice_commit_unknown_detail: "The computer's available memory could not be read, so automatic emulator starts go on without the check, still spaced as before; a cause code, when given, is why it could not be read",
+    notice_commit_ready: "Memory Back, Automatic Starts Go On",
+    notice_commit_ready_detail: "The computer's available memory is back above the reserve, and the automatic emulator start that waited goes on",
     account_pause_watching: "Not confirmed yet: watching whether the pause took hold…",
     account_pause_late: "Confirmed late: this instance's scheduling is paused",
     account_pause_not_held: "This pause did not take hold: this instance is not paused now. You can press it again",
@@ -4316,6 +4358,9 @@ pub const EN: Labels = Labels {
     card_why_rule_value_refused: "The package no longer takes the value its rule carries; held back",
     card_why_rule_value_missing: "The package needs a value only its rule gives, and the rule carries none; held back",
     card_why_idle_closed: "The instance is closed by its idle setting; this reading waits for its next wake",
+    card_why_failure_waiting: "This task keeps failing on this instance; it waits a while before trying again",
+    card_why_failure_set_aside: "This task keeps failing on this instance; set aside for this period",
+    card_why_asleep_below_line: "The instance sleeps until the resource this task uses is back at its trigger line",
     card_why_reason_missing: "No reason was given (a program problem; written to the log)",
     card_why_unlisted: "Not scheduled right now",
     tasks_tab: "Daily Tasks",

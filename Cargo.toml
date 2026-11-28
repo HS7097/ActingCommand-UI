@@ -36,12 +36,12 @@ serde_json = "1"
 # through. The display adapter is the product's own conversion an effect intent's points are
 # put on the device frame by, for the picture and the ledger window alike; the console converts
 # nothing itself.
-actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-display-adapter = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
-actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "1f86956d5085f04a82637dd9e32a6520a676f604" }
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-display-adapter = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
+actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "aa6765dd17adbd5e3ea52cfedf12752fc4518ca4" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding, and the console does decode: the capture

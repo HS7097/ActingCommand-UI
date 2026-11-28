@@ -200,6 +200,16 @@ pub enum ReasonClass {
     /// closed it, so its fact refresh reading waits for its next wake unless a task that needs
     /// the reading is due.
     IdleClosed,
+    /// Runtime 0.12.100 on (#503 PACE; `contracts/scheduling-blackout.md`, "Order of the
+    /// deferrals", position 4b at aa6765dd): this task failed several times in a row on the
+    /// instance and waits before it is tried again; it kept failing through its longest waits
+    /// while other runs succeeded and is set aside until its activity window ends, which a person
+    /// is told of.
+    FailureWaiting,
+    FailureSetAside,
+    /// Runtime 0.12.101 on (#503 WAKE): the instance is asleep and a pool this task uses reads
+    /// below its trigger line, so it is not woken for the task until the pool reaches the line.
+    AsleepBelowLine,
     /// The Runtime gave a decision no reason: its fault, which the log hears of.
     ReasonMissing,
     /// No sentence of its own: a general one says it is not scheduled now, and the log
@@ -297,6 +307,9 @@ impl ReasonClass {
             "goal_value_rule_refused" => Self::RuleValueRefused,
             "goal_value_rule_missing" => Self::RuleValueMissing,
             "instance_idle_action" => Self::IdleClosed,
+            "instance_task_failure_waiting" => Self::FailureWaiting,
+            "instance_task_failure_set_aside" => Self::FailureSetAside,
+            "instance_asleep_below_trigger_line" => Self::AsleepBelowLine,
             "decision_reason_missing" => Self::ReasonMissing,
             other if other.starts_with("perf_") => Self::Paced,
             _ => Self::Unlisted,
@@ -336,6 +349,7 @@ impl ReasonClass {
             | Self::EntrySetAside
             | Self::RuleValueRefused
             | Self::RuleValueMissing
+            | Self::FailureSetAside
             | Self::ReasonMissing => Band::Attention,
             _ => Band::Ok,
         }

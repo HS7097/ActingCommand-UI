@@ -838,6 +838,18 @@ const ENTRY_TASK_SET_ASIDE: &str = "instance_entry_task_set_aside_reported";
 /// vocabulary token, `exhausted`, `update_dialog` or `worker_panicked`, runtime-host `codes.rs`
 /// 3828-3840, which the public projection keeps).
 const ENTRY_RECOVERY_END: &str = "entry_recovery_end";
+/// The codes of the records the Runtime writes, from 0.12.100 on (#503 PACE), of a task that kept
+/// failing on an instance through its longest waits and is set aside for its activity window; from
+/// 0.12.103 on (#503 FACT-R) of a scope of the instance fact store at its bound that reclaimed facts
+/// expired for more than seven days; and from 0.12.102 on (#503 MEM) of the automatic emulator
+/// starts held while the host's available commit is below their reserve, of a commit read that
+/// failed, and of the starts going on again. Each a `runtime.failed` record (runtime-host
+/// `contracts/outcome-codes/runtime-host.json` at aa6765dd).
+const TASK_FAILURE_SET_ASIDE: &str = "instance_task_failure_set_aside_reported";
+const FACTS_RECLAIMED: &str = "fact_store_expired_facts_reclaimed";
+const COMMIT_SHORT: &str = "emulator_autostart_commit_short";
+const COMMIT_UNKNOWN: &str = "emulator_autostart_commit_unknown";
+const COMMIT_READY: &str = "emulator_autostart_commit_ready";
 
 /// One record the Runtime writes, from 0.12.76 on, of an instance unavailable to the scheduler by
 /// its device self-check and probed again, or of an instance's own facts nearing their bound, and
@@ -907,6 +919,27 @@ pub enum RuntimeNotice {
     /// `window_end_unix_ms`, `count`, `limit_count`). `cause`: the failure that reached the
     /// threshold.
     EntryTaskSetAside { cause: Option<String> },
+    /// `instance_task_failure_set_aside_reported` (warning, Runtime 0.12.100, #503 PACE): a task
+    /// kept failing on the instance through its longest waits while other runs succeeded, and is
+    /// set aside until its activity window ends; a person is told once per task, instance and
+    /// window. Which task and until when, the projection drops. `cause`: the failure that reached
+    /// the threshold.
+    TaskFailureSetAside { cause: Option<String> },
+    /// `fact_store_expired_facts_reclaimed` (warning, Runtime 0.12.103, #503 FACT-R): a scope of
+    /// the instance fact store was at its bound when a publication brought new keys, and facts
+    /// expired for more than seven days were reclaimed to make room.
+    FactsReclaimed,
+    /// `emulator_autostart_commit_short` (warning, Runtime 0.12.102, #503 MEM): automatic emulator
+    /// starts are held, the host's available commit being below the reserve a start requires; once
+    /// per such episode for the whole host.
+    CommitShort,
+    /// `emulator_autostart_commit_unknown` (warning): the host's commit could not be read, so an
+    /// automatic start goes on without the check; once per failing streak. `cause`: the read's
+    /// failure.
+    CommitUnknown { cause: Option<String> },
+    /// `emulator_autostart_commit_ready` (info): the commit is back above the reserve and the held
+    /// automatic start goes on.
+    CommitReady,
 }
 
 impl RuntimeNotice {
@@ -920,13 +953,18 @@ impl RuntimeNotice {
             Self::EntryAwaitingPerson { .. } => ENTRY_AWAITING_PERSON,
             Self::EntryRecoveryFailed { .. } => ENTRY_RECOVERY_FAILED,
             Self::EntryTaskSetAside { .. } => ENTRY_TASK_SET_ASIDE,
+            Self::TaskFailureSetAside { .. } => TASK_FAILURE_SET_ASIDE,
+            Self::FactsReclaimed => FACTS_RECLAIMED,
+            Self::CommitShort => COMMIT_SHORT,
+            Self::CommitUnknown { .. } => COMMIT_UNKNOWN,
+            Self::CommitReady => COMMIT_READY,
         }
     }
 }
 
 /// The notice `event` records ([`RuntimeNotice`]), read as [`pause_moment`] reads a record: a
 /// `runtime.failed` record of the Runtime's family whose public projection's outcome has one of the
-/// seven codes on top. Any other record is none, every other `runtime.failed` among them (the
+/// twelve codes on top. Any other record is none, every other `runtime.failed` among them (the
 /// scheduler driver's `contained_task_cancelled` after a stopped run), and shows as before.
 pub fn runtime_notice(event: &ProjectedEvent) -> Option<RuntimeNotice> {
     if event.event_type != EventType::RuntimeFailed {
@@ -957,6 +995,11 @@ fn notice_of(outcome: &Outcome) -> Option<RuntimeNotice> {
             RuntimeNotice::EntryRecoveryFailed { end: end.map(str::to_owned), cause }
         }
         ENTRY_TASK_SET_ASIDE => RuntimeNotice::EntryTaskSetAside { cause },
+        TASK_FAILURE_SET_ASIDE => RuntimeNotice::TaskFailureSetAside { cause },
+        FACTS_RECLAIMED => RuntimeNotice::FactsReclaimed,
+        COMMIT_SHORT => RuntimeNotice::CommitShort,
+        COMMIT_UNKNOWN => RuntimeNotice::CommitUnknown { cause },
+        COMMIT_READY => RuntimeNotice::CommitReady,
         _ => return None,
     })
 }
@@ -3064,6 +3107,37 @@ mod tests {
         let notice = RuntimeNotice::EntryTaskSetAside { cause: entry_cause() };
         assert_eq!(notice.code(), "instance_entry_task_set_aside_reported");
         assert_eq!(notice_of(&set_aside), Some(notice));
+        // A task that kept failing through its longest waits (Runtime 0.12.100, #503 PACE), with
+        // the values the projection drops.
+        let failing = entry_record(
+            "instance_task_failure_set_aside_reported",
+            serde_json::json!({
+                "count": 7,
+                "limit_count": 7,
+                "window_end_unix_ms": 1_763_740_000_000_u64,
+            }),
+        );
+        assert!(failing.value("window_end_unix_ms").is_none());
+        let notice = RuntimeNotice::TaskFailureSetAside { cause: entry_cause() };
+        assert_eq!(notice.code(), "instance_task_failure_set_aside_reported");
+        assert_eq!(notice_of(&failing), Some(notice));
+        // Facts reclaimed (0.12.103, #503 FACT-R) and the held automatic emulator starts (0.12.102,
+        // #503 MEM): only the code chooses the words, and a failed commit read its failure.
+        for (code, category, failure, notice) in [
+            ("fact_store_expired_facts_reclaimed", "warning", None, RuntimeNotice::FactsReclaimed),
+            ("emulator_autostart_commit_short", "warning", None, RuntimeNotice::CommitShort),
+            (
+                "emulator_autostart_commit_unknown",
+                "warning",
+                Some("paired_backend_open_failed"),
+                RuntimeNotice::CommitUnknown { cause: cause() },
+            ),
+            ("emulator_autostart_commit_ready", "info", None, RuntimeNotice::CommitReady),
+        ] {
+            let record = notice_record(code, category, "publish_facts", failure).codes_only();
+            assert_eq!(notice.code(), code);
+            assert_eq!(notice_of(&record), Some(notice), "{code}");
+        }
         // Another `runtime.failed` record: the scheduler driver's after a stopped run.
         let stopped = Outcome::new(host("contained_task_cancelled")).codes_only();
         assert_eq!(notice_of(&stopped), None);
