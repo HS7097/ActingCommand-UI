@@ -681,7 +681,7 @@ def test_a_pass_whose_j_is_empty_is_proven_with_no_lp(tmp_path):
 
     assert (by, refused_by) == ("certified", None)
     assert (prices, values) == (assessor.prices, assessor.values)
-    # `shaped` reads an export's `lps`, whose keys the file sorts; here they are the assessor's own, in the stages' order
+    # `shaped` reads an export's `lps`, whose keys the file sorts; here they are the assessor's, in the stages' order
     assert timing["stages"] is None and shaped(dict(sorted(timing["lps"].items())), PASS_LPS)
     assert all(n == 0 for entry in timing["lps"].values() for n in entry.values())
     assert assessor.answers == {}
